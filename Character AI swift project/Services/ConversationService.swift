@@ -209,14 +209,27 @@ struct ConversationService {
         return message
     }
     
-    func loadRecentChats() async throws -> RecentChatsResponse {
+    func loadRecentChats() async throws -> [ConversationSummary] {
         guard let url = URL(
             string: "https://neo.character.ai/chats/recent/?include_restricted=true"
         ) else {
             throw NetworkError.invalidURL
         }
 
-        return try await authenticatedHTTPClient.get(url)
+        let response: RecentChatsResponse =
+            try await authenticatedHTTPClient.get(url)
+
+        return response.chats.map { chat in
+            ConversationSummary(
+                id: chat.chatID,
+                chatID: chat.chatID,
+                characterID: chat.characterID,
+                characterName: chat.characterName,
+                characterAvatarURI: chat.characterAvatarURI,
+                lastUpdated: chat.createTime,
+                state: chat.state
+            )
+        }
     }
     
     func makeCreateAndGenerateTurnMessage(

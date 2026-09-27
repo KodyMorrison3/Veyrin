@@ -6,7 +6,7 @@ final class ChatViewModel: ObservableObject {
     @Published var character: Character?
     @Published var chat: Chat?
     @Published var turns: [Turn] = []
-    @Published var recentChats: [RecentChat] = []
+    @Published var recentChats: [ConversationSummary] = []
     @Published var isLoading = false
     @Published var isGenerating = false
     @Published var errorMessage: String?
@@ -290,25 +290,31 @@ final class ChatViewModel: ObservableObject {
         errorMessage = nil
 
         do {
-            let response = try await conversationService.loadRecentChats()
+            recentChats =
+                try await conversationService.loadRecentChats()
 
-            recentChats = response.chats
+            print(
+                "RECENT CONVERSATION COUNT:",
+                recentChats.count
+            )
 
-            print("RECENT CHAT COUNT:", recentChats.count)
-
-            for recentChat in recentChats {
+            for conversation in recentChats {
                 print(
-                    "CHAT:",
-                    recentChat.chatID,
+                    "CONVERSATION:",
+                    conversation.chatID,
                     "| CHARACTER:",
-                    recentChat.characterName,
-                    "| CHARACTER ID:",
-                    recentChat.characterID
+                    conversation.characterName,
+                    "| STATE:",
+                    conversation.state
                 )
             }
 
         } catch {
-            print("LOAD RECENT CHATS ERROR:", error)
+            print(
+                "LOAD RECENT CHATS ERROR:",
+                error
+            )
+
             errorMessage = error.localizedDescription
         }
 
