@@ -1,0 +1,61 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode
+DerivedData/
+build/
+Build/
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.pbxuser
+*.mode1v3
+*.mode2v3
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# CocoaPods
+Pods/
+
+# Carthage
+Carthage/Build/
+
+# Fastlane generated files
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+
+# Archives
+*.xcarchive
+
+# Temporary / local files
+*.tmp
+*.temp
+*.log
+*.bak
+*.swp
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Credentials / authentication material
+*credentials*
+*secret*
+*token*
+
+# Character.AI investigation material
+*.har
+*.HAR
+
+# Local request / reverse-engineering dumps
+request-dumps/
+har/
+captures/
