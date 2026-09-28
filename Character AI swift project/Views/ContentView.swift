@@ -112,17 +112,25 @@ private struct MainView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    Text(
-                        conversation.state == "STATE_ACTIVE"
-                            ? "Active"
-                            : "Archived"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(
-                        conversation.state == "STATE_ACTIVE"
-                            ? .secondary
-                            : .tertiary
-                    )
+                    if let lastMessage = conversation.lastMessage,
+                       !lastMessage.isEmpty {
+                        Text(lastMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    } else {
+                        Text(
+                            conversation.state == "STATE_ACTIVE"
+                                ? "Active"
+                                : "Archived"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(
+                            conversation.state == "STATE_ACTIVE"
+                                ? .secondary
+                                : .tertiary
+                        )
+                    }
                 }
             }
             .padding(.vertical, 6)

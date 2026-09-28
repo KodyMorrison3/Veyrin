@@ -15,4 +15,5 @@ struct ConversationSummary: Identifiable {
     let characterAvatarURI: String
     let lastUpdated: String
     let state: String
+    let lastMessage: String?
 }

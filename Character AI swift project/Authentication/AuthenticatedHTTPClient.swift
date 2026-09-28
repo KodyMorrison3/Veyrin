@@ -62,6 +62,43 @@ struct AuthenticatedHTTPClient {
             throw NetworkError.requestFailed(error)
         }
     }
+    
+    func getRaw(
+        _ url: URL
+    ) async throws -> Data {
+        var request = URLRequest(url: url)
+
+        try addAuthentication(
+            to: &request
+        )
+
+        do {
+            let (data, response) = try await session.data(
+                for: request
+            )
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw NetworkError.invalidResponse
+            }
+
+            if httpResponse.statusCode == 401 {
+                await authStore.clearSession()
+                throw NetworkError.unauthenticated
+            }
+
+            guard 200..<300 ~= httpResponse.statusCode else {
+                throw NetworkError.httpError(
+                    httpResponse.statusCode
+                )
+            }
+
+            return data
+        } catch let error as NetworkError {
+            throw error
+        } catch {
+            throw NetworkError.requestFailed(error)
+        }
+    }
 
     private func addAuthentication(
         to request: inout URLRequest

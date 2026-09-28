@@ -1,3 +1,10 @@
+//
+//  ChatViewModel.swift
+//  Character AI swift project
+//
+//  Created by Kody Morrison on 26/09/2026.
+//
+
 import Foundation
 import Combine
 
@@ -25,7 +32,9 @@ final class ChatViewModel: ObservableObject {
         )
     }
 
-    func createRealChat(characterID: String) async -> String? {
+    func createRealChat(
+        characterID: String
+    ) async -> String? {
         guard let authSession = authStore.session else {
             errorMessage = "Not authenticated."
             return nil
@@ -41,19 +50,23 @@ final class ChatViewModel: ObservableObject {
         let chatID = UUID().uuidString
 
         do {
-            let message = try conversationService.makeCreateChatMessage(
-                characterID: characterID,
-                creatorID: authSession.userID,
-                chatID: chatID
-            )
+            let message =
+                try conversationService.makeCreateChatMessage(
+                    characterID: characterID,
+                    creatorID: authSession.userID,
+                    chatID: chatID
+                )
 
             try await webSocketClient.connect(
                 sessionToken: authSession.sessionToken
             )
 
-            try await webSocketClient.send(message)
+            try await webSocketClient.send(
+                message
+            )
 
-            let response = try await webSocketClient.receive()
+            let response =
+                try await webSocketClient.receive()
 
             print("CREATE CHAT RESPONSE:")
             print(response)
@@ -69,45 +82,61 @@ final class ChatViewModel: ObservableObject {
             return chatID
 
         } catch {
-            print("CREATE CHAT ERROR:", error)
+            print(
+                "CREATE CHAT ERROR:",
+                error
+            )
+
             errorMessage = error.localizedDescription
             return nil
         }
     }
 
-    func loadCharacter(externalID: String) async {
+    func loadCharacter(
+        externalID: String
+    ) async {
         isLoading = true
         errorMessage = nil
 
         do {
             let characterAPI = CharacterAPI()
 
-            character = try await characterAPI.getCharacterInfo(
-                externalID: externalID
-            )
+            character =
+                try await characterAPI.getCharacterInfo(
+                    externalID: externalID
+                )
+
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage =
+                error.localizedDescription
         }
 
         isLoading = false
     }
 
-    func loadChat(chatID: String) async {
+    func loadChat(
+        chatID: String
+    ) async {
         isLoading = true
         errorMessage = nil
 
         do {
-            chat = try await conversationService.loadChat(
-                chatID: chatID
-            )
+            chat =
+                try await conversationService.loadChat(
+                    chatID: chatID
+                )
+
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage =
+                error.localizedDescription
         }
 
         isLoading = false
     }
 
-    func loadRealTurns(chatID: String) async {
+    func loadRealTurns(
+        chatID: String
+    ) async {
         guard let character else {
             return
         }
@@ -121,11 +150,15 @@ final class ChatViewModel: ObservableObject {
         turns = []
 
         do {
-            let apiTurns = try await conversationService.loadAllTurns(
-                chatID: chatID
-            )
+            let apiTurns =
+                try await conversationService.loadAllTurns(
+                    chatID: chatID
+                )
 
-            print("TOTAL TURNS LOADED:", apiTurns.count)
+            print(
+                "TOTAL TURNS LOADED:",
+                apiTurns.count
+            )
 
             turns = apiTurns.map { apiTurn in
                 conversationService.makeUITurn(
@@ -134,20 +167,32 @@ final class ChatViewModel: ObservableObject {
                 )
             }
 
-            print("UI TURN COUNT:", turns.count)
+            print(
+                "UI TURN COUNT:",
+                turns.count
+            )
 
         } catch {
-            print("LOAD TURNS ERROR:", error)
-            errorMessage = error.localizedDescription
+            print(
+                "LOAD TURNS ERROR:",
+                error
+            )
+
+            errorMessage =
+                error.localizedDescription
         }
 
         isLoading = false
     }
 
-    func sendMessage(_ content: String, chatID: String) async {
-        let trimmedContent = content.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
+    func sendMessage(
+        _ content: String,
+        chatID: String
+    ) async {
+        let trimmedContent =
+            content.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
 
         guard !trimmedContent.isEmpty else {
             return
@@ -179,42 +224,60 @@ final class ChatViewModel: ObservableObject {
                 sessionToken: authSession.sessionToken
             )
 
-            let message = try conversationService.makeCreateAndGenerateTurnMessage(
-                characterID: character.externalID,
-                userID: authSession.userID,
-                username: authSession.username,
-                chatID: chatID,
-                message: trimmedContent
-            )
+            let message =
+                try conversationService
+                    .makeCreateAndGenerateTurnMessage(
+                        characterID: character.externalID,
+                        userID: authSession.userID,
+                        username: authSession.username,
+                        chatID: chatID,
+                        message: trimmedContent
+                    )
 
             print("SENDING MESSAGE")
             print("CHAT ID:", chatID)
             print("CHARACTER ID:", character.externalID)
             print("MESSAGE:", trimmedContent)
 
-            try await webSocketClient.send(message)
+            try await webSocketClient.send(
+                message
+            )
 
             while true {
-                let response = try await webSocketClient.receive()
+                let response =
+                    try await webSocketClient.receive()
 
-                guard let data = response.data(using: .utf8) else {
+                guard let data = response.data(
+                    using: .utf8
+                ) else {
                     continue
                 }
 
-                let rawMessage = try JSONDecoder().decode(
-                    WebSocketMessage.self,
-                    from: data
-                )
-
-                if rawMessage.command == "neo_error" {
-                    let errorResponse = try JSONDecoder().decode(
-                        WebSocketErrorResponse.self,
+                let rawMessage =
+                    try JSONDecoder().decode(
+                        WebSocketMessage.self,
                         from: data
                     )
 
-                    print("CHARACTER.AI ERROR:")
-                    print(errorResponse.comment)
-                    print("ERROR CODE:", errorResponse.errorCode)
+                if rawMessage.command == "neo_error" {
+                    let errorResponse =
+                        try JSONDecoder().decode(
+                            WebSocketErrorResponse.self,
+                            from: data
+                        )
+
+                    print(
+                        "CHARACTER.AI ERROR:"
+                    )
+
+                    print(
+                        errorResponse.comment
+                    )
+
+                    print(
+                        "ERROR CODE:",
+                        errorResponse.errorCode
+                    )
 
                     if errorResponse.errorCode == 403 {
                         throw NetworkError.serverMessage(
@@ -227,13 +290,17 @@ final class ChatViewModel: ObservableObject {
                     )
                 }
 
-                let message = try JSONDecoder().decode(
-                    WebSocketTurnResponse.self,
-                    from: data
-                )
+                let message =
+                    try JSONDecoder().decode(
+                        WebSocketTurnResponse.self,
+                        from: data
+                    )
 
                 guard let turn = message.turn else {
-                    print("WEBSOCKET MESSAGE WITHOUT TURN:")
+                    print(
+                        "WEBSOCKET MESSAGE WITHOUT TURN:"
+                    )
+
                     print(response)
 
                     throw NetworkError.serverMessage(
@@ -242,37 +309,68 @@ final class ChatViewModel: ObservableObject {
                 }
 
                 print("RECEIVED TURN")
-                print("REQUEST CHAT ID:", chatID)
-                print("RESPONSE CHAT ID:", turn.turnKey.chatID)
-                print("TURN ID:", turn.turnKey.turnID)
-                print("AUTHOR:", turn.author.name)
+                print(
+                    "REQUEST CHAT ID:",
+                    chatID
+                )
+
+                print(
+                    "RESPONSE CHAT ID:",
+                    turn.turnKey.chatID
+                )
+
+                print(
+                    "TURN ID:",
+                    turn.turnKey.turnID
+                )
+
+                print(
+                    "AUTHOR:",
+                    turn.author.name
+                )
 
                 guard turn.turnKey.chatID == chatID else {
-                    print("IGNORING TURN FROM DIFFERENT CHAT")
-                    print("EXPECTED CHAT:", chatID)
-                    print("RECEIVED CHAT:", turn.turnKey.chatID)
+                    print(
+                        "IGNORING TURN FROM DIFFERENT CHAT"
+                    )
+
+                    print(
+                        "EXPECTED CHAT:",
+                        chatID
+                    )
+
+                    print(
+                        "RECEIVED CHAT:",
+                        turn.turnKey.chatID
+                    )
+
                     continue
                 }
 
-                let uiTurn = conversationService.makeUITurn(
-                    from: turn,
-                    characterID: character.externalID
-                )
+                let uiTurn =
+                    conversationService.makeUITurn(
+                        from: turn,
+                        characterID: character.externalID
+                    )
 
-                if let index = turns.firstIndex(where: {
-                    $0.turnID == uiTurn.turnID
-                }) {
+                if let index = turns.firstIndex(
+                    where: {
+                        $0.turnID == uiTurn.turnID
+                    }
+                ) {
                     turns[index] = uiTurn
                 } else {
                     turns.append(uiTurn)
                 }
 
                 let isCharacterTurn =
-                    turn.author.authorID == character.externalID
+                    turn.author.authorID ==
+                    character.externalID
 
-                let isFinal = turn.candidates.contains {
-                    $0.isFinal == true
-                }
+                let isFinal =
+                    turn.candidates.contains {
+                        $0.isFinal == true
+                    }
 
                 if isCharacterTurn && isFinal {
                     break
@@ -280,8 +378,13 @@ final class ChatViewModel: ObservableObject {
             }
 
         } catch {
-            print("SEND MESSAGE ERROR:", error)
-            errorMessage = error.localizedDescription
+            print(
+                "SEND MESSAGE ERROR:",
+                error
+            )
+
+            errorMessage =
+                error.localizedDescription
         }
     }
 
@@ -315,12 +418,29 @@ final class ChatViewModel: ObservableObject {
                 error
             )
 
-            errorMessage = error.localizedDescription
+            errorMessage =
+                error.localizedDescription
+        }
+
+        do {
+            let characterIDs = [
+                "IH7x6sc3Ksp3WDB0JMYGDySBeaCcpdbCO9pJDtW_AOM",
+                "FTjqU9DJsFr-dD0kUcfUqbqOv6GvESsUpCNrwrUrouI"
+            ]
+
+            try await conversationService.loadChatPreviews(
+                characterIDs: characterIDs
+            )
+        } catch {
+            print(
+                "CHAT PREVIEW TEST ERROR:",
+                error
+            )
         }
 
         isLoading = false
     }
-    
+
     func disconnect() {
         webSocketClient.disconnect()
     }
