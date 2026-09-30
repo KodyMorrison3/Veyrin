@@ -16,6 +16,9 @@ xcuserdata/
 *.mode2v3
 *.perspectivev3
 
+# Freebuff
+.freebuff/
+
 # Swift Package Manager
 .build/
 .swiftpm/
