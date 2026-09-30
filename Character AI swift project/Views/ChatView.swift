@@ -48,22 +48,22 @@ struct ChatView: View {
                                             )
                                         }
                                     },
-                                onEdit: turn.isHuman
-                                    ? { newContent in
-                                        guard let candidate = turn.candidates.first else {
-                                            return
-                                        }
-
-                                        Task {
-                                            await viewModel.editMessage(
-                                                turnID: turn.turnID,
-                                                chatID: chatID,
-                                                candidateID: candidate.candidateId,
-                                                newContent: newContent
-                                            )
-                                        }
+                                onEdit: { newContent in
+                                    guard let candidate = turn.candidates.first(where: {
+                                        $0.candidateId == turn.primaryCandidateID
+                                    }) else {
+                                        return
                                     }
-                                    : nil
+
+                                    Task {
+                                        await viewModel.editMessage(
+                                            turnID: turn.turnID,
+                                            chatID: chatID,
+                                            candidateID: candidate.candidateId,
+                                            newContent: newContent
+                                        )
+                                    }
+                                }
                             )
                             .id(turn.turnID)
                         }

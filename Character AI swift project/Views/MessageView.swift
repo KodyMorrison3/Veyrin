@@ -16,6 +16,14 @@ struct MessageView: View {
     @State private var isEditing = false
     @State private var editedText = ""
     
+    private func copyMessage(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(
+            text,
+            forType: .string
+        )
+    }
+    
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             if turn.isHuman {
@@ -118,34 +126,50 @@ struct MessageView: View {
                         )
                 }
 
-                if turn.isHuman {
+                Menu {
+                    Button {
+                        copyMessage(candidate.rawContent)
+                    } label: {
+                        Label(
+                            "Copy",
+                            systemImage: "doc.on.doc"
+                        )
+                    }
+
                     Button {
                         editedText = candidate.rawContent
                         isEditing = true
                     } label: {
                         Label(
-                            "Edit",
+                            "Edit message",
                             systemImage: "pencil"
                         )
-                        .font(.caption)
                     }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
                     .disabled(onEdit == nil)
-                } else {
-                    Button {
-                        onRegenerate?()
-                    } label: {
-                        Label(
-                            "Regenerate",
-                            systemImage: "arrow.clockwise"
-                        )
-                        .font(.caption)
+
+                    if !turn.isHuman {
+                        Divider()
+
+                        Button {
+                            onRegenerate?()
+                        } label: {
+                            Label(
+                                "Regenerate",
+                                systemImage: "arrow.clockwise"
+                            )
+                        }
+                        .disabled(onRegenerate == nil)
                     }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
-                    .disabled(onRegenerate == nil)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.caption.weight(.semibold))
+                        .frame(
+                            width: 28,
+                            height: 28
+                        )
                 }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
             }
         }
     }
