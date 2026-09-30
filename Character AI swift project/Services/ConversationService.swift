@@ -396,4 +396,43 @@ struct ConversationService {
 
         return message
     }
+    
+    func makeGenerateTurnCandidateMessage(
+        characterID: String,
+        username: String,
+        chatID: String,
+        turnID: String
+    ) throws -> String {
+        let request = GenerateTurnCandidateRequest(
+            chatType: "TYPE_ONE_ON_ONE",
+            ttsEnabled: false,
+            selectedLanguage: "",
+            characterID: characterID,
+            userName: username,
+            turnKey: GenerateTurnKey(
+                turnID: turnID,
+                chatID: chatID
+            ),
+            previousAnnotations: GenerateTurnAnnotations()
+        )
+
+        let command = CharacterAICommand(
+            command: "generate_turn_candidate",
+            requestID: UUID().uuidString,
+            payload: request,
+            originID: "web-next"
+        )
+
+        let data = try JSONEncoder()
+            .encode(command)
+
+        guard let message = String(
+            data: data,
+            encoding: .utf8
+        ) else {
+            throw NetworkError.invalidResponse
+        }
+
+        return message
+    }
 }

@@ -37,7 +37,17 @@ struct ChatView: View {
                         ) { turn in
                             MessageView(
                                 turn: turn,
-                                character: viewModel.character
+                                character: viewModel.character,
+                                onRegenerate: turn.isHuman
+                                    ? nil
+                                    : {
+                                        Task {
+                                            await viewModel.regenerateResponse(
+                                                turnID: turn.turnID,
+                                                chatID: chatID
+                                            )
+                                        }
+                                    }
                             )
                             .id(turn.turnID)
                         }

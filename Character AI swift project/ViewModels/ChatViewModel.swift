@@ -387,6 +387,153 @@ final class ChatViewModel: ObservableObject {
                 error.localizedDescription
         }
     }
+    
+    func regenerateResponse(
+        turnID: String,
+        chatID: String
+    ) async {
+        guard !isGenerating else {
+            return
+        }
+
+        guard let character else {
+            errorMessage = "Character not loaded."
+            return
+        }
+
+        guard let authSession = authStore.session else {
+            errorMessage = "Not authenticated."
+            return
+        }
+
+        guard let turn = turns.first(where: {
+            $0.turnID == turnID
+        }) else {
+            errorMessage = "Conversation turn not found."
+            return
+        }
+
+        guard !turn.isHuman else {
+            errorMessage = "Only character responses can be regenerated."
+            return
+        }
+
+        isGenerating = true
+        errorMessage = nil
+
+        defer {
+            isGenerating = false
+        }
+
+        do {
+            try await webSocketClient.connect(
+                sessionToken: authSession.sessionToken
+            )
+
+            let message =
+                try conversationService.makeGenerateTurnCandidateMessage(
+                    characterID: character.externalID,
+                    username: authSession.username,
+                    chatID: chatID,
+                    turnID: turnID
+                )
+
+            print("REGENERATING RESPONSE")
+            print("CHAT ID:", chatID)
+            print("TURN ID:", turnID)
+            print("CHARACTER ID:", character.externalID)
+
+            try await webSocketClient.send(
+                message
+            )
+
+            while true {
+                let response =
+                    try await webSocketClient.receive()
+
+                guard let data = response.data(
+                    using: .utf8
+                ) else {
+                    continue
+                }
+
+                let rawMessage =
+                    try JSONDecoder().decode(
+                        WebSocketMessage.self,
+                        from: data
+                    )
+
+                if rawMessage.command == "neo_error" {
+                    let errorResponse =
+                        try JSONDecoder().decode(
+                            WebSocketErrorResponse.self,
+                            from: data
+                        )
+
+                    print("CHARACTER.AI ERROR:")
+                    print(errorResponse.comment)
+                    print("ERROR CODE:", errorResponse.errorCode)
+
+                    throw NetworkError.serverMessage(
+                        errorResponse.comment
+                    )
+                }
+
+                let message =
+                    try JSONDecoder().decode(
+                        WebSocketTurnResponse.self,
+                        from: data
+                    )
+
+                guard let updatedTurn = message.turn else {
+                    continue
+                }
+
+                guard updatedTurn.turnKey.chatID == chatID else {
+                    continue
+                }
+
+                guard updatedTurn.turnKey.turnID == turnID else {
+                    continue
+                }
+
+                let uiTurn =
+                    conversationService.makeUITurn(
+                        from: updatedTurn,
+                        characterID: character.externalID
+                    )
+
+                if let index = turns.firstIndex(
+                    where: {
+                        $0.turnID == uiTurn.turnID
+                    }
+                ) {
+                    turns[index] = uiTurn
+                }
+
+                let isCharacterTurn =
+                    updatedTurn.author.authorID ==
+                    character.externalID
+
+                let isFinal =
+                    updatedTurn.candidates.contains {
+                        $0.isFinal == true
+                    }
+
+                if isCharacterTurn && isFinal {
+                    break
+                }
+            }
+        } catch {
+            print(
+                "REGENERATE RESPONSE ERROR:",
+                error
+            )
+
+            errorMessage =
+                error.localizedDescription
+        }
+    }
 
     func loadRecentChats() async {
         isLoading = true
