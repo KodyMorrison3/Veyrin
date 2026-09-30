@@ -534,6 +534,162 @@ final class ChatViewModel: ObservableObject {
                 error.localizedDescription
         }
     }
+    
+    func editMessage(
+        turnID: String,
+        chatID: String,
+        candidateID: String,
+        newContent: String
+    ) async {
+        guard !isGenerating else {
+            return
+        }
+
+        guard let character else {
+            errorMessage = "Character not loaded."
+            return
+        }
+
+        guard let authSession = authStore.session else {
+            errorMessage = "Not authenticated."
+            return
+        }
+
+        guard !newContent.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty else {
+            errorMessage = "Message cannot be empty."
+            return
+        }
+
+        isGenerating = true
+        errorMessage = nil
+
+        defer {
+            isGenerating = false
+        }
+        do {
+            try await webSocketClient.connect(
+                sessionToken: authSession.sessionToken
+            )
+
+            let message =
+                try conversationService.makeEditTurnCandidateMessage(
+                    chatID: chatID,
+                    turnID: turnID,
+                    currentCandidateID: candidateID,
+                    newContent: newContent
+                )
+
+            print("EDITING MESSAGE")
+            print("CHAT ID:", chatID)
+            print("TURN ID:", turnID)
+            print("CANDIDATE ID:", candidateID)
+
+            try await webSocketClient.send(
+                message
+            )
+
+            while true {
+                let response =
+                    try await webSocketClient.receive()
+
+                guard let data = response.data(
+                    using: .utf8
+                ) else {
+                    continue
+                }
+
+                let rawMessage =
+                    try JSONDecoder().decode(
+                        WebSocketMessage.self,
+                        from: data
+                    )
+
+                if rawMessage.command == "neo_error" {
+                    let errorResponse =
+                        try JSONDecoder().decode(
+                            WebSocketErrorResponse.self,
+                            from: data
+                        )
+
+                    print("CHARACTER.AI ERROR:")
+                    print(errorResponse.comment)
+                    print("ERROR CODE:", errorResponse.errorCode)
+
+                    throw NetworkError.serverMessage(
+                        errorResponse.comment
+                    )
+                }
+
+                let message =
+                    try JSONDecoder().decode(
+                        WebSocketTurnResponse.self,
+                        from: data
+                    )
+
+                guard let updatedTurn = message.turn else {
+                    continue
+                }
+                
+                print("EDIT UPDATE RECEIVED")
+                print("TURN ID:", updatedTurn.turnKey.turnID)
+                print("CHAT ID:", updatedTurn.turnKey.chatID)
+                print("PRIMARY CANDIDATE ID:", updatedTurn.primaryCandidateID)
+            
+                guard updatedTurn.turnKey.chatID == chatID else {
+                    continue
+                }
+
+                guard updatedTurn.turnKey.turnID == turnID else {
+                    continue
+                }
+                
+                guard updatedTurn.candidates.contains(where: {
+                    $0.candidateID == updatedTurn.primaryCandidateID
+                }) else {
+                    continue
+                }
+
+                let uiTurn =
+                    conversationService.makeUITurn(
+                        from: updatedTurn,
+                        characterID: character.externalID
+                    )
+
+                if let index = turns.firstIndex(
+                    where: {
+                        $0.turnID == uiTurn.turnID
+                    }
+                ) {
+                    turns[index] = uiTurn
+                }
+
+                let newCandidateID = updatedTurn.primaryCandidateID
+
+                let primaryCandidateMessage =
+                    try conversationService
+                        .makeUpdatePrimaryCandidateMessage(
+                            chatID: chatID,
+                            turnID: turnID,
+                            candidateID: newCandidateID
+                        )
+
+                try await webSocketClient.send(
+                    primaryCandidateMessage
+                )
+
+                break
+            }
+        } catch {
+            print(
+                "EDIT MESSAGE ERROR:",
+                error
+            )
+            errorMessage =
+                error.localizedDescription
+        }
+    }
 
     func loadRecentChats() async {
         isLoading = true

@@ -11,6 +11,10 @@ struct MessageView: View {
     let turn: Turn
     let character: Character?
     let onRegenerate: (() -> Void)?
+    let onEdit: ((String) -> Void)?
+
+    @State private var isEditing = false
+    @State private var editedText = ""
     
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
@@ -43,30 +47,92 @@ struct MessageView: View {
                     .foregroundStyle(.secondary)
             }
             
-            if let candidate = turn.candidates.first {
-                Text(candidate.rawContent)
-                    .font(.body)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(
-                        turn.isHuman
-                        ? Color.accentColor
-                        : Color.secondary.opacity(0.12)
-                    )
-                    .foregroundStyle(
-                        turn.isHuman
-                        ? .white
-                        : .primary
-                    )
-                    .clipShape(
-                        RoundedRectangle(
-                            cornerRadius: 16,
-                            style: .continuous
+            if let candidate = turn.candidates.first(where: {
+                $0.candidateId == turn.primaryCandidateID
+            }) {
+                if isEditing {
+                    VStack(
+                        alignment: .leading,
+                        spacing: 8
+                    ) {
+                        TextEditor(
+                            text: $editedText
                         )
-                    )
-                
-                if !turn.isHuman {
+                        .frame(minHeight: 80)
+                        .padding(8)
+                        .background(
+                            Color.secondary.opacity(0.12)
+                        )
+                        .clipShape(
+                            RoundedRectangle(
+                                cornerRadius: 12,
+                                style: .continuous
+                            )
+                        )
+
+                        HStack {
+                            Button("Cancel") {
+                                isEditing = false
+                                editedText = candidate.rawContent
+                            }
+
+                            Spacer()
+
+                            Button("Save") {
+                                let newText = editedText.trimmingCharacters(
+                                    in: .whitespacesAndNewlines
+                                )
+
+                                guard !newText.isEmpty else {
+                                    return
+                                }
+
+                                onEdit?(newText)
+                                isEditing = false
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                    }
+                    .frame(maxWidth: 500)
+                } else {
+                    Text(candidate.rawContent)
+                        .font(.body)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(
+                            turn.isHuman
+                                ? Color.accentColor
+                                : Color.secondary.opacity(0.12)
+                        )
+                        .foregroundStyle(
+                            turn.isHuman
+                                ? .white
+                                : .primary
+                        )
+                        .clipShape(
+                            RoundedRectangle(
+                                cornerRadius: 16,
+                                style: .continuous
+                            )
+                        )
+                }
+
+                if turn.isHuman {
+                    Button {
+                        editedText = candidate.rawContent
+                        isEditing = true
+                    } label: {
+                        Label(
+                            "Edit",
+                            systemImage: "pencil"
+                        )
+                        .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .disabled(onEdit == nil)
+                } else {
                     Button {
                         onRegenerate?()
                     } label: {

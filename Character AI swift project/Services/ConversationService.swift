@@ -435,4 +435,74 @@ struct ConversationService {
 
         return message
     }
+    
+    func makeEditTurnCandidateMessage(
+        chatID: String,
+        turnID: String,
+        currentCandidateID: String,
+        newContent: String
+    ) throws -> String {
+        let request = EditTurnCandidateRequest(
+            chatType: "TYPE_ONE_ON_ONE",
+            turnKey: EditTurnKey(
+                chatID: chatID,
+                turnID: turnID
+            ),
+            currentCandidateID: currentCandidateID,
+            newCandidateRawContent: newContent
+        )
+
+        let command = CharacterAICommand(
+            command: "edit_turn_candidate",
+            requestID: UUID().uuidString,
+            payload: request,
+            originID: "web-next"
+        )
+
+        let data = try JSONEncoder()
+            .encode(command)
+
+        guard let message = String(
+            data: data,
+            encoding: .utf8
+        ) else {
+            throw NetworkError.invalidResponse
+        }
+
+        return message
+    }
+    
+    func makeUpdatePrimaryCandidateMessage(
+        chatID: String,
+        turnID: String,
+        candidateID: String
+    ) throws -> String {
+        let request = UpdatePrimaryCandidateRequest(
+            chatType: "TYPE_ONE_ON_ONE",
+            candidateID: candidateID,
+            turnKey: UpdatePrimaryCandidateTurnKey(
+                chatID: chatID,
+                turnID: turnID
+            )
+        )
+
+        let command = CharacterAICommand(
+            command: "update_primary_candidate",
+            requestID: UUID().uuidString,
+            payload: request,
+            originID: "web-next"
+        )
+
+        let data = try JSONEncoder()
+            .encode(command)
+
+        guard let message = String(
+            data: data,
+            encoding: .utf8
+        ) else {
+            throw NetworkError.invalidResponse
+        }
+
+        return message
+    }
 }
