@@ -63,6 +63,15 @@ struct ChatView: View {
                                             newContent: newContent
                                         )
                                     }
+                                },
+                                isPinning: viewModel.pinningTurnIDs.contains(turn.turnID),
+                                onPin: {
+                                    Task {
+                                        await viewModel.togglePin(
+                                            turnID: turn.turnID,
+                                            chatID: chatID
+                                        )
+                                    }
                                 }
                             )
                             .id(turn.turnID)
@@ -130,6 +139,23 @@ struct ChatView: View {
             )
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
+        }
+        .alert(
+            "Unable to Update Pin",
+            isPresented: Binding(
+                get: { viewModel.pinErrorMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        viewModel.pinErrorMessage = nil
+                    }
+                }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                viewModel.pinErrorMessage = nil
+            }
+        } message: {
+            Text(viewModel.pinErrorMessage ?? "Please try again.")
         }
         .task {
             await viewModel.loadCharacter(

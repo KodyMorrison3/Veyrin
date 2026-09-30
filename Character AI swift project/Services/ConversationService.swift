@@ -14,6 +14,36 @@
 
 import Foundation
 
+private struct HideCharacterRequest: Encodable {
+    let characterExternalID: String
+
+    enum CodingKeys: String, CodingKey {
+        case characterExternalID = "character_external_id"
+    }
+}
+
+private struct SetTurnPinRequest: Encodable {
+    let chatType: String
+    let turnKey: SetTurnPinKey
+    let isPinned: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case chatType = "chat_type"
+        case turnKey = "turn_key"
+        case isPinned = "is_pinned"
+    }
+}
+
+private struct SetTurnPinKey: Encodable {
+    let chatID: String
+    let turnID: String
+
+    enum CodingKeys: String, CodingKey {
+        case chatID = "chat_id"
+        case turnID = "turn_id"
+    }
+}
+
 struct ConversationService {
     private let httpClient: HTTPClient
     private let authenticatedHTTPClient: AuthenticatedHTTPClient
@@ -36,7 +66,10 @@ struct ConversationService {
         return try await httpClient.get(url)
     }
 
-    func loadAllTurns(chatID: String) async throws -> [APITurn] {
+    func loadAllTurns(
+        chatID: String,
+        pinnedOnly: Bool = false
+    ) async throws -> [APITurn] {
         var allTurns: [APITurn] = []
         var nextToken: String?
 
@@ -51,6 +84,15 @@ struct ConversationService {
                     value: "true"
                 )
             ]
+
+            if pinnedOnly {
+                queryItems.append(
+                    URLQueryItem(
+                        name: "pinned_only",
+                        value: "true"
+                    )
+                )
+            }
 
             if let nextToken {
                 queryItems.append(
@@ -122,9 +164,19 @@ struct ConversationService {
         return allTurns
     }
 
+    func loadPinnedTurnIDs(chatID: String) async throws -> Set<String> {
+        Set(
+            try await loadAllTurns(
+                chatID: chatID,
+                pinnedOnly: true
+            ).map { $0.turnKey.turnID }
+        )
+    }
+
     func makeUITurn(
         from apiTurn: APITurn,
-        characterID: String
+        characterID: String,
+        isPinned: Bool? = nil
     ) -> Turn {
         Turn(
             turnID: apiTurn.turnKey.turnID,
@@ -140,7 +192,8 @@ struct ConversationService {
                     modelType: "MODEL_TYPE_UNSPECIFIED"
                 )
             },
-            primaryCandidateID: apiTurn.primaryCandidateID
+            primaryCandidateID: apiTurn.primaryCandidateID,
+            isPinned: isPinned ?? apiTurn.isPinned ?? false
         )
     }
 
@@ -175,6 +228,33 @@ struct ConversationService {
             withGreeting: true,
             withPreGeneratedHistory: false
         )
+    }
+
+    func makeSetTurnPinMessage(
+        chatID: String,
+        turnID: String,
+        isPinned: Bool
+    ) throws -> (requestID: String, message: String) {
+        let requestID = UUID().uuidString.lowercased()
+        let request = SetTurnPinRequest(
+            chatType: "TYPE_ONE_ON_ONE",
+            turnKey: SetTurnPinKey(
+                chatID: chatID,
+                turnID: turnID
+            ),
+            isPinned: isPinned
+        )
+        let command = CharacterAICommand(
+            command: "set_turn_pin",
+            requestID: requestID,
+            payload: request,
+            originID: "web-next"
+        )
+        let data = try JSONEncoder().encode(command)
+        guard let message = String(data: data, encoding: .utf8) else {
+            throw NetworkError.invalidResponse
+        }
+        return (requestID, message)
     }
 
     func makeCreateChatCommand(
@@ -219,6 +299,40 @@ struct ConversationService {
         }
 
         return message
+    }
+
+    func hideCharacter(externalID: String) async throws {
+        let pathCharacters = CharacterSet.urlPathAllowed.subtracting(
+            CharacterSet(charactersIn: "/?#")
+        )
+        let encodedID = externalID.addingPercentEncoding(
+            withAllowedCharacters: pathCharacters
+        ) ?? externalID
+
+        guard let primaryURL = URL(
+            string: "https://neo.character.ai/chats/recent/\(encodedID)/hide"
+        ), let fallbackURL = URL(
+            string: "https://plus.character.ai/chat/history/hide/"
+        ) else {
+            throw NetworkError.invalidURL
+        }
+
+        do {
+            try await authenticatedHTTPClient.send(
+                primaryURL,
+                method: "PUT"
+            )
+        } catch {
+            let body = try JSONEncoder().encode(
+                HideCharacterRequest(characterExternalID: externalID)
+            )
+
+            try await authenticatedHTTPClient.send(
+                fallbackURL,
+                method: "POST",
+                body: body
+            )
+        }
     }
 
     func loadRecentChats() async throws -> [ConversationSummary] {

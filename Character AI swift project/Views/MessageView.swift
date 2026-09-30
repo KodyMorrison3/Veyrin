@@ -12,6 +12,8 @@ struct MessageView: View {
     let character: Character?
     let onRegenerate: (() -> Void)?
     let onEdit: ((String) -> Void)?
+    let isPinning: Bool
+    let onPin: (() -> Void)?
 
     @State private var isEditing = false
     @State private var editedText = ""
@@ -128,6 +130,16 @@ struct MessageView: View {
 
                 Menu {
                     Button {
+                        onPin?()
+                    } label: {
+                        Label(
+                            turn.isPinned ? "Unpin message" : "Pin message",
+                            systemImage: turn.isPinned ? "pin.slash" : "pin"
+                        )
+                    }
+                    .disabled(onPin == nil || isPinning)
+
+                    Button {
                         copyMessage(candidate.rawContent)
                     } label: {
                         Label(
@@ -161,12 +173,19 @@ struct MessageView: View {
                         .disabled(onRegenerate == nil)
                     }
                 } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.caption.weight(.semibold))
-                        .frame(
-                            width: 28,
-                            height: 28
-                        )
+                    HStack(spacing: 4) {
+                        if turn.isPinned {
+                            Image(systemName: "pin.fill")
+                                .font(.caption2)
+                        }
+
+                        Image(systemName: "ellipsis")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .frame(
+                        width: turn.isPinned ? 36 : 28,
+                        height: 28
+                    )
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)

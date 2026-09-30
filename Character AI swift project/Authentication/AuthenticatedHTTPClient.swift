@@ -63,6 +63,52 @@ struct AuthenticatedHTTPClient {
         }
     }
     
+    func send(
+        _ url: URL,
+        method: String,
+        body: Data? = nil
+    ) async throws {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+
+        if let body {
+            request.setValue(
+                "application/json",
+                forHTTPHeaderField: "Content-Type"
+            )
+            request.httpBody = body
+        }
+
+        try addAuthentication(
+            to: &request
+        )
+
+        do {
+            let (_, response) = try await session.data(
+                for: request
+            )
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw NetworkError.invalidResponse
+            }
+
+            if httpResponse.statusCode == 401 {
+                await authStore.clearSession()
+                throw NetworkError.unauthenticated
+            }
+
+            guard 200..<300 ~= httpResponse.statusCode else {
+                throw NetworkError.httpError(
+                    httpResponse.statusCode
+                )
+            }
+        } catch let error as NetworkError {
+            throw error
+        } catch {
+            throw NetworkError.requestFailed(error)
+        }
+    }
+
     func getRaw(
         _ url: URL
     ) async throws -> Data {

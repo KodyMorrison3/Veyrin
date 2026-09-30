@@ -14,9 +14,25 @@ final class ChatViewModel: ObservableObject {
     @Published var chat: Chat?
     @Published var turns: [Turn] = []
     @Published var recentChats: [ConversationSummary] = []
+    @Published private(set) var hidingCharacterIDs: Set<String> = []
+    @Published var hideErrorMessage: String?
     @Published var isLoading = false
     @Published var isGenerating = false
     @Published var errorMessage: String?
+    @Published private(set) var pinningTurnIDs: Set<String> = []
+    @Published var pinErrorMessage: String?
+
+    private struct PendingPinRequest {
+        let chatID: String
+        let turnID: String
+        let isPinned: Bool
+    }
+
+    private var pendingPinRequests: [String: PendingPinRequest] = [:]
+    private var deferredWebSocketMessages: [String] = []
+    private var activeChatID: String?
+    private var isReceivingWebSocketMessage = false
+    private var receiveWaiters: [CheckedContinuation<Void, Never>] = []
 
     private let authStore: AuthStore
     private let conversationService: ConversationService
@@ -57,9 +73,11 @@ final class ChatViewModel: ObservableObject {
                     chatID: chatID
                 )
 
-            try await webSocketClient.connect(
-                sessionToken: authSession.sessionToken
-            )
+            if !webSocketClient.isConnected {
+                try await webSocketClient.connect(
+                    sessionToken: authSession.sessionToken
+                )
+            }
 
             try await webSocketClient.send(
                 message
@@ -145,15 +163,47 @@ final class ChatViewModel: ObservableObject {
         print("CHAT ID:", chatID)
         print("CHARACTER ID:", character.externalID)
 
+        if activeChatID != chatID {
+            let hadPendingPins = !pendingPinRequests.isEmpty
+            failPendingPinRequests(
+                forChatID: activeChatID,
+                error: NetworkError.serverMessage(
+                    "Conversation changed before the pin update completed."
+                )
+            )
+            deferredWebSocketMessages.removeAll()
+            if hadPendingPins && !isGenerating {
+                webSocketClient.disconnect()
+            }
+        }
+        activeChatID = chatID
         isLoading = true
         errorMessage = nil
         turns = []
 
         do {
-            let apiTurns =
-                try await conversationService.loadAllTurns(
+            let apiTurns = try await conversationService.loadAllTurns(
+                chatID: chatID
+            )
+            guard activeChatID == chatID else {
+                isLoading = false
+                return
+            }
+
+            let pinnedIDs: Set<String>
+            do {
+                pinnedIDs = try await conversationService.loadPinnedTurnIDs(
                     chatID: chatID
                 )
+            } catch {
+                // Ordinary history remains usable if the pinned-only query fails.
+                print("LOAD PINNED TURN IDS ERROR:", error)
+                pinnedIDs = []
+            }
+            guard activeChatID == chatID else {
+                isLoading = false
+                return
+            }
 
             print(
                 "TOTAL TURNS LOADED:",
@@ -161,9 +211,12 @@ final class ChatViewModel: ObservableObject {
             )
 
             turns = apiTurns.map { apiTurn in
-                conversationService.makeUITurn(
+                let isPinned = apiTurn.isPinned
+                    ?? pinnedIDs.contains(apiTurn.turnKey.turnID)
+                return conversationService.makeUITurn(
                     from: apiTurn,
-                    characterID: character.externalID
+                    characterID: character.externalID,
+                    isPinned: isPinned
                 )
             }
 
@@ -220,9 +273,11 @@ final class ChatViewModel: ObservableObject {
         }
 
         do {
-            try await webSocketClient.connect(
-                sessionToken: authSession.sessionToken
-            )
+            if !webSocketClient.isConnected {
+                try await webSocketClient.connect(
+                    sessionToken: authSession.sessionToken
+                )
+            }
 
             let message =
                 try conversationService
@@ -245,7 +300,11 @@ final class ChatViewModel: ObservableObject {
 
             while true {
                 let response =
-                    try await webSocketClient.receive()
+                    try await receiveChatWebSocketMessage()
+
+                if handlePinResponse(response, activeChatID: chatID) {
+                    continue
+                }
 
                 guard let data = response.data(
                     using: .utf8
@@ -329,6 +388,9 @@ final class ChatViewModel: ObservableObject {
                     turn.author.name
                 )
 
+                guard activeChatID == chatID else {
+                    break
+                }
                 guard turn.turnKey.chatID == chatID else {
                     print(
                         "IGNORING TURN FROM DIFFERENT CHAT"
@@ -347,11 +409,10 @@ final class ChatViewModel: ObservableObject {
                     continue
                 }
 
-                let uiTurn =
-                    conversationService.makeUITurn(
-                        from: turn,
-                        characterID: character.externalID
-                    )
+                let uiTurn = makeUpdatedUITurn(
+                    from: turn,
+                    characterID: character.externalID
+                )
 
                 if let index = turns.firstIndex(
                     where: {
@@ -377,12 +438,13 @@ final class ChatViewModel: ObservableObject {
                 }
             }
 
+            try await finishPendingPinResponses(chatID: chatID)
         } catch {
+            failPendingPinRequests(forChatID: chatID, error: error)
             print(
                 "SEND MESSAGE ERROR:",
                 error
             )
-
             errorMessage =
                 error.localizedDescription
         }
@@ -426,9 +488,11 @@ final class ChatViewModel: ObservableObject {
         }
 
         do {
-            try await webSocketClient.connect(
-                sessionToken: authSession.sessionToken
-            )
+            if !webSocketClient.isConnected {
+                try await webSocketClient.connect(
+                    sessionToken: authSession.sessionToken
+                )
+            }
 
             let message =
                 try conversationService.makeGenerateTurnCandidateMessage(
@@ -449,7 +513,11 @@ final class ChatViewModel: ObservableObject {
 
             while true {
                 let response =
-                    try await webSocketClient.receive()
+                    try await receiveChatWebSocketMessage()
+
+                if handlePinResponse(response, activeChatID: chatID) {
+                    continue
+                }
 
                 guard let data = response.data(
                     using: .utf8
@@ -489,6 +557,9 @@ final class ChatViewModel: ObservableObject {
                     continue
                 }
 
+                guard activeChatID == chatID else {
+                    break
+                }
                 guard updatedTurn.turnKey.chatID == chatID else {
                     continue
                 }
@@ -497,11 +568,10 @@ final class ChatViewModel: ObservableObject {
                     continue
                 }
 
-                let uiTurn =
-                    conversationService.makeUITurn(
-                        from: updatedTurn,
-                        characterID: character.externalID
-                    )
+                let uiTurn = makeUpdatedUITurn(
+                    from: updatedTurn,
+                    characterID: character.externalID
+                )
 
                 if let index = turns.firstIndex(
                     where: {
@@ -524,12 +594,14 @@ final class ChatViewModel: ObservableObject {
                     break
                 }
             }
+
+            try await finishPendingPinResponses(chatID: chatID)
         } catch {
+            failPendingPinRequests(forChatID: chatID, error: error)
             print(
                 "REGENERATE RESPONSE ERROR:",
                 error
             )
-
             errorMessage =
                 error.localizedDescription
         }
@@ -569,9 +641,11 @@ final class ChatViewModel: ObservableObject {
             isGenerating = false
         }
         do {
-            try await webSocketClient.connect(
-                sessionToken: authSession.sessionToken
-            )
+            if !webSocketClient.isConnected {
+                try await webSocketClient.connect(
+                    sessionToken: authSession.sessionToken
+                )
+            }
 
             let message =
                 try conversationService.makeEditTurnCandidateMessage(
@@ -592,7 +666,11 @@ final class ChatViewModel: ObservableObject {
 
             while true {
                 let response =
-                    try await webSocketClient.receive()
+                    try await receiveChatWebSocketMessage()
+
+                if handlePinResponse(response, activeChatID: chatID) {
+                    continue
+                }
 
                 guard let data = response.data(
                     using: .utf8
@@ -637,6 +715,9 @@ final class ChatViewModel: ObservableObject {
                 print("CHAT ID:", updatedTurn.turnKey.chatID)
                 print("PRIMARY CANDIDATE ID:", updatedTurn.primaryCandidateID)
             
+                guard activeChatID == chatID else {
+                    break
+                }
                 guard updatedTurn.turnKey.chatID == chatID else {
                     continue
                 }
@@ -651,11 +732,10 @@ final class ChatViewModel: ObservableObject {
                     continue
                 }
 
-                let uiTurn =
-                    conversationService.makeUITurn(
-                        from: updatedTurn,
-                        characterID: character.externalID
-                    )
+                let uiTurn = makeUpdatedUITurn(
+                    from: updatedTurn,
+                    characterID: character.externalID
+                )
 
                 if let index = turns.firstIndex(
                     where: {
@@ -681,13 +761,233 @@ final class ChatViewModel: ObservableObject {
 
                 break
             }
+
+            try await finishPendingPinResponses(chatID: chatID)
         } catch {
+            failPendingPinRequests(forChatID: chatID, error: error)
             print(
                 "EDIT MESSAGE ERROR:",
                 error
             )
             errorMessage =
                 error.localizedDescription
+        }
+    }
+
+    func togglePin(
+        turnID: String,
+        chatID: String
+    ) async {
+        guard !pinningTurnIDs.contains(turnID) else {
+            return
+        }
+        guard let turn = turns.first(where: {
+            $0.turnID == turnID && $0.chatID == chatID
+        }) else {
+            pinErrorMessage = "Conversation turn not found."
+            return
+        }
+        guard let authSession = authStore.session else {
+            pinErrorMessage = "Not authenticated."
+            return
+        }
+
+        let shouldReceivePinResponse = !isGenerating
+        let isPinned = !turn.isPinned
+        pinningTurnIDs.insert(turnID)
+        pinErrorMessage = nil
+
+        do {
+            let request = try conversationService.makeSetTurnPinMessage(
+                chatID: chatID,
+                turnID: turnID,
+                isPinned: isPinned
+            )
+            pendingPinRequests[request.requestID] = PendingPinRequest(
+                chatID: chatID,
+                turnID: turnID,
+                isPinned: isPinned
+            )
+
+            if !webSocketClient.isConnected {
+                try await webSocketClient.connect(
+                    sessionToken: authSession.sessionToken
+                )
+            }
+            try await webSocketClient.send(request.message)
+
+            if shouldReceivePinResponse {
+                try await finishPendingPinResponses(chatID: chatID)
+            }
+        } catch {
+            failPendingPinRequests(forTurnID: turnID, error: error)
+            pinErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func receiveChatWebSocketMessage() async throws -> String {
+        if !deferredWebSocketMessages.isEmpty {
+            return deferredWebSocketMessages.removeFirst()
+        }
+        return try await receiveWebSocketMessageFromSocket()
+    }
+
+    private func receiveWebSocketMessageFromSocket() async throws -> String {
+        while isReceivingWebSocketMessage {
+            await withCheckedContinuation { continuation in
+                receiveWaiters.append(continuation)
+            }
+        }
+
+        isReceivingWebSocketMessage = true
+        defer {
+            isReceivingWebSocketMessage = false
+            if !receiveWaiters.isEmpty {
+                receiveWaiters.removeFirst().resume()
+            }
+        }
+
+        return try await webSocketClient.receive()
+    }
+
+    private func handlePinResponse(
+        _ response: String,
+        activeChatID: String
+    ) -> Bool {
+        guard let data = response.data(using: .utf8),
+              let envelope = try? JSONDecoder().decode(WebSocketMessage.self, from: data),
+              let pending = pendingPinRequests[envelope.requestID],
+              pending.chatID == activeChatID else {
+            return false
+        }
+
+        if envelope.command == "neo_error",
+           let errorResponse = try? JSONDecoder().decode(WebSocketErrorResponse.self, from: data) {
+            completePinRequest(
+                requestID: envelope.requestID,
+                error: NetworkError.serverMessage(errorResponse.comment)
+            )
+            return true
+        }
+
+        guard envelope.command == "update_turn",
+              let update = try? JSONDecoder().decode(WebSocketTurnResponse.self, from: data),
+              let apiTurn = update.turn else {
+            completePinRequest(
+                requestID: envelope.requestID,
+                error: NetworkError.serverMessage("Character.AI returned an invalid pin response.")
+            )
+            return true
+        }
+
+        guard apiTurn.turnKey.chatID == pending.chatID,
+              apiTurn.turnKey.turnID == pending.turnID,
+              activeChatID == pending.chatID else {
+            completePinRequest(
+                requestID: envelope.requestID,
+                error: NetworkError.serverMessage("The pin response did not match the requested turn.")
+            )
+            return true
+        }
+
+        guard activeChatID == pending.chatID else {
+            completePinRequest(
+                requestID: envelope.requestID,
+                error: NetworkError.serverMessage(
+                    "Conversation changed before the pin update completed."
+                )
+            )
+            return true
+        }
+        guard let index = turns.firstIndex(where: {
+            $0.turnID == pending.turnID && $0.chatID == pending.chatID
+        }) else {
+            completePinRequest(
+                requestID: envelope.requestID,
+                error: NetworkError.serverMessage("The requested conversation turn is no longer available.")
+            )
+            return true
+        }
+        turns[index] = turns[index].settingPinned(
+            apiTurn.isPinned ?? pending.isPinned
+        )
+        completePinRequest(requestID: envelope.requestID, error: nil)
+        return true
+    }
+
+    private func completePinRequest(requestID: String, error: Error?) {
+        guard let pending = pendingPinRequests.removeValue(forKey: requestID) else {
+            return
+        }
+        pinningTurnIDs.remove(pending.turnID)
+
+        if let error {
+            pinErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func finishPendingPinResponses(chatID: String) async throws {
+        while pendingPinRequests.values.contains(where: { $0.chatID == chatID }) {
+            let response = try await receiveWebSocketMessageFromSocket()
+            if !handlePinResponse(response, activeChatID: chatID) {
+                deferredWebSocketMessages.append(response)
+            }
+        }
+    }
+
+    private func makeUpdatedUITurn(
+        from apiTurn: APITurn,
+        characterID: String
+    ) -> Turn {
+        let existingTurn = turns.first(where: {
+            $0.turnID == apiTurn.turnKey.turnID && $0.chatID == apiTurn.turnKey.chatID
+        })
+        return conversationService.makeUITurn(
+            from: apiTurn,
+            characterID: characterID,
+            isPinned: apiTurn.isPinned ?? existingTurn?.isPinned ?? false
+        )
+    }
+
+    private func failPendingPinRequests(
+        forTurnID turnID: String? = nil,
+        forChatID chatID: String? = nil,
+        error: Error
+    ) {
+        let requestIDs = pendingPinRequests.compactMap { requestID, pending in
+            let matchesTurn = turnID == nil || pending.turnID == turnID
+            let matchesChat = chatID == nil || pending.chatID == chatID
+            return matchesTurn && matchesChat ? requestID : nil
+        }
+        for requestID in requestIDs {
+            completePinRequest(requestID: requestID, error: error)
+        }
+    }
+
+    func hideCharacter(externalID: String) async -> Bool {
+        guard !hidingCharacterIDs.contains(externalID) else {
+            return false
+        }
+
+        hidingCharacterIDs.insert(externalID)
+        hideErrorMessage = nil
+
+        defer {
+            hidingCharacterIDs.remove(externalID)
+        }
+
+        do {
+            try await conversationService.hideCharacter(
+                externalID: externalID
+            )
+
+            recentChats.removeAll {
+                $0.characterID == externalID
+            }
+            return true
+        } catch {
+            hideErrorMessage = error.localizedDescription
+            return false
         }
     }
 
@@ -745,6 +1045,11 @@ final class ChatViewModel: ObservableObject {
     }
 
     func disconnect() {
+        failPendingPinRequests(
+            error: NetworkError.serverMessage(
+                "The WebSocket connection closed before the pin update completed."
+            )
+        )
         webSocketClient.disconnect()
     }
 }

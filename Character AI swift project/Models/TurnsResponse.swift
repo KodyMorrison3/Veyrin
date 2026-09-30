@@ -28,6 +28,7 @@ struct APITurn: Decodable {
     let author: TurnAuthor
     let candidates: [APICandidate]
     let primaryCandidateID: String
+    let isPinned: Bool?
 
     enum CodingKeys: String, CodingKey {
         case turnKey = "turn_key"
@@ -37,6 +38,7 @@ struct APITurn: Decodable {
         case author
         case candidates
         case primaryCandidateID = "primary_candidate_id"
+        case isPinned = "is_pinned"
     }
 }
 

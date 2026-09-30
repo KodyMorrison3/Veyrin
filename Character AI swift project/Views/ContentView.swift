@@ -17,6 +17,7 @@ private struct MainView: View {
 
     @StateObject private var viewModel: ChatViewModel
     @State private var selectedChatID: String?
+    @State private var hideErrorMessage: String?
 
     init(authStore: AuthStore) {
         self.authStore = authStore
@@ -49,6 +50,39 @@ private struct MainView: View {
             )
             .tag(conversation.chatID)
             .listRowSeparator(.hidden)
+            .contextMenu {
+                Button(
+                    "Hide Character / Remove from Recents",
+                    systemImage: "eye.slash",
+                    role: .destructive
+                ) {
+                    Task {
+                        let selectedWasHidden = selectedChatID.map { chatID in
+                            viewModel.recentChats.contains(where: {
+                                $0.chatID == chatID &&
+                                $0.characterID == conversation.characterID
+                            })
+                        } ?? false
+
+                        let didHide = await viewModel.hideCharacter(
+                            externalID: conversation.characterID
+                        )
+
+                        if didHide && selectedWasHidden {
+                            selectedChatID = nil
+                        }
+
+                        if let message = viewModel.hideErrorMessage {
+                            hideErrorMessage = message
+                        }
+                    }
+                }
+                .disabled(
+                    viewModel.hidingCharacterIDs.contains(
+                        conversation.characterID
+                    )
+                )
+            }
             .listRowBackground(
                 selectedChatID == conversation.chatID
                     ? Color.accentColor.opacity(0.12)
@@ -57,6 +91,23 @@ private struct MainView: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("Conversations")
+        .alert(
+            "Unable to Hide Character",
+            isPresented: Binding(
+                get: { hideErrorMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        hideErrorMessage = nil
+                    }
+                }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                hideErrorMessage = nil
+            }
+        } message: {
+            Text(hideErrorMessage ?? "Please try again.")
+        }
         .toolbar {
             ToolbarItem {
                 Button {
