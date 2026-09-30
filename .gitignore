@@ -14,6 +14,7 @@ xcuserdata/
 *.pbxuser
 *.mode1v3
 *.mode2v3
+*.perspectivev3
 
 # Swift Package Manager
 .build/
@@ -25,7 +26,7 @@ Pods/
 # Carthage
 Carthage/Build/
 
-# Fastlane generated files
+# Fastlane
 fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/
@@ -33,6 +34,9 @@ fastlane/test_output/
 
 # Archives
 *.xcarchive
+*.ipa
+*.dSYM
+*.dSYM.zip
 
 # Temporary / local files
 *.tmp
@@ -40,6 +44,8 @@ fastlane/test_output/
 *.log
 *.bak
 *.swp
+*.swo
+*~
 
 # Environment / secrets
 .env
@@ -48,8 +54,11 @@ fastlane/test_output/
 
 # Credentials / authentication material
 *credentials*
+*credential*
 *secret*
+*secrets*
 *token*
+*tokens*
 
 # Character.AI investigation material
 *.har
@@ -59,3 +68,7 @@ fastlane/test_output/
 request-dumps/
 har/
 captures/
+
+# Local configuration
+*.local
+*.local.*
