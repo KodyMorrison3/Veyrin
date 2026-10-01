@@ -16,4 +16,18 @@ struct ConversationSummary: Identifiable {
     let lastUpdated: String
     let state: String
     let lastMessage: String?
+
+    static func matchingCharacterName(
+        _ searchText: String,
+        in conversations: [ConversationSummary]
+    ) -> [ConversationSummary] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            return conversations
+        }
+
+        return conversations.filter {
+            $0.characterName.localizedCaseInsensitiveContains(query)
+        }
+    }
 }

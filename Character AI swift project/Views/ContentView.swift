@@ -17,7 +17,11 @@ private struct MainView: View {
 
     @StateObject private var viewModel: ChatViewModel
     @State private var selectedChatID: String?
+    @State private var conversationSearchText = ""
+    @State private var pendingCreatedChat: ConversationSummary?
+    @State private var profileCharacterID: String?
     @State private var hideErrorMessage: String?
+    @State private var isShowingDiscover = false
 
     init(authStore: AuthStore) {
         self.authStore = authStore
@@ -26,6 +30,29 @@ private struct MainView: View {
             wrappedValue: ChatViewModel(
                 authStore: authStore
             )
+        )
+    }
+
+    private var selectedConversation: ConversationSummary? {
+        guard let selectedChatID else {
+            return nil
+        }
+        if let conversation = viewModel.recentChats.first(where: {
+            $0.chatID == selectedChatID
+        }) {
+            return conversation
+        }
+        // Recent chats can lag creation, so keep the selected summary until it catches up.
+        guard pendingCreatedChat?.chatID == selectedChatID else {
+            return nil
+        }
+        return pendingCreatedChat
+    }
+
+    private var filteredRecentChats: [ConversationSummary] {
+        ConversationSummary.matchingCharacterName(
+            conversationSearchText,
+            in: viewModel.recentChats
         )
     }
 
@@ -38,12 +65,43 @@ private struct MainView: View {
         .task {
             await viewModel.loadRecentChats()
         }
+        // macOS sheets are modal and cannot be dismissed by clicking outside, so the
+        // profile uses a transient popover, which is dismissed by an outside click.
+        .popover(isPresented: Binding(
+            get: { profileCharacterID != nil },
+            set: { if !$0 { profileCharacterID = nil } }
+        )) {
+            if let profileCharacterID {
+                CharacterProfileView(
+                    characterID: profileCharacterID,
+                    authStore: authStore,
+                    onStartConversation: { profile in
+                        await startConversation(
+                            characterID: profile.externalID,
+                            name: profile.name ?? profile.title ?? "Character",
+                            avatarFileName: profile.avatarFileName ?? ""
+                        )
+                    }
+                )
+                // Popovers size to the content's fitting size; pin it so flexible
+                // profile content (scroll view, loading states) cannot balloon it.
+                .frame(width: 480, height: 560)
+            }
+        }
     }
 
     private var sidebar: some View {
         List(
-            viewModel.recentChats,
-            selection: $selectedChatID
+            filteredRecentChats,
+            selection: Binding(
+                get: { selectedChatID },
+                set: { chatID in
+                    selectedChatID = chatID
+                    if chatID != nil {
+                        isShowingDiscover = false
+                    }
+                }
+            )
         ) { conversation in
             ConversationRow(
                 conversation: conversation
@@ -89,6 +147,24 @@ private struct MainView: View {
                     : Color.clear
             )
         }
+        .searchable(
+            text: $conversationSearchText,
+            placement: .sidebar,
+            prompt: "Search conversations"
+        )
+        .overlay {
+            if filteredRecentChats.isEmpty,
+               !conversationSearchText.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+               ).isEmpty {
+                ContentUnavailableView(
+                    "No Matching Conversations",
+                    systemImage: "magnifyingglass",
+                    description: Text("Try a different search term.")
+                )
+                .padding()
+            }
+        }
         .listStyle(.sidebar)
         .navigationTitle("Conversations")
         .alert(
@@ -111,22 +187,26 @@ private struct MainView: View {
         .toolbar {
             ToolbarItem {
                 Button {
-                    guard let currentChatID = selectedChatID,
-                          let selectedConversation =
-                            viewModel.recentChats.first(where: {
-                                $0.chatID == currentChatID
-                            }) else {
+                    selectedChatID = nil
+                    isShowingDiscover = true
+                } label: {
+                    Label("Discover", systemImage: "sparkles")
+                }
+                .help("Discover")
+            }
+
+            ToolbarItem {
+                Button {
+                    guard let selectedConversation else {
                         return
                     }
 
                     Task {
-                        if let newChatID =
-                            await viewModel.createRealChat(
-                                characterID: selectedConversation.characterID
-                            ) {
-                            await viewModel.loadRecentChats()
-                            selectedChatID = newChatID
-                        }
+                        await startConversation(
+                            characterID: selectedConversation.characterID,
+                            name: selectedConversation.characterName,
+                            avatarFileName: selectedConversation.characterAvatarURI
+                        )
                     }
                 } label: {
                     Image(systemName: "square.and.pencil")
@@ -134,12 +214,57 @@ private struct MainView: View {
                 .help("New Conversation")
                 .disabled(
                     viewModel.isLoading ||
-                    selectedChatID == nil
+                    selectedConversation == nil
                 )
+            }
+
+            ToolbarItem {
+                Button {
+                    guard let selectedConversation else {
+                        return
+                    }
+                    profileCharacterID = selectedConversation.characterID
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .help("Character Profile")
+                .disabled(selectedConversation == nil)
             }
         }
     }
     
+    private func startConversation(
+        characterID: String,
+        name: String,
+        avatarFileName: String
+    ) async -> Bool {
+        guard let newChatID = await viewModel.createRealChat(characterID: characterID) else {
+            return false
+        }
+
+        pendingCreatedChat = ConversationSummary(
+            id: newChatID,
+            chatID: newChatID,
+            characterID: characterID,
+            characterName: name,
+            characterAvatarURI: avatarFileName,
+            lastUpdated: ISO8601DateFormatter().string(from: Date()),
+            state: "STATE_ACTIVE",
+            lastMessage: nil
+        )
+        selectedChatID = newChatID
+        if viewModel.recentChats.contains(where: { $0.chatID == newChatID }) {
+            pendingCreatedChat = nil
+        }
+        Task {
+            await viewModel.loadRecentChats()
+            if viewModel.recentChats.contains(where: { $0.chatID == newChatID }) {
+                pendingCreatedChat = nil
+            }
+        }
+        return true
+    }
+
     private struct ConversationRow: View {
         let conversation: ConversationSummary
 
@@ -268,10 +393,14 @@ private struct MainView: View {
 
     @ViewBuilder
     private var detailView: some View {
-        if let currentChatID = selectedChatID,
-           let selectedChat = viewModel.recentChats.first(where: {
-               $0.chatID == currentChatID
-           }) {
+        if isShowingDiscover {
+            DiscoverView(
+                authStore: authStore,
+                onSelectCharacter: { characterID in
+                    profileCharacterID = characterID
+                }
+            )
+        } else if let selectedChat = selectedConversation {
             ChatView(
                 chatID: selectedChat.chatID,
                 characterID: selectedChat.characterID,
