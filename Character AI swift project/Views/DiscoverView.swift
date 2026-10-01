@@ -10,24 +10,259 @@ struct DiscoverView: View {
     ) {
         self.onSelectCharacter = onSelectCharacter
         _viewModel = StateObject(wrappedValue: DiscoverViewModel(
-            service: DiscoverService(authStore: authStore)
+            service: DiscoverService(authStore: authStore),
+            searchService: CharacterSearchService(authStore: authStore),
+            popularTrendingService: PopularTrendingService(authStore: authStore)
         ))
     }
 
     var body: some View {
+        Group {
+            if viewModel.hasActiveSearch {
+                searchSection
+            } else {
+                browseSection
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            searchBar
+        }
+        .navigationTitle("Discover")
+        .task {
+            await viewModel.loadInitialPages()
+        }
+        .task {
+            await viewModel.loadCuratedLists()
+        }
+    }
+
+    // MARK: Search bar (persistent above scrolling content)
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField(
+                "Search characters",
+                text: $viewModel.searchQuery
+            )
+            .textFieldStyle(.plain)
+            .onSubmit {
+                Task { await viewModel.submitSearch() }
+            }
+            if viewModel.hasActiveSearch {
+                Button {
+                    viewModel.clearSearch()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear search")
+                .keyboardShortcut(.cancelAction)
+
+                Button {
+                    Task { await viewModel.submitSearch() }
+                } label: {
+                    Image(systemName: "arrow.right.circle")
+                }
+                .buttonStyle(.plain)
+                .help("Search")
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 24)
+        .padding(.vertical, 10)
+    }
+
+    // MARK: Browse (existing Discover content, unchanged)
+
+    private var browseSection: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 recommendedSection
+                if AppPreferences.shared.showPopularTrending {
+                    popularTrendingSection
+                }
                 scenesSection
             }
             .padding(24)
             .frame(maxWidth: 1100, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .navigationTitle("Discover")
-        .task {
-            await viewModel.loadInitialPages()
+    }
+
+    // MARK: Popular / Trending (curated lists, no pagination)
+
+    private var popularTrendingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let error = viewModel.curatedError, viewModel.popularCharacters.isEmpty,
+               viewModel.trendingCharacters.isEmpty {
+                errorView(error) {
+                    Task { await viewModel.retryCuratedLists() }
+                }
+            } else {
+                curatedListSection(
+                    title: "Popular characters",
+                    systemImage: "flame",
+                    characters: viewModel.popularCharacters
+                )
+                curatedListSection(
+                    title: "Trending characters",
+                    systemImage: "chart.line.uptrend.xyaxis",
+                    characters: viewModel.trendingCharacters
+                )
+                if viewModel.isLoadingCurated,
+                   viewModel.popularCharacters.isEmpty,
+                   viewModel.trendingCharacters.isEmpty {
+                    ProgressView("Loading popular & trending…")
+                }
+            }
         }
+    }
+
+    @ViewBuilder
+    private func curatedListSection(
+        title: String,
+        systemImage: String,
+        characters: [DiscoverFeedCharacter]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(title, systemImage: systemImage)
+                .font(.title3.bold())
+
+            if characters.isEmpty {
+                if !viewModel.isLoadingCurated {
+                    Text("Nothing here right now.")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 14)], spacing: 14) {
+                    ForEach(Array(characters.enumerated()), id: \.offset) { _, character in
+                        if let externalID = character.externalID, !externalID.isEmpty {
+                            Button {
+                                onSelectCharacter(externalID)
+                            } label: {
+                                characterCard(character)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: Search (suggestions / results / honest blocked state)
+
+    private var searchSection: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if viewModel.showsSuggestions {
+                    suggestionsList
+                }
+
+                if viewModel.isSearchingResults {
+                    ProgressView("Searching…")
+                } else if viewModel.searchNeedsWebSession {
+                    // Expected condition while the results endpoint requires a
+                    // web-session credential. Retry stays available: upstream
+                    // behavior at this boundary has varied before.
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(
+                            "Character search needs a web session — unavailable in the native app yet.",
+                            systemImage: "globe"
+                        )
+                        .foregroundStyle(.secondary)
+                        Button("Retry") {
+                            Task { await viewModel.submitSearch() }
+                        }
+                    }
+                } else if let searchError = viewModel.searchError {
+                    errorView(searchError) {
+                        Task { await viewModel.submitSearch() }
+                    }
+                } else if viewModel.searchResults.isEmpty {
+                    Text("No results for \(viewModel.searchQuery).")
+                        .foregroundStyle(.secondary)
+                } else {
+                    resultsGrid
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: 1100, alignment: .leading)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var suggestionsList: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(viewModel.suggestions, id: \.self) { suggestion in
+                Button {
+                    viewModel.selectSuggestion(suggestion)
+                } label: {
+                    Label(suggestion, systemImage: "magnifyingglass")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(8)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var resultsGrid: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 14)], spacing: 14) {
+            ForEach(Array(viewModel.searchResults.enumerated()), id: \.offset) { _, result in
+                if let externalID = result.externalID, !externalID.isEmpty {
+                    Button {
+                        onSelectCharacter(externalID)
+                    } label: {
+                        searchResultCard(result)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func searchResultCard(_ result: CharacterSearchResult) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            avatar(fileName: result.avatarFileName, name: result.name)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(result.name ?? result.title ?? "Character")
+                    .font(.headline)
+                    .lineLimit(2)
+                if let tag = nonempty(result.tagLabel) {
+                    Text(tag).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                if let description = nonempty(result.description) {
+                    Text(description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+                HStack(spacing: 4) {
+                    if let creator = nonempty(result.creatorUsername) {
+                        Text("@\(creator)")
+                    }
+                    if let count = result.interactionCount {
+                        Text("· \(count) chats")
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+        .contentShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private var recommendedSection: some View {

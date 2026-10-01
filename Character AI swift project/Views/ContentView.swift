@@ -31,6 +31,12 @@ private struct MainView: View {
                 authStore: authStore
             )
         )
+        _userProfileViewModel = StateObject(
+            wrappedValue: UserProfileViewModel(
+                service: UserProfileService(authStore: authStore),
+                username: authStore.session?.username ?? ""
+            )
+        )
     }
 
     private var selectedConversation: ConversationSummary? {
@@ -167,6 +173,9 @@ private struct MainView: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("Conversations")
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            userProfileControl
+        }
         .alert(
             "Unable to Hide Character",
             isPresented: Binding(
@@ -233,6 +242,147 @@ private struct MainView: View {
         }
     }
     
+    // MARK: User Profile (bottom-left control, account menu, profile popover)
+
+    @StateObject private var userProfileViewModel: UserProfileViewModel
+    @State private var isShowingUserProfile = false
+    @State private var isShowingAccountMenu = false
+    @State private var isConfirmingSignOut = false
+    @ObservedObject private var preferences = AppPreferences.shared
+
+    private var userProfileControl: some View {
+        VStack(spacing: 0) {
+            Divider()
+            Button {
+                isShowingAccountMenu = true
+            } label: {
+                UserProfileControl(viewModel: userProfileViewModel)
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $isShowingAccountMenu, arrowEdge: .bottom) {
+                accountMenu
+            }
+            .popover(isPresented: $isShowingUserProfile, arrowEdge: .bottom) {
+                UserProfileDetailView(
+                    viewModel: userProfileViewModel,
+                    onSelectCharacter: { externalID in
+                        isShowingUserProfile = false
+                        profileCharacterID = externalID
+                    }
+                )
+            }
+        }
+    }
+
+    private var accountMenu: some View {
+        VStack(spacing: 2) {
+            if isConfirmingSignOut {
+                // Inline two-step confirmation: dialogs/sheets are unreliable
+                // inside popovers on macOS.
+                VStack(spacing: 8) {
+                    Text("Sign out of Character.AI?")
+                        .font(.callout.weight(.semibold))
+                        .multilineTextAlignment(.center)
+                    Text("You will need to paste your session token again to sign back in.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    HStack(spacing: 8) {
+                        Button("Cancel") {
+                            isConfirmingSignOut = false
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+
+                        Button("Sign Out") {
+                            isShowingAccountMenu = false
+                            isConfirmingSignOut = false
+                            performSignOut()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.red, in: RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+                .padding(12)
+            } else {
+                VStack(spacing: 1) {
+                    Text(userProfileViewModel.username.isEmpty
+                        ? "Account"
+                        : "@\(userProfileViewModel.username)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+
+                Divider()
+
+                VStack(spacing: 0) {
+                    menuButton("View Profile", systemImage: "person.crop.circle") {
+                        isShowingAccountMenu = false
+                        // Let the menu popover close before presenting the profile.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            isShowingUserProfile = true
+                        }
+                    }
+                    SettingsLink {
+                        Label("Open Settings", systemImage: "gearshape")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .simultaneousGesture(TapGesture().onEnded {
+                        isShowingAccountMenu = false
+                    })
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    Divider()
+                    menuButton("Sign Out", systemImage: "rectangle.portrait.and.arrow.right", destructive: true) {
+                        isConfirmingSignOut = true
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.bottom, 6)
+            }
+        }
+        .frame(width: 240)
+        .padding(.top, 4)
+    }
+
+    private func menuButton(
+        _ title: String,
+        systemImage: String,
+        destructive: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            action()
+        } label: {
+            Label(title, systemImage: systemImage)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(destructive ? Color.red : Color.primary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Color.clear)
+        )
+    }
+
+    private func performSignOut() {
+        // Existing, confirmed sign-out path: clears the in-memory session and
+        // removes the Keychain item. No other session mechanism involved.
+        authStore.clearSession()
+    }
+
     private func startConversation(
         characterID: String,
         name: String,

@@ -25,5 +25,13 @@ struct CharacterAIApp: App {
             ContentView()
                 .environmentObject(authStore)
         }
+
+        SettingsScene
+    }
+
+    private var SettingsScene: some Scene {
+        Settings {
+            SettingsView(username: authStore.session?.username ?? "")
+        }
     }
 }
