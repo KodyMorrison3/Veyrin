@@ -21,6 +21,13 @@ final class ChatViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published private(set) var pinningTurnIDs: Set<String> = []
     @Published var pinErrorMessage: String?
+    @Published var rewindErrorMessage: String?
+    @Published private(set) var rewindingFromTurnID: String?
+    @Published private(set) var availableModels: [ModelSelectionOption] = []
+    @Published private(set) var isLoadingAvailableModels = false
+    @Published private(set) var availableModelsErrorMessage: String?
+    @Published private(set) var isCreatingConversationFromTurn = false
+    @Published var startConversationErrorMessage: String?
 
     private struct PendingPinRequest {
         let chatID: String
@@ -38,10 +45,12 @@ final class ChatViewModel: ObservableObject {
     private let conversationService: ConversationService
     private let webSocketClient = WebSocketClient()
 
-    init(authStore: AuthStore) {
+    init(
+        authStore: AuthStore,
+        conversationService: ConversationService? = nil
+    ) {
         self.authStore = authStore
-
-        self.conversationService = ConversationService(
+        self.conversationService = conversationService ?? ConversationService(
             authenticatedHTTPClient: AuthenticatedHTTPClient(
                 authStore: authStore
             )
@@ -155,9 +164,13 @@ final class ChatViewModel: ObservableObject {
     func loadRealTurns(
         chatID: String
     ) async {
+        guard rewindingFromTurnID == nil else {
+            return
+        }
         guard let character else {
             return
         }
+        self.character = character
 
         print("LOADING CHAT HISTORY")
         print("CHAT ID:", chatID)
@@ -251,6 +264,10 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
+        guard rewindingFromTurnID == nil else {
+            errorMessage = "Wait for the rewind to finish before continuing."
+            return
+        }
         guard !isGenerating else {
             return
         }
@@ -454,6 +471,10 @@ final class ChatViewModel: ObservableObject {
         turnID: String,
         chatID: String
     ) async {
+        guard rewindingFromTurnID == nil else {
+            errorMessage = "Wait for the rewind to finish before continuing."
+            return
+        }
         guard !isGenerating else {
             return
         }
@@ -613,6 +634,10 @@ final class ChatViewModel: ObservableObject {
         candidateID: String,
         newContent: String
     ) async {
+        guard rewindingFromTurnID == nil else {
+            errorMessage = "Wait for the rewind to finish before continuing."
+            return
+        }
         guard !isGenerating else {
             return
         }
@@ -774,10 +799,130 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    func loadAvailableModels() async {
+        isLoadingAvailableModels = true
+        availableModelsErrorMessage = nil
+        startConversationErrorMessage = nil
+        defer {
+            isLoadingAvailableModels = false
+        }
+
+        do {
+            availableModels = try await conversationService.loadAvailableModels()
+            if availableModels.isEmpty {
+                availableModelsErrorMessage = "No AI models are currently available."
+            }
+        } catch {
+            availableModelsErrorMessage = error.localizedDescription
+        }
+    }
+
+    func createConversation(
+        from turn: Turn,
+        modelType: String
+    ) async -> String? {
+        guard !isGenerating,
+              !isLoading,
+              rewindingFromTurnID == nil,
+              pinningTurnIDs.isEmpty else {
+            startConversationErrorMessage = "Wait for conversation updates to finish before creating a new conversation."
+            return nil
+        }
+        guard turn.chatID == activeChatID,
+              turns.contains(where: { $0.turnID == turn.turnID && $0.chatID == turn.chatID }) else {
+            startConversationErrorMessage = "The selected message is no longer in this conversation."
+            return nil
+        }
+        guard availableModels.contains(where: { $0.modelType == modelType }) else {
+            startConversationErrorMessage = "Select an available AI model."
+            return nil
+        }
+        guard character != nil else {
+            startConversationErrorMessage = "Character details are not loaded yet."
+            return nil
+        }
+
+        isCreatingConversationFromTurn = true
+        startConversationErrorMessage = nil
+        defer {
+            isCreatingConversationFromTurn = false
+        }
+
+        do {
+            return try await conversationService.startNewConversation(
+                chatID: turn.chatID,
+                endTurnID: turn.turnID,
+                modelType: modelType
+            )
+        } catch {
+            startConversationErrorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func rewind(fromTurnID turnID: String, chatID: String) async {
+        guard !isGenerating else {
+            rewindErrorMessage = "Wait for the current response to finish before rewinding."
+            return
+        }
+        guard activeChatID == chatID else {
+            rewindErrorMessage = "This conversation is no longer active."
+            return
+        }
+        guard rewindingFromTurnID == nil else {
+            return
+        }
+        guard !isLoading else {
+            rewindErrorMessage = "Wait for conversation history to finish loading before rewinding."
+            return
+        }
+
+        let turnIDsToRemove: [String]
+        do {
+            turnIDsToRemove = try conversationService.turnIDsToRemove(
+                from: turns,
+                startingAt: turnID,
+                chatID: chatID
+            )
+        } catch {
+            rewindErrorMessage = error.localizedDescription
+            return
+        }
+        guard pinningTurnIDs.isEmpty else {
+            rewindErrorMessage = "Wait for pin updates to finish before rewinding."
+            return
+        }
+
+        rewindingFromTurnID = turnID
+        rewindErrorMessage = nil
+        defer {
+            rewindingFromTurnID = nil
+        }
+
+        do {
+            try await conversationService.removeTurns(
+                chatID: chatID,
+                turnIDs: turnIDsToRemove
+            )
+            guard activeChatID == chatID else {
+                return
+            }
+
+            let removedIDs = Set(turnIDsToRemove)
+            turns.removeAll { removedIDs.contains($0.turnID) }
+        } catch {
+            rewindErrorMessage = error.localizedDescription
+        }
+    }
+
     func togglePin(
         turnID: String,
         chatID: String
     ) async {
+        guard rewindingFromTurnID == nil else {
+            pinErrorMessage = "Wait for the rewind to finish before updating pins."
+            return
+        }
         guard !pinningTurnIDs.contains(turnID) else {
             return
         }

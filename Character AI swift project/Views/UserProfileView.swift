@@ -10,29 +10,56 @@
 
 import SwiftUI
 
-/// Compact control pinned to the bottom of the sidebar.
+/**
+ * Bottom sidebar user control: a compact, single-row profile button for the
+ * sidebar bottom panel. It renders the avatar, display name and username and
+ * opens an account-menu popover on tap.
+ *
+ * This view deliberately exposes a `menuAction` closure so the sidebar can
+ * drive the popover lifecycle and reuse the same layout for related account
+ * buttons without duplicating the hierarchy.
+ */
 struct UserProfileControl: View {
-    @ObservedObject var viewModel: UserProfileViewModel
+    let viewModel: UserProfileViewModel
+    let menuAction: () -> Void
+    let profileAction: (String) -> Void
 
     var body: some View {
+        Button {
+            menuAction()
+        } label: {
+            profileButton(
+                name: displayName,
+                subtitle: subtitle,
+                avatar: avatar
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func profileButton(name: String, subtitle: String?, avatar: some View) -> some View {
         HStack(spacing: 10) {
             avatar
             VStack(alignment: .leading, spacing: 1) {
-                Text(displayName)
-                    .font(.headline)
+                Text(name)
+                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
-                Text("@\(username)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                if let subtitle = subtitle {
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 0)
             Image(systemName: "chevron.up")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.bar, in: RoundedRectangle(cornerRadius: 10))
         .contentShape(Rectangle())
     }
 
@@ -48,6 +75,14 @@ struct UserProfileControl: View {
             return name
         }
         return viewModel.username
+    }
+
+    private var subtitle: String? {
+        if case .loaded(let profile) = viewModel.state, let name = profile.username {
+            guard !name.isEmpty else { return nil }
+            return "@\(name)"
+        }
+        return nil
     }
 
     private var avatar: some View {
@@ -67,7 +102,7 @@ struct UserProfileControl: View {
                 fallback
             }
         }
-        .frame(width: 34, height: 34)
+        .frame(width: 30, height: 30)
         .clipShape(Circle())
     }
 

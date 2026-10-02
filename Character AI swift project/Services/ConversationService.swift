@@ -44,6 +44,40 @@ private struct SetTurnPinKey: Encodable {
     }
 }
 
+private struct RemoveTurnsRequest: Encodable {
+    let turnIDs: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case turnIDs = "turn_ids"
+    }
+}
+
+private struct CopyConversationRequest: Encodable {
+    let endTurnID: String
+    let overrides: CopyConversationOverrides
+
+    enum CodingKeys: String, CodingKey {
+        case endTurnID = "end_turn_id"
+        case overrides
+    }
+}
+
+private struct CopyConversationOverrides: Encodable {
+    let preferredModelType: String
+
+    enum CodingKeys: String, CodingKey {
+        case preferredModelType = "preferred_model_type"
+    }
+}
+
+struct CopyConversationResponse: Decodable {
+    let newChatID: String
+
+    enum CodingKeys: String, CodingKey {
+        case newChatID = "new_chat_id"
+    }
+}
+
 struct ConversationService {
     private let httpClient: HTTPClient
     private let authenticatedHTTPClient: AuthenticatedHTTPClient
@@ -170,6 +204,124 @@ struct ConversationService {
                 chatID: chatID,
                 pinnedOnly: true
             ).map { $0.turnKey.turnID }
+        )
+    }
+
+    func loadAvailableModels() async throws -> [ModelSelectionOption] {
+        guard let url = URL(
+            string: "https://neo.character.ai/get-available-models"
+        ) else {
+            throw NetworkError.invalidURL
+        }
+
+        let response: AvailableModelsResponse = try await authenticatedHTTPClient.get(
+            url,
+            headers: [
+                "Accept": "application/json",
+                "Origin-ID": "web-next"
+            ]
+        )
+
+        return response.availableModels.map { modelType in
+            let configuration = response.configs[modelType]
+            return ModelSelectionOption(
+                modelType: modelType,
+                name: configuration?.name,
+                isPlusOnly: configuration?.isPlusOnly ?? false,
+                isFeatured: configuration?.isFeatured ?? false,
+                isBeta: configuration?.isBeta ?? false,
+                isLegacy: configuration?.isLegacy ?? false,
+                hasModelSteering: configuration?.hasModelSteering ?? false
+            )
+        }
+    }
+
+    func startNewConversation(
+        chatID: String,
+        endTurnID: String,
+        modelType: String
+    ) async throws -> String {
+        let pathCharacters = CharacterSet.urlPathAllowed.subtracting(
+            CharacterSet(charactersIn: "/?#")
+        )
+        let encodedChatID = chatID.addingPercentEncoding(
+            withAllowedCharacters: pathCharacters
+        ) ?? chatID
+
+        guard let url = URL(
+            string: "https://neo.character.ai/chat/\(encodedChatID)/copy"
+        ) else {
+            throw NetworkError.invalidURL
+        }
+
+        let request = CopyConversationRequest(
+            endTurnID: endTurnID,
+            overrides: CopyConversationOverrides(
+                preferredModelType: modelType
+            )
+        )
+        let response: CopyConversationResponse = try await authenticatedHTTPClient.post(
+            url,
+            body: request,
+            headers: [
+                "Origin-ID": "web-next",
+                "Request-ID": UUID().uuidString.lowercased()
+            ]
+        )
+        return response.newChatID
+    }
+
+    func turnIDsToRemove(
+        from turns: [Turn],
+        startingAt turnID: String,
+        chatID: String
+    ) throws -> [String] {
+        guard let targetIndex = turns.firstIndex(where: {
+            $0.turnID == turnID && $0.chatID == chatID
+        }) else {
+            throw NetworkError.serverMessage("Conversation turn not found.")
+        }
+
+        let turnsToRemove = Array(turns[targetIndex...])
+        guard turnsToRemove.allSatisfy({ $0.chatID == chatID }) else {
+            throw NetworkError.serverMessage(
+                "The selected turns do not belong to this conversation."
+            )
+        }
+
+        return turnsToRemove.reversed().map(\.turnID)
+    }
+
+    func removeTurns(chatID: String, turnIDs: [String]) async throws {
+        guard !turnIDs.isEmpty else {
+            throw NetworkError.serverMessage("No conversation turns were selected to rewind.")
+        }
+
+        let pathCharacters = CharacterSet.urlPathAllowed.subtracting(
+            CharacterSet(charactersIn: "/?#")
+        )
+        let encodedChatID = chatID.addingPercentEncoding(
+            withAllowedCharacters: pathCharacters
+        ) ?? chatID
+
+        guard let url = URL(
+            string: "https://neo.character.ai/turns/\(encodedChatID)/remove"
+        ) else {
+            throw NetworkError.invalidURL
+        }
+
+        let body = try JSONEncoder().encode(
+            RemoveTurnsRequest(turnIDs: turnIDs)
+        )
+        try await authenticatedHTTPClient.send(
+            url,
+            method: "POST",
+            body: body,
+            headers: [
+                "Accept": "application/json",
+                "Origin-ID": "web-next",
+                "Request-ID": UUID().uuidString.lowercased()
+            ]
         )
     }
 

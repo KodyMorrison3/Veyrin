@@ -19,9 +19,13 @@ private struct MainView: View {
     @State private var selectedChatID: String?
     @State private var conversationSearchText = ""
     @State private var pendingCreatedChat: ConversationSummary?
+    @State private var pendingCopiedConversation: ConversationSummary?
     @State private var profileCharacterID: String?
     @State private var hideErrorMessage: String?
     @State private var isShowingDiscover = false
+    @State private var isShowingFeed = false
+    @State private var feedProfileUsername: String?
+    @State private var isShowingFeedCreatorProfile = false
 
     init(authStore: AuthStore) {
         self.authStore = authStore
@@ -48,11 +52,12 @@ private struct MainView: View {
         }) {
             return conversation
         }
-        // Recent chats can lag creation, so keep the selected summary until it catches up.
-        guard pendingCreatedChat?.chatID == selectedChatID else {
-            return nil
+        if pendingCreatedChat?.chatID == selectedChatID {
+            return pendingCreatedChat
         }
-        return pendingCreatedChat
+        return pendingCopiedConversation?.chatID == selectedChatID
+            ? pendingCopiedConversation
+            : nil
     }
 
     private var filteredRecentChats: [ConversationSummary] {
@@ -73,6 +78,15 @@ private struct MainView: View {
         }
         // macOS sheets are modal and cannot be dismissed by clicking outside, so the
         // profile uses a transient popover, which is dismissed by an outside click.
+        .sheet(isPresented: $isShowingFeedCreatorProfile) {
+            if let feedProfileUsername {
+                PublicFeedCreatorProfileView(
+                    username: feedProfileUsername,
+                    authStore: authStore
+                )
+                .frame(minWidth: 460, minHeight: 520)
+            }
+        }
         .popover(isPresented: Binding(
             get: { profileCharacterID != nil },
             set: { if !$0 { profileCharacterID = nil } }
@@ -105,12 +119,14 @@ private struct MainView: View {
                     selectedChatID = chatID
                     if chatID != nil {
                         isShowingDiscover = false
+                        isShowingFeed = false
                     }
                 }
             )
         ) { conversation in
             ConversationRow(
-                conversation: conversation
+                conversation: conversation,
+                avatarCornerRadius: preferences.listAvatarCornerRadius
             )
             .tag(conversation.chatID)
             .listRowSeparator(.hidden)
@@ -197,11 +213,23 @@ private struct MainView: View {
             ToolbarItem {
                 Button {
                     selectedChatID = nil
+                    isShowingFeed = false
                     isShowingDiscover = true
                 } label: {
                     Label("Discover", systemImage: "sparkles")
                 }
                 .help("Discover")
+            }
+
+            ToolbarItem {
+                Button {
+                    selectedChatID = nil
+                    isShowingDiscover = false
+                    isShowingFeed = true
+                } label: {
+                    Label("Feed", systemImage: "rectangle.stack")
+                }
+                .help("Feed")
             }
 
             ToolbarItem {
@@ -256,7 +284,16 @@ private struct MainView: View {
             Button {
                 isShowingAccountMenu = true
             } label: {
-                UserProfileControl(viewModel: userProfileViewModel)
+                UserProfileControl(
+            viewModel: userProfileViewModel,
+            menuAction: {
+                isShowingAccountMenu = true
+            },
+            profileAction: { externalID in
+                isShowingUserProfile = false
+                profileCharacterID = externalID
+            }
+        )
             }
             .buttonStyle(.plain)
             .popover(isPresented: $isShowingAccountMenu, arrowEdge: .bottom) {
@@ -270,6 +307,15 @@ private struct MainView: View {
                         profileCharacterID = externalID
                     }
                 )
+            }
+            .sheet(isPresented: $isShowingFeedCreatorProfile) {
+                if let feedProfileUsername {
+                    PublicFeedCreatorProfileView(
+                        username: feedProfileUsername,
+                        authStore: authStore
+                    )
+                    .frame(minWidth: 460, minHeight: 520)
+                }
             }
         }
     }
@@ -417,6 +463,7 @@ private struct MainView: View {
 
     private struct ConversationRow: View {
         let conversation: ConversationSummary
+        let avatarCornerRadius: CGFloat
 
         var body: some View {
             HStack(spacing: 10) {
@@ -498,7 +545,7 @@ private struct MainView: View {
                 width: 40,
                 height: 40
             )
-            .clipShape(Circle())
+            .clipShape(RoundedRectangle(cornerRadius: avatarCornerRadius))
         }
 
         private var fallbackAvatar: some View {
@@ -550,11 +597,41 @@ private struct MainView: View {
                     profileCharacterID = characterID
                 }
             )
+        } else if isShowingFeed {
+            FeedView(
+                authStore: authStore,
+                onSelectCharacter: { characterID in
+                    profileCharacterID = characterID
+                },
+                onSelectCreator: { username in
+                    feedProfileUsername = username
+                    isShowingFeedCreatorProfile = true
+                }
+            )
         } else if let selectedChat = selectedConversation {
             ChatView(
                 chatID: selectedChat.chatID,
                 characterID: selectedChat.characterID,
-                authStore: authStore
+                authStore: authStore,
+                onConversationCreated: { newChatID in
+                    pendingCopiedConversation = ConversationSummary(
+                        id: newChatID,
+                        chatID: newChatID,
+                        characterID: selectedChat.characterID,
+                        characterName: selectedChat.characterName,
+                        characterAvatarURI: selectedChat.characterAvatarURI,
+                        lastUpdated: ISO8601DateFormatter().string(from: Date()),
+                        state: "STATE_ACTIVE",
+                        lastMessage: nil
+                    )
+                    selectedChatID = newChatID
+                    Task {
+                        await viewModel.loadRecentChats()
+                        if viewModel.recentChats.contains(where: { $0.chatID == newChatID }) {
+                            pendingCopiedConversation = nil
+                        }
+                    }
+                }
             )
             .id(selectedChat.chatID)
         } else {

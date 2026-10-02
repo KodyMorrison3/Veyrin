@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DiscoverView: View {
     @StateObject private var viewModel: DiscoverViewModel
+    @ObservedObject private var preferences = AppPreferences.shared
     let onSelectCharacter: (String) -> Void
 
     init(
@@ -83,7 +84,7 @@ struct DiscoverView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 recommendedSection
-                if AppPreferences.shared.showPopularTrending {
+                if preferences.showPopularTrending {
                     popularTrendingSection
                 }
                 scenesSection
@@ -421,7 +422,9 @@ struct DiscoverView: View {
                 }
             }
             .frame(width: 58, height: 58)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .clipShape(RoundedRectangle(
+                cornerRadius: preferences.avatarShape == .circle ? 29 : 10
+            ))
         } else {
             avatarFallback(name: name)
         }
@@ -434,6 +437,9 @@ struct DiscoverView: View {
                 .font(.headline)
         }
         .frame(width: 58, height: 58)
+        .clipShape(RoundedRectangle(
+            cornerRadius: preferences.avatarShape == .circle ? 29 : 10
+        ))
     }
 
     private func errorView(_ message: String, retry: @escaping () -> Void) -> some View {

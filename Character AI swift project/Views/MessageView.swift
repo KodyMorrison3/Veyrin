@@ -14,6 +14,9 @@ struct MessageView: View {
     let onEdit: ((String) -> Void)?
     let isPinning: Bool
     let onPin: (() -> Void)?
+    let isRewinding: Bool
+    let onRewind: (() -> Void)?
+    let onStartNewConversation: (() -> Void)?
 
     @State private var isEditing = false
     @State private var editedText = ""
@@ -105,7 +108,7 @@ struct MessageView: View {
                     }
                     .frame(maxWidth: 500)
                 } else {
-                    Text(candidate.rawContent)
+                    CharacterMessageFormattingView(content: candidate.rawContent)
                         .font(.body)
                         .textSelection(.enabled)
                         .padding(.horizontal, 14)
@@ -137,7 +140,7 @@ struct MessageView: View {
                             systemImage: turn.isPinned ? "pin.slash" : "pin"
                         )
                     }
-                    .disabled(onPin == nil || isPinning)
+                    .disabled(onPin == nil || isPinning || isRewinding)
 
                     Button {
                         copyMessage(candidate.rawContent)
@@ -157,7 +160,7 @@ struct MessageView: View {
                             systemImage: "pencil"
                         )
                     }
-                    .disabled(onEdit == nil)
+                    .disabled(onEdit == nil || isRewinding)
 
                     if !turn.isHuman {
                         Divider()
@@ -170,8 +173,30 @@ struct MessageView: View {
                                 systemImage: "arrow.clockwise"
                             )
                         }
-                        .disabled(onRegenerate == nil)
+                        .disabled(onRegenerate == nil || isRewinding)
                     }
+
+                    Divider()
+
+                    Button(role: .destructive) {
+                        onRewind?()
+                    } label: {
+                        Label(
+                            "Rewind from here…",
+                            systemImage: "backward.end"
+                        )
+                    }
+                    .disabled(onRewind == nil || isRewinding)
+
+                    Button {
+                        onStartNewConversation?()
+                    } label: {
+                        Label(
+                            "Start new conversation from here…",
+                            systemImage: "plus.message"
+                        )
+                    }
+                    .disabled(onStartNewConversation == nil || isRewinding)
                 } label: {
                     HStack(spacing: 4) {
                         if turn.isPinned {

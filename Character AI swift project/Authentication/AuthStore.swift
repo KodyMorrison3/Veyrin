@@ -19,8 +19,12 @@ final class AuthStore: ObservableObject {
         session != nil
     }
 
-    init(keychainStore: KeychainStore = KeychainStore()) {
-        self.keychainStore = keychainStore
+    init(
+        keychainStore: KeychainStore? = nil,
+        session: AuthSession? = nil
+    ) {
+        self.keychainStore = keychainStore ?? KeychainStore()
+        self.session = session
     }
 
     func setSession(_ session: AuthSession) {
