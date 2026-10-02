@@ -31,7 +31,10 @@ struct CharacterAIApp: App {
 
     private var SettingsScene: some Scene {
         Settings {
-            SettingsView(username: authStore.session?.username ?? "")
+            SettingsView(
+                username: authStore.session?.username ?? "",
+                authStore: authStore
+            )
         }
     }
 }

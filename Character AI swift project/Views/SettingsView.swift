@@ -16,10 +16,12 @@ struct SettingsView: View {
     @ObservedObject private var preferences = AppPreferences.shared
     @State private var selectedPane: SettingsPane = .account
     @State private var isConfirmingReset = false
+    @State private var isShowingCharms = false
 
     /// The signed-in username (typed session metadata — never the token),
     /// injected by the app so the Account pane can state who is signed in.
     let username: String
+    let authStore: AuthStore
 
     enum SettingsPane: String, CaseIterable, Identifiable {
         case account, appearance, chat, characters, notifications, privacy, advanced
@@ -76,6 +78,10 @@ struct SettingsView: View {
             .navigationTitle(selectedPane.title)
             .frame(minWidth: 480, minHeight: 380)
         }
+        .sheet(isPresented: $isShowingCharms) {
+            CharmsView(authStore: authStore)
+                .frame(minWidth: 560, minHeight: 620)
+        }
     }
 
     // MARK: Account
@@ -85,6 +91,11 @@ struct SettingsView: View {
             Section {
                 LabeledContent("Signed in as") {
                     Text(username.isEmpty ? "Not signed in" : "@\(username)")
+                }
+                Button {
+                    isShowingCharms = true
+                } label: {
+                    Label("View Charms", systemImage: "sparkles")
                 }
             } header: {
                 Text("Profile")

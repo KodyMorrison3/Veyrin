@@ -21,6 +21,9 @@ xcuserdata/
 
 # Project-local development material
 /ContractTests/
+!/ContractTests/
+/ContractTests/*
+!/ContractTests/CharmsContractTests.swift
 /Docs/
 
 # Swift Package Manager
