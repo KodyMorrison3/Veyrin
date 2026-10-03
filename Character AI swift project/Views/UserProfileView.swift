@@ -34,7 +34,7 @@ struct UserProfileControl: View {
                 avatar: avatar
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(QuietHoverButtonStyle())
     }
 
     @ViewBuilder
@@ -59,7 +59,7 @@ struct UserProfileControl: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(.bar, in: RoundedRectangle(cornerRadius: 10))
+        .glassSurface(.floatingControl, cornerRadius: GlassMetrics.controlRadius)
         .contentShape(Rectangle())
     }
 
@@ -143,6 +143,8 @@ struct UserProfileDetailView: View {
         }
         .padding(20)
         .frame(width: 380, height: 460)
+        .background { ShellEnvironmentalBackground() }
+        .presentationBackground(.regularMaterial)
     }
 
     @ViewBuilder
@@ -200,7 +202,7 @@ struct UserProfileDetailView: View {
                                 } label: {
                                     userCharacterCard(character)
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(QuietHoverButtonStyle())
                             }
                         }
                     }
@@ -253,7 +255,7 @@ struct UserProfileDetailView: View {
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        .contentSurface(cornerRadius: 10)
         .contentShape(RoundedRectangle(cornerRadius: 10))
     }
 

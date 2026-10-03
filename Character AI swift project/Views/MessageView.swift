@@ -20,6 +20,9 @@ struct MessageView: View {
 
     @State private var isEditing = false
     @State private var editedText = ""
+    @State private var isShowingActions = false
+    @State private var isHoveringMessage = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     
     private func copyMessage(_ text: String) {
         NSPasteboard.general.clearContents()
@@ -30,9 +33,9 @@ struct MessageView: View {
     }
     
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .top, spacing: 10) {
             if turn.isHuman {
-                Spacer(minLength: 0)
+                Spacer(minLength: 40)
             }
             
             if !turn.isHuman {
@@ -40,13 +43,16 @@ struct MessageView: View {
             }
             
             messageContent
+                .frame(maxWidth: turn.isHuman ? 480 : 520, alignment: turn.isHuman ? .trailing : .leading)
             
             if !turn.isHuman {
-                Spacer(minLength: 0)
+                Spacer(minLength: 40)
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 4)
+        .padding(.vertical, 2)
+        .transition(.opacity)
+        .onHover { isHoveringMessage = $0 }
     }
     
     private var messageContent: some View {
@@ -56,8 +62,9 @@ struct MessageView: View {
         ) {
             if !turn.isHuman {
                 Text(turn.authorName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.caiText)
+                    .padding(.leading, 4)
             }
             
             if let candidate = turn.candidates.first(where: {
@@ -72,6 +79,7 @@ struct MessageView: View {
                             text: $editedText
                         )
                         .frame(minHeight: 80)
+                        .scrollContentBackground(.hidden)
                         .padding(8)
                         .background(
                             Color.secondary.opacity(0.12)
@@ -106,158 +114,183 @@ struct MessageView: View {
                             .buttonStyle(.borderedProminent)
                         }
                     }
-                    .frame(maxWidth: 500)
+                    .frame(maxWidth: 480)
                 } else {
-                    CharacterMessageFormattingView(content: candidate.rawContent)
-                        .font(.body)
+                    ZStack(alignment: turn.isHuman ? .bottomLeading : .bottomTrailing) {
+                        CharacterMessageFormattingView(
+                            content: candidate.rawContent,
+                            expandsToFill: false
+                        )
+                        .font(.system(size: 14))
                         .textSelection(.enabled)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(
-                            turn.isHuman
-                                ? Color.accentColor
-                                : Color.secondary.opacity(0.12)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .glassSurface(
+                            turn.isHuman ? .userMessage : .characterMessage,
+                            cornerRadius: GlassMetrics.messageRadius
                         )
-                        .foregroundStyle(
-                            turn.isHuman
-                                ? .white
-                                : .primary
-                        )
+                        .foregroundStyle(Color.caiText)
                         .clipShape(
                             RoundedRectangle(
-                                cornerRadius: 16,
+                                cornerRadius: GlassMetrics.messageRadius,
                                 style: .continuous
                             )
                         )
-                }
-
-                Menu {
-                    Button {
-                        onPin?()
-                    } label: {
-                        Label(
-                            turn.isPinned ? "Unpin message" : "Pin message",
-                            systemImage: turn.isPinned ? "pin.slash" : "pin"
-                        )
-                    }
-                    .disabled(onPin == nil || isPinning || isRewinding)
-
-                    Button {
-                        copyMessage(candidate.rawContent)
-                    } label: {
-                        Label(
-                            "Copy",
-                            systemImage: "doc.on.doc"
-                        )
-                    }
-
-                    Button {
-                        editedText = candidate.rawContent
-                        isEditing = true
-                    } label: {
-                        Label(
-                            "Edit message",
-                            systemImage: "pencil"
-                        )
-                    }
-                    .disabled(onEdit == nil || isRewinding)
-
-                    if !turn.isHuman {
-                        Divider()
-
-                        Button {
-                            onRegenerate?()
-                        } label: {
-                            Label(
-                                "Regenerate",
-                                systemImage: "arrow.clockwise"
-                            )
-                        }
-                        .disabled(onRegenerate == nil || isRewinding)
-                    }
-
-                    Divider()
-
-                    Button(role: .destructive) {
-                        onRewind?()
-                    } label: {
-                        Label(
-                            "Rewind from here…",
-                            systemImage: "backward.end"
-                        )
-                    }
-                    .disabled(onRewind == nil || isRewinding)
-
-                    Button {
-                        onStartNewConversation?()
-                    } label: {
-                        Label(
-                            "Start new conversation from here…",
-                            systemImage: "plus.message"
-                        )
-                    }
-                    .disabled(onStartNewConversation == nil || isRewinding)
-                } label: {
-                    HStack(spacing: 4) {
-                        if turn.isPinned {
-                            Image(systemName: "pin.fill")
-                                .font(.caption2)
+                        .contextMenu {
+                            messageActionRows(candidate: candidate)
                         }
 
-                        Image(systemName: "ellipsis")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .frame(
-                        width: turn.isPinned ? 36 : 28,
-                        height: 28
-                    )
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-            }
-        }
-    }
-        
-        private var avatar: some View {
-            Group {
-                if let character,
-                   let avatarURL = CharacterImageURL.makeURL(
-                    avatarFileName: character.avatarFileName
-                   ) {
-                    AsyncImage(url: avatarURL) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                            
-                        case .failure:
-                            fallbackAvatar
-                            
-                        case .empty:
-                            ProgressView()
-                            
-                        @unknown default:
-                            fallbackAvatar
+                        // Subtle action trigger overlay on hover or pinned
+                        if turn.isPinned || isHoveringMessage || isShowingActions {
+                            HStack(spacing: 2) {
+                                if turn.isPinned {
+                                    Image(systemName: "pin.fill")
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(Color.caiPrimary)
+                                }
+
+                                Button {
+                                    isShowingActions = true
+                                } label: {
+                                    Image(systemName: "ellipsis")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(Color.caiMuted)
+                                        .frame(width: 22, height: 22)
+                                        .background(Circle().fill(Color.caiSurface.opacity(0.85)))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Message actions")
+                                .popover(isPresented: $isShowingActions, arrowEdge: .top) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        messageActionRows(candidate: candidate)
+                                    }
+                                    .padding(8)
+                                    .frame(width: 260)
+                                    .presentationBackground(.regularMaterial)
+                                }
+                            }
+                            .padding(4)
+                            .transition(.opacity)
                         }
                     }
-                } else {
-                    fallbackAvatar
                 }
-            }
-            .frame(width: 30, height: 30)
-            .clipShape(Circle())
-        }
-        
-        private var fallbackAvatar: some View {
-            ZStack {
-                Circle()
-                    .fill(.secondary.opacity(0.15))
-                
-                Text(turn.authorName.prefix(1))
-                    .font(.caption)
-                    .fontWeight(.semibold)
             }
         }
     }
 
+    @ViewBuilder
+    private func messageActionRows(candidate: Candidate) -> some View {
+        GlassActionRow(
+            title: turn.isPinned ? "Unpin message" : "Pin message",
+            systemImage: turn.isPinned ? "pin.slash" : "pin",
+            isDisabled: onPin == nil || isPinning || isRewinding
+        ) {
+            let action = onPin
+            isShowingActions = false
+            action?()
+        }
+
+        GlassActionRow(
+            title: "Copy message",
+            systemImage: "doc.on.doc"
+        ) {
+            copyMessage(candidate.rawContent)
+            isShowingActions = false
+        }
+
+        GlassActionRow(
+            title: "Edit message",
+            systemImage: "pencil",
+            isDisabled: onEdit == nil || isRewinding
+        ) {
+            editedText = candidate.rawContent
+            isEditing = true
+            isShowingActions = false
+        }
+
+        if !turn.isHuman {
+            Divider()
+
+            GlassActionRow(
+                title: "Regenerate response",
+                systemImage: "arrow.clockwise",
+                isDisabled: onRegenerate == nil || isRewinding
+            ) {
+                let action = onRegenerate
+                isShowingActions = false
+                action?()
+            }
+        }
+
+        Divider()
+
+        GlassActionRow(
+            title: "Rewind from here…",
+            systemImage: "backward.end",
+            role: .destructive,
+            isDisabled: onRewind == nil || isRewinding
+        ) {
+            let action = onRewind
+            isShowingActions = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                action?()
+            }
+        }
+
+        GlassActionRow(
+            title: "Start new conversation from here…",
+            systemImage: "plus.message",
+            isDisabled: onStartNewConversation == nil || isRewinding
+        ) {
+            let action = onStartNewConversation
+            isShowingActions = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                action?()
+            }
+        }
+    }
+        
+    private var avatar: some View {
+        Group {
+            if let character,
+               let avatarURL = CharacterImageURL.makeURL(
+                avatarFileName: character.avatarFileName
+               ) {
+                AsyncImage(url: avatarURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                        
+                    case .failure:
+                        fallbackAvatar
+                        
+                    case .empty:
+                        ProgressView()
+                            .controlSize(.small)
+                        
+                    @unknown default:
+                        fallbackAvatar
+                    }
+                }
+            } else {
+                fallbackAvatar
+            }
+        }
+        .frame(width: 32, height: 32)
+        .clipShape(Circle())
+        .overlay(Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+    }
+    
+    private var fallbackAvatar: some View {
+        ZStack {
+            Circle()
+                .fill(Color.caiSurface)
+            
+            Text(turn.authorName.prefix(1))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.caiText)
+        }
+    }
+}

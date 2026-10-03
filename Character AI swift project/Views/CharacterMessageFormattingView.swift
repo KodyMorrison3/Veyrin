@@ -3,6 +3,8 @@ import SwiftUI
 
 struct CharacterMessageFormattingView: View {
     let content: String
+    // Message bubbles fit short text; other consumers retain the original layout.
+    var expandsToFill = true
 
     @State private var pendingURL: URL?
 
@@ -56,11 +58,11 @@ struct CharacterMessageFormattingView: View {
         case .paragraph(let inlines):
             inlineText(inlines)
                 .lineSpacing(4)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: expandsToFill ? .infinity : nil, alignment: .leading)
 
         case .heading(let level, let inlines):
             inlineText(inlines, font: headingFont(level))
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: expandsToFill ? .infinity : nil, alignment: .leading)
 
         case .list(let ordered, let items):
             VStack(alignment: .leading, spacing: 4) {
@@ -70,7 +72,7 @@ struct CharacterMessageFormattingView: View {
                             .frame(minWidth: 18, alignment: .trailing)
                         inlineText(item)
                             .lineSpacing(4)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(maxWidth: expandsToFill ? .infinity : nil, alignment: .leading)
                     }
                 }
             }
@@ -177,7 +179,7 @@ struct CharacterMessageFormattingView: View {
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(.white)
                     .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: expandsToFill ? .infinity : nil, alignment: .leading)
                     .padding(10)
             }
             .background(Color.black.opacity(0.88))

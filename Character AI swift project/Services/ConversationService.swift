@@ -282,7 +282,9 @@ struct ConversationService {
             throw NetworkError.serverMessage("Conversation turn not found.")
         }
 
-        let turnsToRemove = Array(turns[targetIndex...])
+        // The selected turn is the rewind boundary and must remain. The API
+        // removes each successor, supplied newest-first.
+        let turnsToRemove = Array(turns.dropFirst(targetIndex + 1))
         guard turnsToRemove.allSatisfy({ $0.chatID == chatID }) else {
             throw NetworkError.serverMessage(
                 "The selected turns do not belong to this conversation."

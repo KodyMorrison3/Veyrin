@@ -46,6 +46,8 @@ struct CharmsView: View {
             }
         }
         .frame(minWidth: 440, minHeight: 320)
+        .background { ShellEnvironmentalBackground() }
+        .presentationBackground(.regularMaterial)
         .toolbar {
             ToolbarItem {
                 Button {
@@ -101,6 +103,7 @@ struct CharmsView: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 
     private func transactionRow(_ transaction: CharmTransaction) -> some View {

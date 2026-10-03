@@ -18,6 +18,7 @@ private struct MainView: View {
     @StateObject private var viewModel: ChatViewModel
     @State private var selectedChatID: String?
     @State private var conversationSearchText = ""
+    @FocusState private var isConversationSearchFocused: Bool
     @State private var pendingCreatedChat: ConversationSummary?
     @State private var pendingCopiedConversation: ConversationSummary?
     @State private var profileCharacterID: String?
@@ -68,10 +69,25 @@ private struct MainView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            sidebar
-        } detail: {
-            detailView
+        ZStack {
+            // Atmospheric character artwork background behind the window
+            ShellEnvironmentalBackground(
+                avatarURL: selectedConversation.flatMap {
+                    CharacterImageURL.makeURL(avatarFileName: $0.characterAvatarURI)
+                }
+            )
+
+            NavigationSplitView {
+                sidebar
+            } detail: {
+                detailView
+            }
+            .toolbar {
+                navigationToolbar
+            }
+            // Keep the native toolbar items interactive, but remove its default
+            // window-wide material shelf.
+            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         }
         .task {
             await viewModel.loadRecentChats()
@@ -110,6 +126,107 @@ private struct MainView: View {
         }
     }
 
+    @ToolbarContentBuilder
+    private var navigationToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Button {
+                isConversationSearchFocused = true
+            } label: {
+                Label("Search conversations", systemImage: "magnifyingglass")
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .help("Search conversations")
+        }
+
+        ToolbarItem(placement: .navigation) {
+            Button {
+                selectedChatID = nil
+                isShowingFeed = false
+                isShowingDiscover = true
+            } label: {
+                Label("Discover", systemImage: "sparkles")
+            }
+            .help("Discover")
+        }
+
+        ToolbarItem(placement: .navigation) {
+            Button {
+                selectedChatID = nil
+                isShowingDiscover = false
+                isShowingFeed = true
+            } label: {
+                Label("Feed", systemImage: "text.bubble")
+            }
+            .help("Feed")
+        }
+
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                guard let selectedConversation else {
+                    return
+                }
+
+                Task {
+                    await startConversation(
+                        characterID: selectedConversation.characterID,
+                        name: selectedConversation.characterName,
+                        avatarFileName: selectedConversation.characterAvatarURI
+                    )
+                }
+            } label: {
+                Label("New Conversation", systemImage: "square.and.pencil")
+            }
+            .disabled(viewModel.isLoading || selectedConversation == nil)
+            .help("New Conversation")
+        }
+
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                guard let selectedConversation else {
+                    return
+                }
+                profileCharacterID = selectedConversation.characterID
+            } label: {
+                Label("Character Profile", systemImage: "info.circle")
+            }
+            .disabled(selectedConversation == nil)
+            .help("Character Profile")
+        }
+    }
+
+    private func startConversation(
+        characterID: String,
+        name: String,
+        avatarFileName: String
+    ) async {
+        guard let newChatID = await viewModel.createConversation(
+            characterID: characterID
+        ) else {
+            return
+        }
+
+        pendingCreatedChat = ConversationSummary(
+            id: newChatID,
+            chatID: newChatID,
+            characterID: characterID,
+            characterName: name,
+            characterAvatarURI: avatarFileName,
+            lastUpdated: ISO8601DateFormatter().string(from: Date()),
+            state: "STATE_ACTIVE",
+            lastMessage: nil
+        )
+
+        selectedChatID = newChatID
+        isShowingDiscover = false
+        isShowingFeed = false
+
+        await viewModel.loadRecentChats()
+
+        if viewModel.recentChats.contains(where: { $0.chatID == newChatID }) {
+            pendingCreatedChat = nil
+        }
+    }
+
     private var sidebar: some View {
         List(
             filteredRecentChats,
@@ -126,10 +243,23 @@ private struct MainView: View {
         ) { conversation in
             ConversationRow(
                 conversation: conversation,
-                avatarCornerRadius: preferences.listAvatarCornerRadius
+                avatarCornerRadius: preferences.listAvatarCornerRadius,
+                isSelected: selectedChatID == conversation.chatID
             )
             .tag(conversation.chatID)
+            .listItemTint(.monochrome)
+            .foregroundStyle(.primary)
+            .background { NativeListSelectionAppearance().allowsHitTesting(false) }
             .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .listRowInsets(
+                EdgeInsets(
+                    top: 2,
+                    leading: 6,
+                    bottom: 2,
+                    trailing: 6
+                )
+            )
             .contextMenu {
                 Button(
                     "Hide Character / Remove from Recents",
@@ -163,17 +293,44 @@ private struct MainView: View {
                     )
                 )
             }
-            .listRowBackground(
-                selectedChatID == conversation.chatID
-                    ? Color.accentColor.opacity(0.12)
-                    : Color.clear
-            )
         }
-        .searchable(
-            text: $conversationSearchText,
-            placement: .sidebar,
-            prompt: "Search conversations"
-        )
+        // Native `.searchable(placement: .sidebar)` reserves a blurred shelf
+        // across every split-view column. Keep the search local to navigation
+        // so it cannot obscure the character identity or first message.
+        .safeAreaInset(edge: .top, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.caiMuted)
+                TextField("Search characters…", text: $conversationSearchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.caiText)
+                    .focused($isConversationSearchFocused)
+                    .accessibilityLabel("Search characters")
+                    .onKeyPress(.escape) {
+                        conversationSearchText = ""
+                        isConversationSearchFocused = false
+                        return .handled
+                    }
+                if !conversationSearchText.isEmpty {
+                    Button {
+                        conversationSearchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Color.caiMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear search")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .glassSurface(.floatingControl, cornerRadius: 16)
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+        }
         .overlay {
             if filteredRecentChats.isEmpty,
                !conversationSearchText.trimmingCharacters(
@@ -188,10 +345,40 @@ private struct MainView: View {
             }
         }
         .listStyle(.sidebar)
+        .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
+        .scrollContentBackground(.hidden)
         .navigationTitle("Conversations")
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            userProfileControl
+            VStack(spacing: 6) {
+                Button {
+                    guard let selectedConversation else { return }
+                    Task {
+                        await startConversation(
+                            characterID: selectedConversation.characterID,
+                            name: selectedConversation.characterName,
+                            avatarFileName: selectedConversation.characterAvatarURI
+                        )
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("New chat")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundStyle(Color.caiText)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 32)
+                    .glassSurface(.floatingControl, cornerRadius: 10)
+                }
+                .buttonStyle(QuietHoverButtonStyle())
+                .disabled(viewModel.isLoading || selectedConversation == nil)
+                .padding(.horizontal, 10)
+
+                userProfileControl
+            }
         }
+        .glassSurface(.navigation, cornerRadius: 14)
         .alert(
             "Unable to Hide Character",
             isPresented: Binding(
@@ -208,65 +395,6 @@ private struct MainView: View {
             }
         } message: {
             Text(hideErrorMessage ?? "Please try again.")
-        }
-        .toolbar {
-            ToolbarItem {
-                Button {
-                    selectedChatID = nil
-                    isShowingFeed = false
-                    isShowingDiscover = true
-                } label: {
-                    Label("Discover", systemImage: "sparkles")
-                }
-                .help("Discover")
-            }
-
-            ToolbarItem {
-                Button {
-                    selectedChatID = nil
-                    isShowingDiscover = false
-                    isShowingFeed = true
-                } label: {
-                    Label("Feed", systemImage: "rectangle.stack")
-                }
-                .help("Feed")
-            }
-
-            ToolbarItem {
-                Button {
-                    guard let selectedConversation else {
-                        return
-                    }
-
-                    Task {
-                        await startConversation(
-                            characterID: selectedConversation.characterID,
-                            name: selectedConversation.characterName,
-                            avatarFileName: selectedConversation.characterAvatarURI
-                        )
-                    }
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                }
-                .help("New Conversation")
-                .disabled(
-                    viewModel.isLoading ||
-                    selectedConversation == nil
-                )
-            }
-
-            ToolbarItem {
-                Button {
-                    guard let selectedConversation else {
-                        return
-                    }
-                    profileCharacterID = selectedConversation.characterID
-                } label: {
-                    Image(systemName: "info.circle")
-                }
-                .help("Character Profile")
-                .disabled(selectedConversation == nil)
-            }
         }
     }
     
@@ -342,128 +470,75 @@ private struct MainView: View {
                         .padding(.vertical, 5)
                         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
 
-                        Button("Sign Out") {
+                        Button("Sign Out", role: .destructive) {
                             isShowingAccountMenu = false
                             isConfirmingSignOut = false
-                            performSignOut()
+                            authStore.signOut()
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Color.red, in: RoundedRectangle(cornerRadius: 6))
+                        .buttonStyle(.borderedProminent)
+                        .tint(.red)
                     }
                 }
                 .padding(12)
             } else {
-                VStack(spacing: 1) {
-                    Text(userProfileViewModel.username.isEmpty
-                        ? "Account"
-                        : "@\(userProfileViewModel.username)")
-                        .font(.caption.weight(.semibold))
+                if let username = authStore.session?.username {
+                    Text("@\(username)")
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 4)
+                        .padding(.bottom, 2)
                 }
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity)
+
+                GlassActionRow(
+                    title: "View Profile",
+                    systemImage: "person.crop.circle"
+                ) {
+                    isShowingAccountMenu = false
+                    isShowingUserProfile = true
+                }
 
                 Divider()
 
-                VStack(spacing: 0) {
-                    menuButton("View Profile", systemImage: "person.crop.circle") {
-                        isShowingAccountMenu = false
-                        // Let the menu popover close before presenting the profile.
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                            isShowingUserProfile = true
-                        }
-                    }
-                    SettingsLink {
-                        Label("Open Settings", systemImage: "gearshape")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .simultaneousGesture(TapGesture().onEnded {
-                        isShowingAccountMenu = false
-                    })
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    Divider()
-                    menuButton("Sign Out", systemImage: "rectangle.portrait.and.arrow.right", destructive: true) {
-                        isConfirmingSignOut = true
-                    }
+                GlassActionRow(
+                    title: "Preferences…",
+                    systemImage: "gear"
+                ) {
+                    isShowingAccountMenu = false
+                    NSApp.sendAction(
+                        Selector(("showSettingsWindow:")),
+                        to: nil,
+                        from: nil
+                    )
                 }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 6)
+
+                Divider()
+
+                GlassActionRow(
+                    title: "Sign Out",
+                    systemImage: "rectangle.portrait.and.arrow.right",
+                    role: .destructive
+                ) {
+                    isConfirmingSignOut = true
+                }
             }
         }
-        .frame(width: 240)
-        .padding(.top, 4)
-    }
-
-    private func menuButton(
-        _ title: String,
-        systemImage: String,
-        destructive: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button {
-            action()
-        } label: {
-            Label(title, systemImage: systemImage)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(destructive ? Color.red : Color.primary)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(Color.clear)
-        )
-    }
-
-    private func performSignOut() {
-        // Existing, confirmed sign-out path: clears the in-memory session and
-        // removes the Keychain item. No other session mechanism involved.
-        authStore.clearSession()
-    }
-
-    private func startConversation(
-        characterID: String,
-        name: String,
-        avatarFileName: String
-    ) async -> Bool {
-        guard let newChatID = await viewModel.createRealChat(characterID: characterID) else {
-            return false
-        }
-
-        pendingCreatedChat = ConversationSummary(
-            id: newChatID,
-            chatID: newChatID,
-            characterID: characterID,
-            characterName: name,
-            characterAvatarURI: avatarFileName,
-            lastUpdated: ISO8601DateFormatter().string(from: Date()),
-            state: "STATE_ACTIVE",
-            lastMessage: nil
-        )
-        selectedChatID = newChatID
-        if viewModel.recentChats.contains(where: { $0.chatID == newChatID }) {
-            pendingCreatedChat = nil
-        }
-        Task {
-            await viewModel.loadRecentChats()
-            if viewModel.recentChats.contains(where: { $0.chatID == newChatID }) {
-                pendingCreatedChat = nil
-            }
-        }
-        return true
+        .padding(8)
+        .frame(width: 220)
+        .presentationBackground(.regularMaterial)
     }
 
     private struct ConversationRow: View {
         let conversation: ConversationSummary
         let avatarCornerRadius: CGFloat
+        let isSelected: Bool
+
+        @Environment(\.colorScheme) private var colorScheme
+        @State private var isHovering = false
+
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        private let rowCornerRadius: CGFloat = 10
 
         var body: some View {
             HStack(spacing: 10) {
@@ -471,48 +546,76 @@ private struct MainView: View {
 
                 VStack(
                     alignment: .leading,
-                    spacing: 4
+                    spacing: 3
                 ) {
                     HStack(spacing: 6) {
                         Text(conversation.characterName)
-                            .font(.headline)
+                            .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                            .foregroundStyle(Color.caiText)
                             .lineLimit(1)
 
                         Spacer(minLength: 4)
 
                         Text(relativeDate)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.caiMuted)
                     }
 
                     if let lastMessage = conversation.lastMessage,
                        !lastMessage.isEmpty {
                         Text(lastMessage)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.caiMuted)
+                            .lineLimit(1)
                     } else {
                         Text(
                             conversation.state == "STATE_ACTIVE"
                                 ? "Active"
                                 : "Archived"
                         )
-                        .font(.caption)
+                        .font(.system(size: 12))
                         .foregroundStyle(
                             conversation.state == "STATE_ACTIVE"
-                                ? .secondary
-                                : .tertiary
+                                ? Color.caiMuted
+                                : Color.caiMuted.opacity(0.6)
                         )
                     }
                 }
             }
             .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(rowBackground)
             .contentShape(Rectangle())
+            .onHover { isHovering = $0 }
+            .animation(reduceMotion ? nil : GlassMetrics.interaction, value: isSelected)
+            .animation(reduceMotion ? nil : GlassMetrics.interaction, value: isHovering)
             .opacity(
                 conversation.state == "STATE_ACTIVE"
                     ? 1
                     : 0.72
             )
+        }
+
+        @ViewBuilder
+        private var rowBackground: some View {
+            let shape = RoundedRectangle(
+                cornerRadius: rowCornerRadius,
+                style: .continuous
+            )
+
+            if isSelected {
+                shape.fill(Color.caiSurface.opacity(0.85))
+                    .overlay {
+                        shape.fill(Color.caiGlass.opacity(0.40))
+                    }
+                    .overlay {
+                        shape.strokeBorder(Color.white.opacity(0.08), lineWidth: 0.75)
+                    }
+            } else if isHovering {
+                shape.fill(Color.white.opacity(0.04))
+            } else {
+                shape.fill(Color.clear)
+            }
         }
 
         private var avatar: some View {
@@ -532,6 +635,7 @@ private struct MainView: View {
 
                         case .empty:
                             ProgressView()
+                                .controlSize(.small)
 
                         @unknown default:
                             fallbackAvatar
@@ -542,27 +646,29 @@ private struct MainView: View {
                 }
             }
             .frame(
-                width: 40,
-                height: 40
+                width: 36,
+                height: 36
             )
-            .clipShape(RoundedRectangle(cornerRadius: avatarCornerRadius))
+            .clipShape(Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
         }
 
         private var fallbackAvatar: some View {
             ZStack {
                 Circle()
-                    .fill(.secondary.opacity(0.15))
+                    .fill(Color.caiSurface)
 
                 Text(
                     conversation.characterName
                         .prefix(1)
                         .uppercased()
                 )
-                .font(.headline)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.caiText)
             }
             .frame(
-                width: 40,
-                height: 40
+                width: 36,
+                height: 36
             )
         }
 
@@ -612,6 +718,7 @@ private struct MainView: View {
             ChatView(
                 chatID: selectedChat.chatID,
                 characterID: selectedChat.characterID,
+                avatarFileName: selectedChat.characterAvatarURI,
                 authStore: authStore,
                 onConversationCreated: { newChatID in
                     pendingCopiedConversation = ConversationSummary(

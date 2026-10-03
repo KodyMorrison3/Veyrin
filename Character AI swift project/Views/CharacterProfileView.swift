@@ -41,6 +41,8 @@ struct CharacterProfileView: View {
             }
         }
         .frame(minWidth: 460, minHeight: 520)
+        .background { ShellEnvironmentalBackground() }
+        .presentationBackground(.regularMaterial)
         .task(id: characterID) {
             await viewModel.load(externalID: characterID)
         }
@@ -161,16 +163,20 @@ struct CharacterProfileView: View {
 
     private func header(_ profile: CharacterProfile) -> some View {
         HStack(alignment: .top, spacing: 16) {
-            avatar(for: profile, size: 96)
+            avatar(for: profile, size: 64)
             VStack(alignment: .leading, spacing: 6) {
                 Text(profile.name ?? profile.title ?? "Character")
-                    .font(.largeTitle.bold())
+                    .font(.title2.weight(.semibold))
                 if let title = nonempty(profile.title), title != profile.name {
                     Text(title)
                         .font(.title3)
                         .foregroundStyle(.secondary)
                 }
-                HStack(spacing: 12) {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)],
+                    alignment: .leading,
+                    spacing: 8
+                ) {
                     if let count = profile.interactionCount {
                         Label(count.formatted(), systemImage: "bubble.left")
                     }

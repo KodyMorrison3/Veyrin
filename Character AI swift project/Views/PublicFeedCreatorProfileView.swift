@@ -31,6 +31,9 @@ struct PublicFeedCreatorProfileView: View {
                 creatorProfile(profile)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background { ShellEnvironmentalBackground() }
+        .presentationBackground(.regularMaterial)
         .task {
             if case .idle = viewModel.state { await viewModel.load() }
         }

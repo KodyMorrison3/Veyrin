@@ -53,6 +53,10 @@ struct LoginView: View {
         }
         .frame(width: 350)
         .padding(30)
+        .glassSurface(.sheet, cornerRadius: 20)
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background { ShellEnvironmentalBackground() }
     }
 
     private func signIn() {

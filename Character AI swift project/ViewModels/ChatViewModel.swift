@@ -900,16 +900,20 @@ final class ChatViewModel: ObservableObject {
         }
 
         do {
-            try await conversationService.removeTurns(
-                chatID: chatID,
-                turnIDs: turnIDsToRemove
-            )
-            guard activeChatID == chatID else {
-                return
-            }
+            // A selected latest turn has no successors; no API removal is
+            // needed and the local history already matches that result.
+            if !turnIDsToRemove.isEmpty {
+                try await conversationService.removeTurns(
+                    chatID: chatID,
+                    turnIDs: turnIDsToRemove
+                )
+                guard activeChatID == chatID else {
+                    return
+                }
 
-            let removedIDs = Set(turnIDsToRemove)
-            turns.removeAll { removedIDs.contains($0.turnID) }
+                let removedIDs = Set(turnIDsToRemove)
+                turns.removeAll { removedIDs.contains($0.turnID) }
+            }
         } catch {
             rewindErrorMessage = error.localizedDescription
         }

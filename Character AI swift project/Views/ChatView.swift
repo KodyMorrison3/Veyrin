@@ -3,22 +3,28 @@ import SwiftUI
 struct ChatView: View {
     @StateObject private var viewModel: ChatViewModel
     @State private var messageText = ""
+    @FocusState private var isMessageFieldFocused: Bool
     @State private var turnToRewind: Turn?
     @State private var turnToStartConversationFrom: Turn?
     @State private var selectedModelType: String?
+    @State private var environmentalArtwork: Image?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let chatID: String
     let characterID: String
+    let avatarFileName: String?
     let onConversationCreated: ((String) -> Void)?
 
     init(
         chatID: String,
         characterID: String,
+        avatarFileName: String? = nil,
         authStore: AuthStore,
         onConversationCreated: ((String) -> Void)? = nil
     ) {
         self.chatID = chatID
         self.characterID = characterID
+        self.avatarFileName = avatarFileName
         self.onConversationCreated = onConversationCreated
 
         _viewModel = StateObject(
@@ -29,139 +35,106 @@ struct ChatView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            characterHeader
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 16) {
+                            // Clear spacer so top turns scroll underneath the floating toolbar
+                            Color.clear
+                                .frame(height: 52)
 
-            Divider()
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(
-                            viewModel.turns,
-                            id: \.turnID
-                        ) { turn in
-                            MessageView(
-                                turn: turn,
-                                character: viewModel.character,
-                                onRegenerate: turn.isHuman
-                                    ? nil
-                                    : {
-                                        guard viewModel.rewindingFromTurnID == nil else {
+                            ForEach(
+                                viewModel.turns,
+                                id: \.turnID
+                            ) { turn in
+                                MessageView(
+                                    turn: turn,
+                                    character: viewModel.character,
+                                    onRegenerate: turn.isHuman
+                                        ? nil
+                                        : {
+                                            guard viewModel.rewindingFromTurnID == nil else {
+                                                return
+                                            }
+                                            Task {
+                                                await viewModel.regenerateResponse(
+                                                    turnID: turn.turnID,
+                                                    chatID: chatID
+                                                )
+                                            }
+                                        },
+                                    onEdit: { newContent in
+                                        guard let candidate = turn.candidates.first(where: {
+                                            $0.candidateId == turn.primaryCandidateID
+                                        }) else {
                                             return
                                         }
+
                                         Task {
-                                            await viewModel.regenerateResponse(
+                                            await viewModel.editMessage(
+                                                turnID: turn.turnID,
+                                                chatID: chatID,
+                                                candidateID: candidate.candidateId,
+                                                newContent: newContent
+                                            )
+                                        }
+                                    },
+                                    isPinning: viewModel.pinningTurnIDs.contains(turn.turnID),
+                                    onPin: {
+                                        Task {
+                                            await viewModel.togglePin(
                                                 turnID: turn.turnID,
                                                 chatID: chatID
                                             )
                                         }
                                     },
-                                onEdit: { newContent in
-                                    guard let candidate = turn.candidates.first(where: {
-                                        $0.candidateId == turn.primaryCandidateID
-                                    }) else {
-                                        return
-                                    }
-
-                                    Task {
-                                        await viewModel.editMessage(
-                                            turnID: turn.turnID,
-                                            chatID: chatID,
-                                            candidateID: candidate.candidateId,
-                                            newContent: newContent
-                                        )
-                                    }
-                                },
-                                isPinning: viewModel.pinningTurnIDs.contains(turn.turnID),
-                                onPin: {
-                                    Task {
-                                        await viewModel.togglePin(
-                                            turnID: turn.turnID,
-                                            chatID: chatID
-                                        )
-                                    }
-                                },
-                                isRewinding: viewModel.rewindingFromTurnID != nil,
-                                onRewind: !viewModel.isGenerating && !viewModel.isLoading
-                                    ? { turnToRewind = turn }
-                                    : nil,
-                                onStartNewConversation: !viewModel.isGenerating && !viewModel.isLoading
-                                    ? {
-                                        selectedModelType = nil
-                                        turnToStartConversationFrom = turn
-                                        Task {
-                                            await viewModel.loadAvailableModels()
+                                    isRewinding: viewModel.rewindingFromTurnID != nil,
+                                    onRewind: !viewModel.isGenerating && !viewModel.isLoading
+                                        ? { turnToRewind = turn }
+                                        : nil,
+                                    onStartNewConversation: !viewModel.isGenerating && !viewModel.isLoading
+                                        ? {
+                                            selectedModelType = nil
+                                            turnToStartConversationFrom = turn
+                                            Task {
+                                                await viewModel.loadAvailableModels()
+                                            }
                                         }
-                                    }
-                                    : nil
-                            )
-                            .id(turn.turnID)
+                                        : nil
+                                )
+                                .id(turn.turnID)
+                            }
                         }
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 16)
+                        .frame(maxWidth: GlassMetrics.contentWidth)
+                        .frame(maxWidth: .infinity)
+                        .animation(reduceMotion ? nil : GlassMetrics.interaction, value: viewModel.turns.count)
                     }
-                    .padding()
+                    .scrollEdgeEffectHidden()
+                    .onChange(of: viewModel.turns.count) {
+                        scrollToBottom(using: proxy)
+                    }
+                    .onChange(of: viewModel.turns.last?.turnID) {
+                        scrollToBottom(using: proxy)
+                    }
                 }
-                .onChange(of: viewModel.turns.count) {
-                    scrollToBottom(using: proxy)
-                }
-                .onChange(of: viewModel.turns.last?.turnID) {
-                    scrollToBottom(using: proxy)
-                }
+
+                composer
             }
 
-            Divider()
-
-            HStack(spacing: 8) {
-                TextField(
-                    "Message...",
-                    text: $messageText
+            // Compact Floating Character Toolbar from Image 1
+            floatingCharacterToolbar
+                .padding(.top, 10)
+        }
+        .background {
+            ShellEnvironmentalBackground(
+                artwork: environmentalArtwork,
+                avatarURL: CharacterImageURL.makeURL(
+                    avatarFileName: avatarFileName ?? viewModel.character?.avatarFileName ?? ""
                 )
-                .textFieldStyle(.plain)
-                .disabled(viewModel.isGenerating || viewModel.rewindingFromTurnID != nil)
-                .onSubmit {
-                    sendMessage()
-                }
-
-                Button {
-                    sendMessage()
-                } label: {
-                    Image(systemName: "arrow.up")
-                        .font(
-                            .system(
-                                size: 12,
-                                weight: .semibold
-                            )
-                        )
-                        .frame(
-                            width: 24,
-                            height: 24
-                        )
-                }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .disabled(
-                    viewModel.isGenerating ||
-                    viewModel.rewindingFromTurnID != nil ||
-                    messageText
-                        .trimmingCharacters(
-                            in: .whitespacesAndNewlines
-                        )
-                        .isEmpty
-                )
-                .keyboardShortcut(
-                    .return,
-                    modifiers: []
-                )
-            }
-            .padding(.leading, 12)
-            .padding(.trailing, 5)
-            .padding(.vertical, 5)
-            .glassEffect(
-                .regular,
-                in: .capsule
             )
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
         }
         .confirmationDialog(
             "Rewind conversation?",
@@ -191,7 +164,7 @@ struct ChatView: View {
                 turnToRewind = nil
             }
         } message: {
-            Text("This message and every later turn will be permanently removed from this conversation.")
+            Text("This message will remain. Every later turn will be permanently removed from this conversation.")
         }
         .alert(
             "Unable to Rewind Conversation",
@@ -233,11 +206,7 @@ struct ChatView: View {
             "Unable to Update Pin",
             isPresented: Binding(
                 get: { viewModel.pinErrorMessage != nil },
-                set: { isPresented in
-                    if !isPresented {
-                        viewModel.pinErrorMessage = nil
-                    }
-                }
+                set: { if !$0 { viewModel.pinErrorMessage = nil } }
             )
         ) {
             Button("OK", role: .cancel) {
@@ -265,12 +234,226 @@ struct ChatView: View {
         .onDisappear {
             viewModel.disconnect()
         }
+        .navigationTitle(Text(verbatim: ""))
+    }
+
+    private var floatingCharacterToolbar: some View {
+        HStack(spacing: 10) {
+            if let character = viewModel.character {
+                characterHeaderAvatar(character: character)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(character.name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.caiText)
+                        .lineLimit(1)
+
+                    Text(character.title.isEmpty ? "By @CharacterAI" : character.title)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.caiMuted)
+                        .lineLimit(1)
+                }
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 28, height: 28)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Loading character…")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.caiText)
+
+                    Text("Connecting…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.caiMuted)
+                }
+            }
+
+            Spacer(minLength: 16)
+
+            // Target action icons: Call, Favorite, Share, More
+            HStack(spacing: 4) {
+                Button {
+                    // Call / audio action
+                } label: {
+                    Image(systemName: "phone")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.caiMuted)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(QuietHoverButtonStyle())
+                .help("Voice Call")
+
+                Button {
+                    // Favorite action
+                } label: {
+                    Image(systemName: "star")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.caiMuted)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(QuietHoverButtonStyle())
+                .help("Favorite")
+
+                Button {
+                    // Share action
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.caiMuted)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(QuietHoverButtonStyle())
+                .help("Share Character")
+
+                Menu {
+                    if let character = viewModel.character {
+                        Text(character.name)
+                        if !character.title.isEmpty {
+                            Text(character.title)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.caiMuted)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Circle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 28, height: 28)
+                .help("More Options")
+            }
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 10)
+        .padding(.vertical, 6)
+        .frame(height: 44)
+        .frame(maxWidth: 440)
+        .glassSurface(.floatingControl, cornerRadius: 22)
+        .shadow(color: Color.black.opacity(0.20), radius: 8, x: 0, y: 3)
+        .animation(reduceMotion ? nil : GlassMetrics.interaction, value: viewModel.character != nil)
+    }
+
+    private var composer: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Button {
+                // Media attachment
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.caiMuted)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Color.white.opacity(0.06)))
+            }
+            .buttonStyle(.plain)
+            .help("Attach file or media")
+
+            if viewModel.isGenerating {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Generating response")
+                    Text("\(viewModel.character?.name ?? "Character") is typing…")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.caiMuted)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                TextField(
+                    viewModel.character?.name != nil ? "Message \(viewModel.character!.name)..." : "Message...",
+                    text: $messageText,
+                    axis: .vertical
+                )
+                .lineLimit(1...4)
+                .font(.system(size: 14))
+                .textFieldStyle(.plain)
+                .foregroundStyle(Color.caiText)
+                .focused($isMessageFieldFocused)
+                .disabled(isComposerInputDisabled)
+                .onSubmit { sendMessage() }
+                .onKeyPress(keys: [.return], phases: .down) { press in
+                    guard !press.modifiers.contains(.shift) else { return .ignored }
+                    if !isSendDisabled { sendMessage() }
+                    return .handled
+                }
+            }
+
+            if !viewModel.isGenerating {
+                Button {
+                    // Emoji
+                } label: {
+                    Image(systemName: "face.smiling")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.caiMuted)
+                }
+                .buttonStyle(.plain)
+                .help("Insert emoji")
+
+                Button {
+                    // Upload
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.caiMuted)
+                }
+                .buttonStyle(.plain)
+                .help("Upload")
+            }
+
+            Button { sendMessage() } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: GlassMetrics.sendDiameter, height: GlassMetrics.sendDiameter)
+            }
+            .buttonStyle(SendCircleButtonStyle())
+            .disabled(isSendDisabled)
+            .keyboardShortcut(.return, modifiers: [])
+            .accessibilityLabel("Send message")
+            .opacity(isSendDisabled ? 0.40 : 1)
+            .animation(reduceMotion ? nil : GlassMetrics.interaction, value: isSendDisabled)
+        }
+        .padding(.horizontal, 10)
+        .frame(minHeight: GlassMetrics.composerHeight)
+        .glassSurface(
+            .floatingControl,
+            cornerRadius: GlassMetrics.composerRadius,
+            isFocused: isMessageFieldFocused
+        )
+        .shadow(color: Color.black.opacity(0.18), radius: 8, x: 0, y: 3)
+        .frame(maxWidth: min(GlassMetrics.contentWidth, 680))
+        .padding(.horizontal, 24)
+        .padding(.top, 4)
+        .padding(.bottom, 16)
+        .animation(reduceMotion ? nil : GlassMetrics.interaction, value: isComposerInputDisabled)
     }
 
     private var modelSelectionSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Select AI model")
+            Text("New Conversation")
                 .font(.title2.weight(.semibold))
+            if let character = viewModel.character {
+                HStack(spacing: 10) {
+                    if let environmentalArtwork {
+                        environmentalArtwork.resizable().scaledToFill()
+                            .frame(width: 32, height: 32)
+                            .clipShape(Circle())
+                    } else {
+                        fallbackHeaderAvatar(character: character)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(character.name).font(.headline)
+                        Text(character.title).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Text("Select AI model")
+                .font(.headline)
 
             if viewModel.isLoadingAvailableModels {
                 ProgressView("Loading available models…")
@@ -330,6 +513,7 @@ struct ChatView: View {
                     .buttonStyle(.plain)
                 }
                 .listStyle(.inset)
+                .scrollContentBackground(.hidden)
             }
 
             HStack {
@@ -371,6 +555,25 @@ struct ChatView: View {
         }
         .padding(20)
         .frame(minWidth: 400, minHeight: 460)
+        .background {
+            ShellEnvironmentalBackground(
+                artwork: environmentalArtwork,
+                avatarURL: CharacterImageURL.makeURL(
+                    avatarFileName: avatarFileName ?? viewModel.character?.avatarFileName ?? ""
+                )
+            )
+        }
+        .presentationBackground(.regularMaterial)
+    }
+
+    private var isComposerInputDisabled: Bool {
+        viewModel.isGenerating || viewModel.rewindingFromTurnID != nil
+    }
+
+    private var isSendDisabled: Bool {
+        isComposerInputDisabled ||
+            messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
     }
 
     private func sendMessage() {
@@ -400,45 +603,12 @@ struct ChatView: View {
             return
         }
 
-        withAnimation(.easeOut(duration: 0.15)) {
+        withAnimation(reduceMotion ? nil : GlassMetrics.interaction) {
             proxy.scrollTo(
                 lastTurn.turnID,
                 anchor: .bottom
             )
         }
-    }
-    
-    private var characterHeader: some View {
-        HStack(spacing: 12) {
-            if let character = viewModel.character {
-                characterHeaderAvatar(character: character)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(character.name)
-                        .font(.headline)
-
-                    Text(character.title)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            } else {
-                ProgressView()
-                    .frame(width: 44, height: 44)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Loading character...")
-                        .font(.headline)
-
-                    Text("Connecting...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Spacer()
-        }
-        .padding()
     }
 
     @ViewBuilder
@@ -454,6 +624,7 @@ struct ChatView: View {
                     image
                         .resizable()
                         .scaledToFill()
+                        .onAppear { environmentalArtwork = image }
 
                 case .failure:
                     fallbackHeaderAvatar(
@@ -462,6 +633,7 @@ struct ChatView: View {
 
                 case .empty:
                     ProgressView()
+                        .controlSize(.small)
 
                 @unknown default:
                     fallbackHeaderAvatar(
@@ -469,8 +641,9 @@ struct ChatView: View {
                     )
                 }
             }
-            .frame(width: 44, height: 44)
+            .frame(width: 30, height: 30)
             .clipShape(Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
         } else {
             fallbackHeaderAvatar(
                 character: character
@@ -483,12 +656,12 @@ struct ChatView: View {
     ) -> some View {
         ZStack {
             Circle()
-                .fill(.secondary.opacity(0.15))
+                .fill(Color.caiSurface)
 
             Text(character.name.prefix(1))
-                .font(.title3)
-                .fontWeight(.semibold)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.caiText)
         }
-        .frame(width: 44, height: 44)
+        .frame(width: 30, height: 30)
     }
 }

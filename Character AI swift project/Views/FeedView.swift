@@ -40,6 +40,7 @@ struct FeedView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .background { ShellEnvironmentalBackground() }
         .navigationTitle("Feed")
         .task {
             if viewModel.shouldLoad { await viewModel.load() }
@@ -73,8 +74,8 @@ struct FeedView: View {
                     }
                 }
             }
-            .padding(20)
-            .frame(maxWidth: 920)
+            .padding(24)
+            .frame(maxWidth: GlassMetrics.contentWidth)
             .frame(maxWidth: .infinity)
         }
     }
@@ -104,14 +105,14 @@ struct FeedView: View {
                             }
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(QuietHoverButtonStyle())
                     }
                 }
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 14))
+        .contentSurface(cornerRadius: GlassMetrics.popoverRadius)
     }
 }
 
@@ -181,7 +182,7 @@ private struct FeedPostCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 14))
+        .contentSurface(cornerRadius: GlassMetrics.popoverRadius)
     }
 
     private var authorHeader: some View {
@@ -197,7 +198,7 @@ private struct FeedPostCard: View {
                     .font(.subheadline.weight(.semibold))
                 if let username = nonempty(post.authorInfo?.username) {
                     Button("@\(username)") { onSelectCreator(username) }
-                        .buttonStyle(.plain)
+                        .buttonStyle(QuietHoverButtonStyle())
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -243,7 +244,7 @@ private struct FeedPostCard: View {
                         }
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(QuietHoverButtonStyle())
                 }
             }
         }

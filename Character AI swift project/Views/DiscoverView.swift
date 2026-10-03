@@ -25,9 +25,15 @@ struct DiscoverView: View {
                 browseSection
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            searchBar
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                searchBar
+                    .frame(minWidth: 180, idealWidth: 360, maxWidth: 520)
+            }
         }
+        // Place search within the native toolbar rather than below its wash.
+        .scrollEdgeEffectHidden()
+        .background { ShellEnvironmentalBackground() }
         .navigationTitle("Discover")
         .task {
             await viewModel.loadInitialPages()
@@ -58,7 +64,7 @@ struct DiscoverView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(QuietHoverButtonStyle())
                 .help("Clear search")
                 .keyboardShortcut(.cancelAction)
 
@@ -67,15 +73,13 @@ struct DiscoverView: View {
                 } label: {
                     Image(systemName: "arrow.right.circle")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(QuietHoverButtonStyle())
                 .help("Search")
                 .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(10)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 24)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     // MARK: Browse (existing Discover content, unchanged)
@@ -132,7 +136,7 @@ struct DiscoverView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Label(title, systemImage: systemImage)
-                .font(.title3.bold())
+                .font(.title3.weight(.semibold))
 
             if characters.isEmpty {
                 if !viewModel.isLoadingCurated {
@@ -148,7 +152,7 @@ struct DiscoverView: View {
                             } label: {
                                 characterCard(character)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(QuietHoverButtonStyle())
                         }
                     }
                 }
@@ -208,11 +212,11 @@ struct DiscoverView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(QuietHoverButtonStyle())
             }
         }
         .padding(8)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        .glassSurface(.popover, cornerRadius: GlassMetrics.popoverRadius)
     }
 
     private var resultsGrid: some View {
@@ -224,7 +228,7 @@ struct DiscoverView: View {
                     } label: {
                         searchResultCard(result)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(QuietHoverButtonStyle())
                 }
             }
         }
@@ -262,14 +266,14 @@ struct DiscoverView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+        .contentSurface()
         .contentShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private var recommendedSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Recommended characters")
-                .font(.title2.bold())
+                .font(.title2.weight(.semibold))
 
             if viewModel.isLoadingFeed && viewModel.feedItems.isEmpty {
                 ProgressView("Loading recommendations…")
@@ -291,7 +295,7 @@ struct DiscoverView: View {
                             } label: {
                                 characterCard(character)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(QuietHoverButtonStyle())
                         }
                     }
                 }
@@ -318,7 +322,7 @@ struct DiscoverView: View {
     private var scenesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Curated scenes")
-                .font(.title2.bold())
+                .font(.title2.weight(.semibold))
 
             if viewModel.isLoadingScenes && viewModel.scenes.isEmpty {
                 ProgressView("Loading scenes…")
@@ -372,7 +376,7 @@ struct DiscoverView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+        .contentSurface()
         .contentShape(RoundedRectangle(cornerRadius: 12))
     }
 
@@ -407,7 +411,7 @@ struct DiscoverView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+        .contentSurface()
     }
 
     @ViewBuilder

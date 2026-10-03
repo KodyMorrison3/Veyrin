@@ -58,10 +58,15 @@ struct SettingsView: View {
             List(selection: $selectedPane) {
                 ForEach(SettingsPane.allCases) { pane in
                     Label(pane.title, systemImage: pane.systemImage)
+                        .font(.body.weight(selectedPane == pane ? .semibold : .regular))
+                        .listItemTint(.monochrome)
                         .tag(pane)
                 }
             }
             .listStyle(.sidebar)
+            .tint(Color.secondary.opacity(0.18))
+            .scrollContentBackground(.hidden)
+            .glassSurface(.navigation, cornerRadius: 0)
             .navigationSplitViewColumnWidth(180)
         } detail: {
             Group {
@@ -78,6 +83,7 @@ struct SettingsView: View {
             .navigationTitle(selectedPane.title)
             .frame(minWidth: 480, minHeight: 380)
         }
+        .background { ShellEnvironmentalBackground() }
         .sheet(isPresented: $isShowingCharms) {
             CharmsView(authStore: authStore)
                 .frame(minWidth: 560, minHeight: 620)
@@ -107,6 +113,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 
     // MARK: Appearance
@@ -129,6 +136,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 
     // MARK: Chat
@@ -146,6 +154,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 
     // MARK: Characters
@@ -162,6 +171,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 
     // MARK: Notifications
@@ -179,6 +189,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 
     // MARK: Privacy & Security
@@ -203,6 +214,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 
     // MARK: Advanced
@@ -221,6 +233,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .confirmationDialog(
             "Reset all preferences to their defaults?",
             isPresented: $isConfirmingReset,
