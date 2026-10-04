@@ -1,14 +1,21 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ChatView: View {
     @StateObject private var viewModel: ChatViewModel
     @State private var messageText = ""
+    @State private var attachments: [ComposerAttachment] = []
+    @State private var attachmentNotice: String?
     @FocusState private var isMessageFieldFocused: Bool
     @State private var turnToRewind: Turn?
     @State private var turnToStartConversationFrom: Turn?
     @State private var selectedModelType: String?
     @State private var environmentalArtwork: Image?
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var isDark: Bool { colorScheme == .dark }
 
     let chatID: String
     let characterID: String
@@ -121,6 +128,8 @@ struct ChatView: View {
                     }
                 }
 
+                attachmentTray
+
                 composer
             }
 
@@ -135,6 +144,7 @@ struct ChatView: View {
                     avatarFileName: avatarFileName ?? viewModel.character?.avatarFileName ?? ""
                 )
             )
+            .ignoresSafeArea()
         }
         .confirmationDialog(
             "Rewind conversation?",
@@ -334,24 +344,26 @@ struct ChatView: View {
         .padding(.vertical, 6)
         .frame(height: 44)
         .frame(maxWidth: 440)
-        .glassSurface(.floatingControl, cornerRadius: 22)
-        .shadow(color: Color.black.opacity(0.20), radius: 8, x: 0, y: 3)
+        .glassSurface(.characterHeader, cornerRadius: 22)
         .animation(reduceMotion ? nil : GlassMetrics.interaction, value: viewModel.character != nil)
     }
 
+    /// Unified capsule composer: attachment, input with the sticker
+    /// accessory, and send share one continuous Liquid Glass capsule.
+    /// Behaviour — FocusState, Return-to-send, generating and disabled
+    /// states — is unchanged.
     private var composer: some View {
-        HStack(alignment: .center, spacing: 8) {
-            Button {
-                // Media attachment
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.caiMuted)
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(Color.white.opacity(0.06)))
-            }
+        HStack(alignment: .center, spacing: 8) {                Button {
+                    presentImageOpenPanel()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.caiMuted)
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(ShellEnvironmentalBackground.environmentalSurfaceTint(isDark: isDark)))
+                }
             .buttonStyle(.plain)
-            .help("Attach file or media")
+            .help("Attach an image")
 
             if viewModel.isGenerating {
                 HStack(spacing: 8) {
@@ -385,24 +397,15 @@ struct ChatView: View {
 
             if !viewModel.isGenerating {
                 Button {
-                    // Emoji
+                    // Stickers & GIFs: presentation-only until a
+                    // sticker/GIF source is confirmed.
                 } label: {
-                    Image(systemName: "face.smiling")
+                    Image(systemName: "photo.on.rectangle.angled")
                         .font(.system(size: 15))
                         .foregroundStyle(Color.caiMuted)
                 }
                 .buttonStyle(.plain)
-                .help("Insert emoji")
-
-                Button {
-                    // Upload
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.caiMuted)
-                }
-                .buttonStyle(.plain)
-                .help("Upload")
+                .help("Stickers & GIFs")
             }
 
             Button { sendMessage() } label: {
@@ -420,12 +423,13 @@ struct ChatView: View {
         }
         .padding(.horizontal, 10)
         .frame(minHeight: GlassMetrics.composerHeight)
+        // Same Liquid Glass recipe as the character banner: translucent
+        // system glass over the environment, no opaque fill, no shadow.
         .glassSurface(
-            .floatingControl,
+            .characterHeader,
             cornerRadius: GlassMetrics.composerRadius,
             isFocused: isMessageFieldFocused
         )
-        .shadow(color: Color.black.opacity(0.18), radius: 8, x: 0, y: 3)
         .frame(maxWidth: min(GlassMetrics.contentWidth, 680))
         .padding(.horizontal, 24)
         .padding(.top, 4)
@@ -588,11 +592,151 @@ struct ChatView: View {
 
         messageText = ""
 
+        if !attachments.isEmpty {
+            // No confirmed upload protocol: the text sends exactly as
+            // before and staged images are kept, never silently dropped.
+            attachmentNotice =
+                "Image sending isn't available yet — text sent, attachments kept."
+        }
+
         Task {
             await viewModel.sendMessage(
                 trimmedMessage,
                 chatID: chatID
             )
+        }
+    }
+
+    // MARK: - Image attachments (picker + preview UI only)
+
+    /// An image staged in the composer. Bytes are copied into memory at
+    /// pick time (sandbox-safe), so the selection survives send attempts
+    /// and is only ever removed by the explicit remove button.
+    private struct ComposerAttachment: Identifiable {
+        let id = UUID()
+        let fileName: String
+        let image: NSImage
+        let data: Data
+    }
+
+    /// Staged-attachment strip above the composer: thumbnails with remove
+    /// controls plus an honest notice line. Hidden entirely when empty.
+    @ViewBuilder
+    private var attachmentTray: some View {
+        if !attachments.isEmpty || attachmentNotice != nil {
+            VStack(alignment: .leading, spacing: 6) {
+                if !attachments.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(attachments) { attachment in
+                                attachmentThumbnail(attachment)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+                if let attachmentNotice {
+                    Label(attachmentNotice, systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            .frame(maxWidth: min(GlassMetrics.contentWidth, 680))
+            .padding(.horizontal, 24)
+            .padding(.top, 8)
+        }
+    }
+
+    private func attachmentThumbnail(
+        _ attachment: ComposerAttachment
+    ) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Image(nsImage: attachment.image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                }
+                .help(attachment.fileName)
+            Button {
+                attachments.removeAll { $0.id == attachment.id }
+                if attachments.isEmpty {
+                    attachmentNotice = nil
+                }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.secondary)
+                    .background(Circle().fill(ShellEnvironmentalBackground.environmentalSurfaceTint(isDark: isDark)))
+            }
+            .buttonStyle(.plain)
+            .help("Remove attachment")
+            .offset(x: 6, y: -6)
+        }
+        .padding(.top, 6)
+        .padding(.trailing, 6)
+    }
+
+    /// Native macOS image picker (app-modal NSOpenPanel, no binding to
+    /// lose). Only image types are selectable; cancelling leaves staged
+    /// attachments untouched.
+    private func presentImageOpenPanel() {
+        let panel = NSOpenPanel()
+        panel.message = "Choose images to attach"
+        panel.prompt = "Attach"
+        panel.allowedContentTypes = [.png, .jpeg, .gif, .heic, .heif, .webP]
+        panel.allowsMultipleSelection = true
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.begin { response in
+            guard response == .OK else {
+                return
+            }
+            handlePickedImages(.success(panel.urls))
+        }
+    }
+
+    /// Native file-import result: copy each readable image into memory
+    /// under scoped access. Failures report a notice; staged attachments
+    /// already present are never touched.
+    private func handlePickedImages(
+        _ result: Result<[URL], Error>
+    ) {
+        guard case .success(let urls) = result, !urls.isEmpty else {
+            // Picker cancelled or failed: keep everything already staged.
+            return
+        }
+        var failures = 0
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer {
+                if scoped {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+            guard let data = try? Data(contentsOf: url),
+                  let nsImage = NSImage(data: data) else {
+                failures += 1
+                continue
+            }
+            attachments.append(
+                ComposerAttachment(
+                    fileName: url.lastPathComponent,
+                    image: nsImage,
+                    data: data
+                )
+            )
+        }
+        if failures > 0 {
+            attachmentNotice = failures == 1
+                ? "One image couldn't be attached."
+                : "\(failures) images couldn't be attached."
+        } else {
+            attachmentNotice = nil
         }
     }
     
@@ -656,7 +800,7 @@ struct ChatView: View {
     ) -> some View {
         ZStack {
             Circle()
-                .fill(Color.caiSurface)
+                .fill(ShellEnvironmentalBackground.environmentalSurfaceTint(isDark: isDark))
 
             Text(character.name.prefix(1))
                 .font(.system(size: 13, weight: .semibold))

@@ -11,9 +11,11 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @ObservedObject private var preferences = AppPreferences.shared
+    @Environment(\.colorScheme) private var colorScheme
     @State private var selectedPane: SettingsPane = .account
     @State private var isConfirmingReset = false
     @State private var isShowingCharms = false
@@ -55,18 +57,33 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $selectedPane) {
+            // Custom glass navigation (not a native List): the native
+            // sidebar selection renders as a bright opaque blue pill that
+            // contradicts the Liquid Glass direction. Rows mirror the main
+            // conversation sidebar's restrained accent-tinted glass pill.
+            VStack(alignment: .leading, spacing: 2) {
                 ForEach(SettingsPane.allCases) { pane in
-                    Label(pane.title, systemImage: pane.systemImage)
-                        .font(.body.weight(selectedPane == pane ? .semibold : .regular))
-                        .listItemTint(.monochrome)
-                        .tag(pane)
+                    Button {
+                        selectedPane = pane
+                    } label: {
+                        Label(pane.title, systemImage: pane.systemImage)
+                            .font(.body.weight(selectedPane == pane ? .semibold : .regular))
+                            .foregroundStyle(selectedPane == pane ? Color.primary : Color.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background {
+                                settingsRowBackground(isSelected: selectedPane == pane)
+                            }
+                    }
+                    .buttonStyle(QuietHoverButtonStyle())
+                    .accessibilityAddTraits(selectedPane == pane ? .isSelected : [])
                 }
+                Spacer(minLength: 0)
             }
-            .listStyle(.sidebar)
-            .tint(Color.secondary.opacity(0.18))
-            .scrollContentBackground(.hidden)
-            .glassSurface(.navigation, cornerRadius: 0)
+            .padding(10)
+            // No panel behind the rows: they float directly on the window
+            // material so the sidebar never reads as a separate dark bar.
             .navigationSplitViewColumnWidth(180)
         } detail: {
             Group {
@@ -80,160 +97,324 @@ struct SettingsView: View {
                 case .advanced: advancedPane
                 }
             }
-            .navigationTitle(selectedPane.title)
             .frame(minWidth: 480, minHeight: 380)
         }
-        .background { ShellEnvironmentalBackground() }
-        .sheet(isPresented: $isShowingCharms) {
-            CharmsView(authStore: authStore)
-                .frame(minWidth: 560, minHeight: 620)
+        // Seamless frosted window: uses the unified ShellEnvironmentalBackground
+        // with reduced vignette so the environmental wallpaper softly anchors the window
+        // under the thin material while remaining responsive to wallpaper color.
+        // Both layers ignore the safe area so the glass extends under the title
+        // bar: the title reads as text over the environment instead of a dark
+        // system-material slab.
+        .background {
+            ShellEnvironmentalBackground(vignetteStrength: 0.6)
+                .ignoresSafeArea()
         }
+        .background(.thinMaterial, ignoresSafeAreaEdges: .all)
+        // Keep native toolbar behaviour but remove the default window-wide
+        // material shelf (same treatment as the main window). The older
+        // .toolbarBackground(.hidden, for:) API does not suppress the
+        // system Liquid Glass shelf on recent macOS.
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+    }
+
+    // MARK: - Shared presentation
+
+    /// Restrained selected-state pill mirroring the main conversation
+    /// sidebar: translucent accent-tinted glass, never an opaque blue
+    /// rectangle. Unselected rows are intentionally bare glass.
+    @ViewBuilder
+    private func settingsRowBackground(isSelected: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
+        if isSelected {
+            shape
+                .glassEffect(
+                    Glass.regular.tint(AppPreferences.shared.environmentalPalette.selectionTint),
+                    in: shape
+                )
+                .overlay {
+                    shape.strokeBorder(
+                        Color.white.opacity(colorScheme == .dark ? 0.10 : 0.16),
+                        lineWidth: 0.75
+                    )
+                }
+        }
+    }
+
+    /// One cardless section: title, setting rows separated by dividers,
+    /// footnote footer — glass environment behind, never nested cards.
+    private func settingsSection<Content: View>(
+        title: String? = nil,
+        footer: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let title {
+                Text(title)
+                    .font(.headline)
+            }
+            content()
+            if let footer {
+                Text(footer)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
     }
 
     // MARK: Account
 
     private var accountPane: some View {
-        Form {
-            Section {
-                LabeledContent("Signed in as") {
+        ScrollView {
+            settingsSection(
+                title: "Profile",
+                footer: "Public profile details are available from the account menu in the sidebar. " +
+                    "Account changes (email, password, subscription, deletion) are not supported by this app."
+            ) {
+                HStack {
+                    Text("Signed in as")
+                    Spacer()
                     Text(username.isEmpty ? "Not signed in" : "@\(username)")
+                        .foregroundStyle(.secondary)
                 }
+                .padding(.vertical, 6)
+                Divider()
                 Button {
                     isShowingCharms = true
                 } label: {
                     Label("View Charms", systemImage: "sparkles")
                 }
-            } header: {
-                Text("Profile")
-            } footer: {
-                Text(
-                    "Public profile details are available from the account menu in the sidebar. " +
-                    "Account changes (email, password, subscription, deletion) are not supported by this app."
-                )
+                .padding(.vertical, 6)
+                .popover(isPresented: $isShowingCharms) {
+                    CharmsView(authStore: authStore)
+                        .frame(width: 560, height: 600)
+                }
             }
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
     }
 
     // MARK: Appearance
 
     private var appearancePane: some View {
-        Form {
-            Section {
-                Picker("List & card avatars", selection: $preferences.avatarShape) {
-                    ForEach(AvatarShape.allCases) { shape in
-                        Text(shape.displayName).tag(shape)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                settingsSection(
+                    title: "Environment & Wallpaper",
+                    footer: "Select how the environmental background behind Liquid Glass is derived. " +
+                        "Default blurs the character artwork; Custom Wallpaper blurs your chosen image; " +
+                        "Solid Colour provides an atmospheric base colour underneath the glass."
+                ) {
+                    Picker("Background Mode", selection: $preferences.backgroundMode) {
+                        ForEach(BackgroundMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.vertical, 4)
+
+                    switch preferences.backgroundMode {
+                    case .default:
+                        HStack(spacing: 8) {
+                            Image(systemName: "sparkles")
+                                .foregroundStyle(Color.caiPrimary)
+                            Text("Deriving environmental colour and wallpaper from character artwork.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+
+                    case .customWallpaper:
+                        VStack(alignment: .leading, spacing: 10) {
+                            if let wallpaper = preferences.customWallpaper {
+                                HStack(spacing: 12) {
+                                    Image(nsImage: wallpaper)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 80, height: 50)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+                                        )
+
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Custom Wallpaper Active")
+                                            .font(.subheadline.weight(.medium))
+                                        Text("Atmospheric blur and ambient tint are derived from this image.")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+
+                            HStack(spacing: 10) {
+                                Button {
+                                    chooseCustomWallpaper()
+                                } label: {
+                                    Label(
+                                        preferences.customWallpaper == nil ? "Choose Image…" : "Change Image…",
+                                        systemImage: "photo"
+                                    )
+                                }
+
+                                if preferences.customWallpaper != nil {
+                                    Button("Remove Wallpaper", role: .destructive) {
+                                        preferences.clearCustomWallpaper()
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+
+                    case .solidColor:
+                        HStack(spacing: 12) {
+                            ColorPicker("Environmental Colour", selection: $preferences.solidColor, supportsOpacity: false)
+                                .padding(.vertical, 4)
+
+                            Button("Reset to Midnight") {
+                                preferences.solidColor = Color(red: 0.059, green: 0.071, blue: 0.149)
+                            }
+                            .buttonStyle(.plain)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if preferences.backgroundMode != .default {
+                        Divider()
+                            .padding(.vertical, 2)
+
+                        Button("Revert to Default") {
+                            preferences.backgroundMode = .default
+                        }
+                        .buttonStyle(.plain)
+                        .font(.callout)
+                        .foregroundStyle(Color.caiPrimary)
                     }
                 }
-            } header: {
-                Text("Avatars")
-            } footer: {
-                Text(
-                    "Applies to sidebar conversation rows and Discover cards. " +
-                    "In-chat avatars and the account control keep the standard circular look."
-                )
+
+                settingsSection(
+                    title: "Avatars",
+                    footer: "Applies to sidebar conversation rows and Discover cards. " +
+                        "In-chat avatars and the account control keep the standard circular look."
+                ) {
+                    Picker("List & card avatars", selection: $preferences.avatarShape) {
+                        ForEach(AvatarShape.allCases) { shape in
+                            Text(shape.displayName).tag(shape)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .padding(.vertical, 6)
+                }
             }
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
+    }
+
+    private func chooseCustomWallpaper() {
+        let panel = NSOpenPanel()
+        panel.title = "Select Custom Wallpaper"
+        panel.message = "Choose an image to use as the environmental Liquid Glass background."
+        panel.prompt = "Set Wallpaper"
+        panel.allowedContentTypes = [.png, .jpeg, .heic, .webP, .gif]
+        panel.allowsMultipleSelection = false
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            preferences.setCustomWallpaper(from: url)
+        }
     }
 
     // MARK: Chat
 
     private var chatPane: some View {
-        Form {
-            Section {
+        ScrollView {
+            settingsSection(
+                footer: "Chat behaviour settings on Character.AI's side would require backend " +
+                    "contracts this app has not confirmed, so none are shown here."
+            ) {
                 Text("No local chat preferences yet.")
                     .foregroundStyle(.secondary)
-            } footer: {
-                Text(
-                    "Chat behaviour settings on Character.AI's side would require backend " +
-                    "contracts this app has not confirmed, so none are shown here."
-                )
+                    .padding(.vertical, 6)
             }
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
     }
 
     // MARK: Characters
 
     private var charactersPane: some View {
-        Form {
-            Section {
-                Toggle("Show Popular & Trending in Discover", isOn: $preferences.showPopularTrending)
-            } footer: {
-                Text(
-                    "Hides or shows the curated Popular characters and Trending " +
+        ScrollView {
+            settingsSection(
+                footer: "Hides or shows the curated Popular characters and Trending " +
                     "characters sections in Discover."
-                )
+            ) {
+                Toggle("Show Popular & Trending in Discover", isOn: $preferences.showPopularTrending)
+                    .padding(.vertical, 6)
             }
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
     }
 
     // MARK: Notifications
 
     private var notificationsPane: some View {
-        Form {
-            Section {
+        ScrollView {
+            settingsSection(
+                footer: "No confirmed Character.AI notification contract exists, so this app " +
+                    "does not register for or display notifications."
+            ) {
                 Text("Notifications are not available in this app.")
                     .foregroundStyle(.secondary)
-            } footer: {
-                Text(
-                    "No confirmed Character.AI notification contract exists, so this app " +
-                    "does not register for or display notifications."
-                )
+                    .padding(.vertical, 6)
             }
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
     }
 
     // MARK: Privacy & Security
 
     private var privacyPane: some View {
-        Form {
-            Section {
-                LabeledContent("Session storage") {
-                    Text("Keychain")
-                }
-                LabeledContent("Session token") {
-                    Text("Never displayed in the app")
-                }
-            } header: {
-                Text("On this Mac")
-            } footer: {
-                Text(
-                    "The session token is kept in the macOS Keychain and sent only as the " +
+        ScrollView {
+            settingsSection(
+                title: "On this Mac",
+                footer: "The session token is kept in the macOS Keychain and sent only as the " +
                     "Authorization header to Character.AI. Server-side privacy controls would " +
                     "require contracts this app has not confirmed."
-                )
+            ) {
+                HStack {
+                    Text("Session storage")
+                    Spacer()
+                    Text("Keychain")
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 6)
+                Divider()
+                HStack {
+                    Text("Session token")
+                    Spacer()
+                    Text("Never displayed in the app")
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 6)
             }
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
     }
 
     // MARK: Advanced
 
     private var advancedPane: some View {
-        Form {
-            Section {
+        ScrollView {
+            settingsSection(
+                footer: "Restores all local preferences to their defaults. " +
+                    "Your signed-in session is not affected."
+            ) {
                 Button("Reset Preferences", role: .destructive) {
                     isConfirmingReset = true
                 }
-            } footer: {
-                Text(
-                    "Restores all local preferences to their defaults. " +
-                    "Your signed-in session is not affected."
-                )
+                .padding(.vertical, 6)
             }
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
         .confirmationDialog(
             "Reset all preferences to their defaults?",
             isPresented: $isConfirmingReset,

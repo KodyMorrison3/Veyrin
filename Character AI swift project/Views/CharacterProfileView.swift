@@ -222,7 +222,7 @@ struct CharacterProfileView: View {
     private func avatarFallback(name: String?, size: CGFloat) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12)
-                .fill(.secondary.opacity(0.15))
+                .fill(AppPreferences.shared.environmentalPalette.glassSurfaceTint)
             Text(String((name ?? "?").prefix(1)).uppercased())
                 .font(.system(size: size * 0.4, weight: .semibold))
         }

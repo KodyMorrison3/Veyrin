@@ -70,12 +70,15 @@ private struct MainView: View {
 
     var body: some View {
         ZStack {
-            // Atmospheric character artwork background behind the window
+            // Atmospheric character artwork background behind the window.
+            // Extends under the title bar so the window toolbar area reads as
+            // translucent glass over the environment, not an opaque slab.
             ShellEnvironmentalBackground(
                 avatarURL: selectedConversation.flatMap {
                     CharacterImageURL.makeURL(avatarFileName: $0.characterAvatarURI)
                 }
             )
+            .ignoresSafeArea()
 
             NavigationSplitView {
                 sidebar
@@ -194,15 +197,14 @@ private struct MainView: View {
         }
     }
 
+    @discardableResult
     private func startConversation(
         characterID: String,
         name: String,
         avatarFileName: String
-    ) async {
-        guard let newChatID = await viewModel.createConversation(
-            characterID: characterID
-        ) else {
-            return
+    ) async -> Bool {
+        guard let newChatID = await viewModel.createRealChat(characterID: characterID) else {
+            return false
         }
 
         pendingCreatedChat = ConversationSummary(
@@ -225,6 +227,8 @@ private struct MainView: View {
         if viewModel.recentChats.contains(where: { $0.chatID == newChatID }) {
             pendingCreatedChat = nil
         }
+
+        return true
     }
 
     private var sidebar: some View {
@@ -327,7 +331,7 @@ private struct MainView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .glassSurface(.floatingControl, cornerRadius: 16)
+            .glassSurface(.searchField, cornerRadius: 16)
             .padding(.horizontal, 10)
             .padding(.top, 8)
         }
@@ -369,7 +373,7 @@ private struct MainView: View {
                     .foregroundStyle(Color.caiText)
                     .frame(maxWidth: .infinity)
                     .frame(height: 32)
-                    .glassSurface(.floatingControl, cornerRadius: 10)
+                    .glassSurface(.characterHeader, cornerRadius: 10)
                 }
                 .buttonStyle(QuietHoverButtonStyle())
                 .disabled(viewModel.isLoading || selectedConversation == nil)
@@ -405,6 +409,7 @@ private struct MainView: View {
     @State private var isShowingAccountMenu = false
     @State private var isConfirmingSignOut = false
     @ObservedObject private var preferences = AppPreferences.shared
+    @Environment(\.openSettings) private var openSettings
 
     private var userProfileControl: some View {
         VStack(spacing: 0) {
@@ -473,7 +478,7 @@ private struct MainView: View {
                         Button("Sign Out", role: .destructive) {
                             isShowingAccountMenu = false
                             isConfirmingSignOut = false
-                            authStore.signOut()
+                            authStore.clearSession()
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.red)
@@ -506,11 +511,7 @@ private struct MainView: View {
                     systemImage: "gear"
                 ) {
                     isShowingAccountMenu = false
-                    NSApp.sendAction(
-                        Selector(("showSettingsWindow:")),
-                        to: nil,
-                        from: nil
-                    )
+                    openSettings()
                 }
 
                 Divider()
@@ -536,6 +537,7 @@ private struct MainView: View {
 
         @Environment(\.colorScheme) private var colorScheme
         @State private var isHovering = false
+        @ObservedObject private var preferences = AppPreferences.shared
 
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         private let rowCornerRadius: CGFloat = 10
@@ -604,12 +606,19 @@ private struct MainView: View {
             )
 
             if isSelected {
-                shape.fill(Color.caiSurface.opacity(0.85))
+                // Restrained Liquid Glass selection: translucent so the
+                // environmental background stays visible, with a soft accent
+                // wash instead of a saturated opaque rectangle.
+                shape
+                    .glassEffect(
+                        Glass.regular.tint(preferences.environmentalPalette.selectionTint),
+                        in: shape
+                    )
                     .overlay {
-                        shape.fill(Color.caiGlass.opacity(0.40))
-                    }
-                    .overlay {
-                        shape.strokeBorder(Color.white.opacity(0.08), lineWidth: 0.75)
+                        shape.strokeBorder(
+                            Color.white.opacity(colorScheme == .dark ? 0.10 : 0.16),
+                            lineWidth: 0.75
+                        )
                     }
             } else if isHovering {
                 shape.fill(Color.white.opacity(0.04))
@@ -643,8 +652,8 @@ private struct MainView: View {
                     }
                 } else {
                     fallbackAvatar
-                }
-            }
+                }            }
+
             .frame(
                 width: 36,
                 height: 36
@@ -654,15 +663,15 @@ private struct MainView: View {
         }
 
         private var fallbackAvatar: some View {
-            ZStack {
-                Circle()
-                    .fill(Color.caiSurface)
+            ZStack {                Circle()
+                    .fill(ShellEnvironmentalBackground.environmentalSurfaceTint(isDark: colorScheme == .dark))
 
                 Text(
                     conversation.characterName
                         .prefix(1)
                         .uppercased()
                 )
+
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color.caiText)
             }

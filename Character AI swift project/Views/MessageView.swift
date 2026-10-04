@@ -22,6 +22,7 @@ struct MessageView: View {
     @State private var editedText = ""
     @State private var isShowingActions = false
     @State private var isHoveringMessage = false
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     
     private func copyMessage(_ text: String) {
@@ -156,7 +157,7 @@ struct MessageView: View {
                                         .font(.system(size: 11, weight: .semibold))
                                         .foregroundStyle(Color.caiMuted)
                                         .frame(width: 22, height: 22)
-                                        .background(Circle().fill(Color.caiSurface.opacity(0.85)))
+                                        .background(Circle().fill(ShellEnvironmentalBackground.environmentalSurfaceTint(isDark: colorScheme == .dark)))
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("Message actions")
@@ -286,7 +287,7 @@ struct MessageView: View {
     private var fallbackAvatar: some View {
         ZStack {
             Circle()
-                .fill(Color.caiSurface)
+                .fill(ShellEnvironmentalBackground.environmentalSurfaceTint(isDark: colorScheme == .dark))
             
             Text(turn.authorName.prefix(1))
                 .font(.system(size: 13, weight: .semibold))

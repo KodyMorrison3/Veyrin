@@ -18,7 +18,20 @@ struct CharmsView: View {
     }
 
     var body: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Charms")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    Task { await viewModel.refresh() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(isLoading)
+                .help("Refresh Charms")
+            }
+            Group {
             switch viewModel.state {
             case .idle, .loading:
                 ProgressView("Loading Charms…")
@@ -45,19 +58,10 @@ struct CharmsView: View {
                 activity(transactions: transactions, quests: quests)
             }
         }
+        }
         .frame(minWidth: 440, minHeight: 320)
         .background { ShellEnvironmentalBackground() }
         .presentationBackground(.regularMaterial)
-        .toolbar {
-            ToolbarItem {
-                Button {
-                    Task { await viewModel.refresh() }
-                } label: {
-                    Label("Refresh Charms", systemImage: "arrow.clockwise")
-                }
-                .disabled(isLoading)
-            }
-        }
         .task {
             if case .idle = viewModel.state {
                 await viewModel.load()

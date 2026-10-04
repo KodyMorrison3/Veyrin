@@ -1,15 +1,16 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Shared Design System Tokens (matching Image 1 target specifications)
 extension Color {
     static let caiPrimary = Color(red: 0.482, green: 0.549, blue: 1.0)       // #7B8CFF
     static let caiAccent = Color(red: 0.431, green: 0.906, blue: 1.0)        // #6EE7FF
-    static let caiSurface = Color(red: 0.102, green: 0.122, blue: 0.200)      // #1A1F33
-    static let caiGlass = Color(red: 0.165, green: 0.184, blue: 0.333)        // #2A2F55
+    static let caiSurface = Color(red: 0.102, green: 0.122, blue: 0.243)      // #1A1F3E
+    static let caiGlass = Color(red: 0.176, green: 0.196, blue: 0.388)        // #2D3263
     static let caiText = Color(red: 0.949, green: 0.957, blue: 1.0)          // #F2F4FF
     static let caiMuted = Color(red: 0.631, green: 0.627, blue: 0.714)       // #A1A0B6
-    static let caiBackground = Color(red: 0.055, green: 0.067, blue: 0.118)  // #0E111E
+    static let caiBackground = Color(red: 0.059, green: 0.071, blue: 0.149)  // #0F1226
 }
 
 /// Board-derived geometry. Content stays open; only navigation and floating
@@ -28,28 +29,58 @@ enum GlassMetrics {
 
 /// Roles differ in readability and tint, not in increasingly elaborate borders.
 enum GlassSurfaceRole {
-    case navigation, floatingControl, popover, sheet, characterMessage, userMessage
+    case navigation, floatingControl, popover, sheet, characterMessage, userMessage, searchField, characterHeader
 
     var material: Material {
         switch self {
-        case .navigation, .userMessage: .ultraThin
+        case .navigation, .userMessage, .searchField, .characterHeader: .ultraThin
         case .floatingControl, .characterMessage: .thin
         case .popover, .sheet: .regular
         }
     }
 
-    func tint(isDark: Bool) -> Color {
+    func tint(isDark: Bool, palette: EnvironmentalPalette = AppPreferences.shared.environmentalPalette) -> Color {
+        let baseTint = palette.glassSurfaceTint
         switch self {
         case .characterMessage:
-            Color.caiSurface.opacity(isDark ? 0.85 : 0.70)
+            return baseTint.opacity(isDark ? 0.62 : 0.48)
         case .userMessage:
-            Color.caiGlass.opacity(isDark ? 0.75 : 0.50)
+            return baseTint.opacity(isDark ? 0.50 : 0.34)
         case .navigation:
-            Color.caiSurface.opacity(isDark ? 0.70 : 0.50)
+            return baseTint.opacity(isDark ? 0.38 : 0.30)
+        case .searchField:
+            return baseTint.opacity(isDark ? 0.28 : 0.20)
+        case .characterHeader:
+            // Rendered via system glass; fallback only for Reduce Transparency.
+            return baseTint.opacity(isDark ? 0.55 : 0.40)
         case .floatingControl:
-            Color.caiSurface.opacity(isDark ? 0.82 : 0.65)
+            return baseTint.opacity(isDark ? 0.82 : 0.65)
         case .popover, .sheet:
-            Color.caiSurface.opacity(isDark ? 0.92 : 0.85)
+            return baseTint.opacity(isDark ? 0.92 : 0.85)
+        }
+    }
+}
+
+/// Roles rendered with true system Liquid Glass (sampling in-window
+/// content) rather than a behind-window material wash.
+private extension GlassSurfaceRole {
+    var usesSystemGlass: Bool {
+        self == .navigation || self == .searchField || self == .characterHeader
+    }
+
+    /// Restrained tints for system-glass roles derived from the active environment.
+    /// Search sits inside the navigation panel, so it stays lighter to read as one
+    /// coherent surface. The character header floats over the environment, so it
+    /// stays lighter still: the blurred wallpaper reads through instead of an opaque wash.
+    func systemGlassTint(isDark: Bool, palette: EnvironmentalPalette = AppPreferences.shared.environmentalPalette) -> Color {
+        let baseTint = palette.glassSurfaceTint
+        switch self {
+        case .searchField:
+            return baseTint.opacity(isDark ? 0.16 : 0.12)
+        case .characterHeader:
+            return baseTint.opacity(isDark ? 0.12 : 0.08)
+        default:
+            return baseTint.opacity(isDark ? 0.32 : 0.24)
         }
     }
 }
@@ -62,6 +93,7 @@ struct GlassSurfaceBackground: View {
     var cornerRadius: CGFloat = GlassMetrics.controlRadius
     var isFocused = false
 
+    @ObservedObject private var preferences = AppPreferences.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -72,29 +104,48 @@ struct GlassSurfaceBackground: View {
     }
 
     var body: some View {
+        // Observed so every glass surface re-renders the moment the shared
+        // environmental palette changes (wallpaper, solid colour, artwork).
+        let palette = preferences.environmentalPalette
         ZStack {
             if reduceTransparency {
-                shape.fill(Color.caiSurface)
+                shape.fill(palette.glassSurfaceTint)
+            } else if role.usesSystemGlass {
+                // Navigation panels and the search capsule are true system
+                // Liquid Glass: the environmental background reads through
+                // with a restrained tint instead of a stacked opaque
+                // wash, so the sidebar stays one coherent surface.
+                shape.fill(Color.clear)
+                    .glassEffect(
+                        Glass.regular.tint(role.systemGlassTint(isDark: isDark, palette: palette)),
+                        in: shape
+                    )
             } else {
                 shape.fill(role.material)
-            }
-            shape.fill(role.tint(isDark: isDark))
+                shape.fill(role.tint(isDark: isDark, palette: palette))
 
-            // Subtle top-leading rim light for native Liquid Glass depth
-            shape.strokeBorder(
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(role == .userMessage ? 0.14 : (isDark ? 0.08 : 0.12)),
-                        Color.white.opacity(0.02)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                lineWidth: 0.75
-            )
+                if role == .userMessage {
+                    // Board: user bubbles read brighter/neutral against the
+                    // indigo character surface. One recipe, a white lift only.
+                    shape.fill(Color.white.opacity(isDark ? 0.14 : 0.20))
+                }
+
+                // Subtle top-leading rim light for native Liquid Glass depth
+                shape.strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(role == .userMessage ? 0.14 : (isDark ? 0.08 : 0.12)),
+                            Color.white.opacity(0.02)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.75
+                )
+            }
 
             if isFocused {
-                shape.strokeBorder(Color.caiPrimary.opacity(0.6), lineWidth: 1)
+                shape.strokeBorder(palette.ambientColor.opacity(0.6), lineWidth: 1)
             }
         }
         .animation(reduceMotion ? nil : GlassMetrics.interaction, value: isFocused)
@@ -149,13 +200,26 @@ extension View {
     }
 }
 
-/// Artwork is supplied by an image already loaded or an avatar URL.
-/// Softened, blurred, and tinted so text remains 100% readable while
-/// creating the rich atmospheric environment from Image 1.
+/// Unified global environmental background system.
+///
+/// Serves as the single source of truth across the entire app:
+/// 1. Default: Heavy blur (~36pt) on character avatar/artwork as an environmental
+///    color/light source rather than something clearly visible.
+/// 2. Custom Wallpaper: Noticeably lighter/moderate blur (~15pt, within 12–18pt) so the user's
+///    wallpaper remains recognizable and visually present while softened for Liquid Glass.
+/// 3. Solid Colour: No image blur; solid base with atmospheric/vignette treatment.
+/// Default-mode artwork extraction lives in `AppPreferences`
+/// (`updateDefaultEnvironment(forAvatarURL:)`) so that every surface reads a
+/// single shared palette instead of each view deriving its own environment.
 struct ShellEnvironmentalBackground: View {
     var artwork: Image? = nil
     var avatarURL: URL? = nil
+    /// Scales the readability vignette. The default preserves the main
+    /// window; secondary surfaces (e.g. Settings) pass a lower value so the
+    /// blurred environment contributes visibly rather than reading as a dark slab.
+    var vignetteStrength: Double = 1.0
 
+    @ObservedObject private var preferences = AppPreferences.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -164,51 +228,57 @@ struct ShellEnvironmentalBackground: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                Color.caiBackground
+                activePalette.atmosphericBase
 
                 if !reduceTransparency {
-                    if let artwork {
-                        artwork
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: geometry.size.width, height: geometry.size.height)
-                            .clipped()
-                            .saturation(0.85)
-                            .blur(radius: 45)
-                            .opacity(isDark ? 0.35 : 0.20)
-                    } else if let avatarURL {
-                        AsyncImage(url: avatarURL) { phase in
-                            if case .success(let image) = phase {
-                                image
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: geometry.size.width, height: geometry.size.height)
-                                    .clipped()
-                                    .saturation(0.85)
-                                    .blur(radius: 45)
-                                    .opacity(isDark ? 0.35 : 0.20)
-                            }
+                    switch preferences.backgroundMode {
+                    case .customWallpaper:
+                        if let customImage = preferences.customWallpaper {
+                            Image(nsImage: customImage)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: geometry.size.width, height: geometry.size.height)
+                                .clipped()
+                                .saturation(0.95)
+                                .blur(radius: 15, opaque: true)
+                                .opacity(isDark ? 0.85 : 0.60)
+                        } else {
+                            defaultArtworkView(geometry: geometry)
                         }
+
+                    case .solidColor:
+                        // In solid color mode, the solid color base fills the environment.
+                        // We provide a soft atmospheric texture over it.
+                        preferences.solidColor
+                            .opacity(isDark ? 0.90 : 0.75)
+
+                    case .default:
+                        defaultArtworkView(geometry: geometry)
                     }
                 }
 
-                // Vignette gradient for text readability and depth
+                // Vignette gradient for text readability and depth using the dynamic atmospheric base
                 LinearGradient(
                     colors: [
-                        Color.caiBackground.opacity(0.70),
+                        activePalette.atmosphericBase.opacity(0.40 * vignetteStrength),
                         Color.clear,
-                        Color.caiBackground.opacity(0.80)
+                        activePalette.atmosphericBase.opacity(0.55 * vignetteStrength)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
 
-                // Atmospheric ambient lighting
+                // Atmospheric ambient lighting dynamically tinted from the active environment
+                // Top-trailing highlight using ambientHighlight and ambientColor
                 RadialGradient(
-                    colors: [Color.caiPrimary.opacity(isDark ? 0.09 : 0.04), .clear],
+                    colors: [
+                        activePalette.ambientHighlight.opacity(isDark ? 0.16 : 0.08),
+                        activePalette.ambientColor.opacity(isDark ? 0.10 : 0.05),
+                        Color.clear
+                    ],
                     center: .topTrailing,
                     startRadius: 0,
-                    endRadius: max(geometry.size.width, geometry.size.height) * 0.7
+                    endRadius: max(geometry.size.width, geometry.size.height) * 0.75
                 )
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
@@ -216,6 +286,54 @@ struct ShellEnvironmentalBackground: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+        .onAppear {
+            preferences.updateDefaultEnvironment(forAvatarURL: avatarURL)
+        }
+        .onChange(of: avatarURL) { _, newURL in
+            preferences.updateDefaultEnvironment(forAvatarURL: newURL)
+        }
+    }
+
+    /// Global translucency-exempt access point for surfaces that must remain solid
+    /// (selection headers, fallback avatars, profile cards) while still reacting to
+    /// the active environmental wallpaper color.
+    static func environmentalSurfaceTint(isDark: Bool) -> Color {
+        let palette = AppPreferences.shared.environmentalPalette
+        return palette.atmosphericBase.opacity(isDark ? 0.85 : 0.55)
+    }
+
+    /// The single shared palette. Every background mode publishes its derived
+    /// palette through `AppPreferences`, so the shell and all glass surfaces
+    /// always render from the same wallpaper-derived color family.
+    private var activePalette: EnvironmentalPalette {
+        preferences.environmentalPalette
+    }
+
+    @ViewBuilder
+    private func defaultArtworkView(geometry: GeometryProxy) -> some View {
+        if let artwork {
+            artwork
+                .resizable()
+                .scaledToFill()
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped()
+                .saturation(0.90)
+                .blur(radius: 36, opaque: true)
+                .opacity(isDark ? 0.80 : 0.55)
+        } else if let avatarURL {
+            AsyncImage(url: avatarURL) { phase in
+                if case .success(let image) = phase {
+                    image
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                        .saturation(0.90)
+                        .blur(radius: 36, opaque: true)
+                        .opacity(isDark ? 0.80 : 0.55)
+                }
+            }
+        }
     }
 }
 

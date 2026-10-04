@@ -108,7 +108,7 @@ struct UserProfileControl: View {
 
     private var fallback: some View {
         ZStack {
-            Circle().fill(.secondary.opacity(0.15))
+            Circle().fill(AppPreferences.shared.environmentalPalette.glassSurfaceTint)
             Text(String(viewModel.username.prefix(1)).uppercased())
                 .font(.headline)
         }
@@ -118,6 +118,7 @@ struct UserProfileControl: View {
 /// Popover content: the loaded public profile.
 struct UserProfileDetailView: View {
     @ObservedObject var viewModel: UserProfileViewModel
+    @Environment(\.openSettings) private var openSettings
     let onSelectCharacter: (String) -> Void
 
     var body: some View {
@@ -168,6 +169,19 @@ struct UserProfileDetailView: View {
                                 .background(.tint.opacity(0.15), in: Capsule())
                         }
                     }
+                    Spacer(minLength: 8)
+                    Button {
+                        openSettings()
+                    } label: {
+                        Image(systemName: "gear")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 28, height: 28)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(QuietHoverButtonStyle())
+                    .help("Preferences…")
+                    .accessibilityLabel("Open Preferences")
                 }
 
                 if let bio = profile.bio.nonEmpty {
@@ -233,7 +247,7 @@ struct UserProfileDetailView: View {
 
     private var fallbackAvatar: some View {
         ZStack {
-            Circle().fill(.secondary.opacity(0.15))
+            Circle().fill(AppPreferences.shared.environmentalPalette.glassSurfaceTint)
             Text(String(viewModel.username.prefix(1)).uppercased())
                 .font(.title3.bold())
         }
@@ -277,10 +291,13 @@ struct UserProfileDetailView: View {
         }
     }
 
+    @MainActor
     private func fallbackAvatar(fileName: String?, name: String?) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8).fill(.secondary.opacity(0.15))
-            Text(String((name ?? "?").prefix(1)).uppercased())
+        let initial = (name ?? fileName) ?? "?"
+        return ZStack {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(AppPreferences.shared.environmentalPalette.glassSurfaceTint)
+            Text(String(initial.prefix(1)).uppercased())
                 .font(.headline)
         }
         .frame(width: 44, height: 44)
