@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct ChatView: View {
     @StateObject private var viewModel: ChatViewModel
+    @ObservedObject private var preferences = AppPreferences.shared
     @State private var messageText = ""
     @State private var attachments: [ComposerAttachment] = []
     @State private var attachmentNotice: String?
@@ -137,15 +138,7 @@ struct ChatView: View {
             floatingCharacterToolbar
                 .padding(.top, 10)
         }
-        .background {
-            ShellEnvironmentalBackground(
-                artwork: environmentalArtwork,
-                avatarURL: CharacterImageURL.makeURL(
-                    avatarFileName: avatarFileName ?? viewModel.character?.avatarFileName ?? ""
-                )
-            )
-            .ignoresSafeArea()
-        }
+        // MainView owns the full-window environment, including this column.
         .confirmationDialog(
             "Rewind conversation?",
             isPresented: Binding(
@@ -560,12 +553,7 @@ struct ChatView: View {
         .padding(20)
         .frame(minWidth: 400, minHeight: 460)
         .background {
-            ShellEnvironmentalBackground(
-                artwork: environmentalArtwork,
-                avatarURL: CharacterImageURL.makeURL(
-                    avatarFileName: avatarFileName ?? viewModel.character?.avatarFileName ?? ""
-                )
-            )
+            ShellEnvironmentalBackground()
         }
         .presentationBackground(.regularMaterial)
     }

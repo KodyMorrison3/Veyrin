@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct MessageView: View {
+    @ObservedObject private var preferences = AppPreferences.shared
     let turn: Turn
     let character: Character?
     let onRegenerate: (() -> Void)?

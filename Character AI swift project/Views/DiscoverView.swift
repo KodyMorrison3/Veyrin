@@ -33,7 +33,7 @@ struct DiscoverView: View {
         }
         // Place search within the native toolbar rather than below its wash.
         .scrollEdgeEffectHidden()
-        .background { ShellEnvironmentalBackground() }
+        // Inherits MainView's full-window ShellEnvironmentalBackground.
         .navigationTitle("Discover")
         .task {
             await viewModel.loadInitialPages()

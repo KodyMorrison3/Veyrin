@@ -16,6 +16,7 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @ObservedObject private var preferences = AppPreferences.shared
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var selectedPane: SettingsPane = .account
     @State private var isConfirmingReset = false
     @State private var isShowingCharms = false
@@ -101,7 +102,8 @@ struct SettingsView: View {
         }
         // Seamless frosted window: uses the unified ShellEnvironmentalBackground
         // with reduced vignette so the environmental wallpaper softly anchors the window
-        // under the thin material while remaining responsive to wallpaper color.
+        // while remaining responsive to wallpaper color. No behind-window material
+        // may sample an unrelated desktop colour.
         // Both layers ignore the safe area so the glass extends under the title
         // bar: the title reads as text over the environment instead of a dark
         // system-material slab.
@@ -109,12 +111,18 @@ struct SettingsView: View {
             ShellEnvironmentalBackground(vignetteStrength: 0.6)
                 .ignoresSafeArea()
         }
-        .background(.thinMaterial, ignoresSafeAreaEdges: .all)
         // Keep native toolbar behaviour but remove the default window-wide
         // material shelf (same treatment as the main window). The older
         // .toolbarBackground(.hidden, for:) API does not suppress the
         // system Liquid Glass shelf on recent macOS.
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .containerBackground(.clear, for: .window)
+        .background {
+            WindowTransparencyBridge(
+                transparency: preferences.windowTransparency,
+                reduceTransparency: reduceTransparency
+            )
+        }
     }
 
     // MARK: - Shared presentation
@@ -124,19 +132,8 @@ struct SettingsView: View {
     /// rectangle. Unselected rows are intentionally bare glass.
     @ViewBuilder
     private func settingsRowBackground(isSelected: Bool) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
         if isSelected {
-            shape
-                .glassEffect(
-                    Glass.regular.tint(AppPreferences.shared.environmentalPalette.selectionTint),
-                    in: shape
-                )
-                .overlay {
-                    shape.strokeBorder(
-                        Color.white.opacity(colorScheme == .dark ? 0.10 : 0.16),
-                        lineWidth: 0.75
-                    )
-                }
+            EnvironmentalSelectionBackground(cornerRadius: 9)
         }
     }
 
@@ -292,6 +289,94 @@ struct SettingsView: View {
                         .buttonStyle(.plain)
                         .font(.callout)
                         .foregroundStyle(Color.caiPrimary)
+                    }
+                }
+
+                settingsSection(
+                    title: "Environmental Materials",
+                    footer: reduceTransparency
+                        ? "Reduce Transparency is enabled in macOS. Translucent and transparency effects are disabled; your choices are retained."
+                        : "Window Transparency allows the desktop to show through behind the wallpaper. Glass Opacity adjusts Liquid Glass surface strength. Wallpaper Blur controls the softening applied to background images."
+                ) {
+                    // 1. Wallpaper Blur
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Wallpaper Blur")
+                            Spacer()
+                            Text(preferences.backgroundMode == .solidColor
+                                 ? "Not applied to Solid Colour"
+                                 : "\(Int(preferences.wallpaperBlur)) pt · \(preferences.wallpaperBlurOverride == nil ? "Automatic" : "Manual")")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Slider(value: Binding(
+                            get: { preferences.wallpaperBlur },
+                            set: { preferences.wallpaperBlur = $0 }
+                        ), in: AppPreferences.wallpaperBlurRange, step: 1) {
+                            Text("Wallpaper Blur")
+                        } minimumValueLabel: { Text("0 pt") }
+                          maximumValueLabel: { Text("40 pt") }
+                        .accessibilityValue("\(Int(preferences.wallpaperBlur)) points")
+                        .disabled(reduceTransparency || preferences.backgroundMode == .solidColor)
+
+                        Button("Reset to Default") { preferences.resetWallpaperBlur() }
+                            .accessibilityLabel("Reset Wallpaper Blur to Default")
+                            .disabled(preferences.wallpaperBlurOverride == nil)
+                        Text("Automatic: character artwork 36 pt; custom wallpaper 16 pt. Moving the slider overrides both image modes until reset.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+
+                    Divider().padding(.vertical, 4)
+
+                    // 2. Glass Opacity
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Glass Opacity")
+                            Spacer()
+                            Text("\(Int((preferences.glassOpacity * 100).rounded()))%")
+                                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                        }
+                        Slider(value: Binding(
+                            get: { preferences.glassOpacity },
+                            set: { preferences.glassOpacity = $0 }
+                        ), in: AppPreferences.glassOpacityRange, step: 0.01) {
+                            Text("Glass Opacity")
+                        } minimumValueLabel: { Text("More wallpaper") }
+                          maximumValueLabel: { Text("More glass") }
+                        .accessibilityValue("\(Int((preferences.glassOpacity * 100).rounded())) percent")
+                        .disabled(reduceTransparency)
+
+                        Button("Reset to Default") { preferences.resetGlassOpacity() }
+                            .accessibilityLabel("Reset Glass Opacity to Default")
+                            .disabled(abs(preferences.glassOpacity - AppPreferences.defaultGlassOpacity) < 0.001)
+                        Text("Governs the opacity and density of Liquid Glass surfaces (sidebar, message bubbles, composer, header) independently of window transparency.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+
+                    Divider().padding(.vertical, 4)
+
+                    // 3. Window Transparency
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Window Transparency")
+                            Spacer()
+                            Text("\(Int((preferences.windowTransparency * 100).rounded()))%")
+                                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                        }
+                        Slider(value: Binding(
+                            get: { preferences.windowTransparency },
+                            set: { preferences.windowTransparency = $0 }
+                        ), in: AppPreferences.windowTransparencyRange, step: 0.01) {
+                            Text("Window Transparency")
+                        } minimumValueLabel: { Text("Opaque (0%)") }
+                          maximumValueLabel: { Text("80%") }
+                        .accessibilityValue("\(Int((preferences.windowTransparency * 100).rounded())) percent")
+                        .disabled(reduceTransparency)
+
+                        Button("Reset to Default") { preferences.resetWindowTransparency() }
+                            .accessibilityLabel("Reset Window Transparency to Default")
+                            .disabled(abs(preferences.windowTransparency - AppPreferences.defaultWindowTransparency) < 0.001)
+                        Text("Controls how much of the desktop shows through the application window. Text, buttons, and content controls always remain crisp and readable.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
 

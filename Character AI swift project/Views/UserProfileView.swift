@@ -21,6 +21,7 @@ import SwiftUI
  */
 struct UserProfileControl: View {
     let viewModel: UserProfileViewModel
+    @ObservedObject private var preferences = AppPreferences.shared
     let menuAction: () -> Void
     let profileAction: (String) -> Void
 
@@ -108,7 +109,7 @@ struct UserProfileControl: View {
 
     private var fallback: some View {
         ZStack {
-            Circle().fill(AppPreferences.shared.environmentalPalette.glassSurfaceTint)
+            Circle().fill(preferences.environmentalPalette.glassSurfaceTint)
             Text(String(viewModel.username.prefix(1)).uppercased())
                 .font(.headline)
         }
@@ -118,6 +119,7 @@ struct UserProfileControl: View {
 /// Popover content: the loaded public profile.
 struct UserProfileDetailView: View {
     @ObservedObject var viewModel: UserProfileViewModel
+    @ObservedObject private var preferences = AppPreferences.shared
     @Environment(\.openSettings) private var openSettings
     let onSelectCharacter: (String) -> Void
 
@@ -247,7 +249,7 @@ struct UserProfileDetailView: View {
 
     private var fallbackAvatar: some View {
         ZStack {
-            Circle().fill(AppPreferences.shared.environmentalPalette.glassSurfaceTint)
+            Circle().fill(preferences.environmentalPalette.glassSurfaceTint)
             Text(String(viewModel.username.prefix(1)).uppercased())
                 .font(.title3.bold())
         }
@@ -296,7 +298,7 @@ struct UserProfileDetailView: View {
         let initial = (name ?? fileName) ?? "?"
         return ZStack {
             RoundedRectangle(cornerRadius: 8)
-                .fill(AppPreferences.shared.environmentalPalette.glassSurfaceTint)
+                .fill(preferences.environmentalPalette.glassSurfaceTint)
             Text(String(initial.prefix(1)).uppercased())
                 .font(.headline)
         }

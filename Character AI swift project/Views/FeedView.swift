@@ -40,7 +40,7 @@ struct FeedView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .background { ShellEnvironmentalBackground() }
+        // Inherits MainView's full-window ShellEnvironmentalBackground.
         .navigationTitle("Feed")
         .task {
             if viewModel.shouldLoad { await viewModel.load() }

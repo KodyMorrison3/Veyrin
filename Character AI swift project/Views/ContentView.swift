@@ -15,6 +15,8 @@ struct ContentView: View {
 private struct MainView: View {
     let authStore: AuthStore
 
+    @ObservedObject private var preferences = AppPreferences.shared
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @StateObject private var viewModel: ChatViewModel
     @State private var selectedChatID: String?
     @State private var conversationSearchText = ""
@@ -91,6 +93,13 @@ private struct MainView: View {
             // Keep the native toolbar items interactive, but remove its default
             // window-wide material shelf.
             .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        }
+        .containerBackground(.clear, for: .window)
+        .background {
+            WindowTransparencyBridge(
+                transparency: preferences.windowTransparency,
+                reduceTransparency: reduceTransparency
+            )
         }
         .task {
             await viewModel.loadRecentChats()
@@ -408,7 +417,6 @@ private struct MainView: View {
     @State private var isShowingUserProfile = false
     @State private var isShowingAccountMenu = false
     @State private var isConfirmingSignOut = false
-    @ObservedObject private var preferences = AppPreferences.shared
     @Environment(\.openSettings) private var openSettings
 
     private var userProfileControl: some View {
@@ -527,6 +535,7 @@ private struct MainView: View {
         }
         .padding(8)
         .frame(width: 220)
+        .background { ShellEnvironmentalBackground() }
         .presentationBackground(.regularMaterial)
     }
 
@@ -588,6 +597,7 @@ private struct MainView: View {
             .padding(.horizontal, 8)
             .background(rowBackground)
             .contentShape(Rectangle())
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
             .onHover { isHovering = $0 }
             .animation(reduceMotion ? nil : GlassMetrics.interaction, value: isSelected)
             .animation(reduceMotion ? nil : GlassMetrics.interaction, value: isHovering)
@@ -606,20 +616,7 @@ private struct MainView: View {
             )
 
             if isSelected {
-                // Restrained Liquid Glass selection: translucent so the
-                // environmental background stays visible, with a soft accent
-                // wash instead of a saturated opaque rectangle.
-                shape
-                    .glassEffect(
-                        Glass.regular.tint(preferences.environmentalPalette.selectionTint),
-                        in: shape
-                    )
-                    .overlay {
-                        shape.strokeBorder(
-                            Color.white.opacity(colorScheme == .dark ? 0.10 : 0.16),
-                            lineWidth: 0.75
-                        )
-                    }
+                EnvironmentalSelectionBackground(cornerRadius: rowCornerRadius)
             } else if isHovering {
                 shape.fill(Color.white.opacity(0.04))
             } else {

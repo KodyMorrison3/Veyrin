@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CharacterProfileView: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var preferences = AppPreferences.shared
     @StateObject private var viewModel: CharacterViewModel
 
     let characterID: String
@@ -222,7 +223,7 @@ struct CharacterProfileView: View {
     private func avatarFallback(name: String?, size: CGFloat) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12)
-                .fill(AppPreferences.shared.environmentalPalette.glassSurfaceTint)
+                .fill(preferences.environmentalPalette.glassSurfaceTint)
             Text(String((name ?? "?").prefix(1)).uppercased())
                 .font(.system(size: size * 0.4, weight: .semibold))
         }

@@ -54,6 +54,9 @@ final class AppPreferences: ObservableObject {
         static let showPopularTrending = "preferences.showPopularTrending"
         static let backgroundMode = "preferences.backgroundMode"
         static let solidColorHex = "preferences.solidColorHex"
+        static let wallpaperBlurOverride = "preferences.wallpaperBlurOverride"
+        static let glassOpacity = "preferences.glassOpacity"
+        static let windowTransparency = "preferences.windowTransparency"
     }
 
     /// Shape of list/card avatars (sidebar rows, Discover cards). In-chat
@@ -71,10 +74,19 @@ final class AppPreferences: ObservableObject {
 
     /// Environmental background mode across the entire app:
     /// - Default: character avatar/artwork with derived environmental tone.
-    /// - Custom Wallpaper: user image blurred into atmospheric environment.
+    /// - Custom Wallpaper: recognizable user image softened behind glass.
     /// - Solid Colour: user solid background colour underneath glass.
     @Published var backgroundMode: BackgroundMode {
-        didSet { defaults.set(backgroundMode.rawValue, forKey: Keys.backgroundMode) }
+        didSet {
+            defaults.set(backgroundMode.rawValue, forKey: Keys.backgroundMode)
+            updateDerivedColors()
+            if backgroundMode == .default {
+                updateDefaultEnvironment(forAvatarURL: defaultArtworkURL)
+            } else {
+                defaultArtworkTask?.cancel()
+                defaultArtworkTask = nil
+            }
+        }
     }
 
     /// Selected solid environmental background colour.
@@ -85,21 +97,109 @@ final class AppPreferences: ObservableObject {
         }
     }
 
+    static let wallpaperBlurRange = 0.0...40.0
+    static let glassOpacityRange = 0.20...0.85
+    static let defaultGlassOpacity = 0.45
+    static let defaultArtworkBlur = 36.0
+    static let customWallpaperBlur = 16.0
+
+    static let windowTransparencyRange = 0.0...0.80
+    static let defaultWindowTransparency = 0.0
+
+    /// nil means mode-aware automatic blur; a manual override survives mode changes.
+    @Published private(set) var wallpaperBlurOverride: Double?
+    @Published private var storedGlassOpacity: Double
+    @Published private var storedWindowTransparency: Double
+
+    var wallpaperBlur: Double {
+        get {
+            guard backgroundMode != .solidColor else { return 0 }
+            return wallpaperBlurOverride ?? (backgroundMode == .default
+                ? Self.defaultArtworkBlur : Self.customWallpaperBlur)
+        }
+        set {
+            wallpaperBlurOverride = Self.clamped(newValue, to: Self.wallpaperBlurRange,
+                                                fallback: Self.defaultArtworkBlur)
+            defaults.set(wallpaperBlurOverride, forKey: Keys.wallpaperBlurOverride)
+        }
+    }
+
+    var glassOpacity: Double {
+        get { storedGlassOpacity }
+        set {
+            storedGlassOpacity = Self.clamped(newValue, to: Self.glassOpacityRange,
+                                              fallback: Self.defaultGlassOpacity)
+            defaults.set(storedGlassOpacity, forKey: Keys.glassOpacity)
+        }
+    }
+
+    /// User-facing Window Transparency (0% = fully opaque window, 80% = max supported transparency).
+    var windowTransparency: Double {
+        get { storedWindowTransparency }
+        set {
+            storedWindowTransparency = Self.clamped(newValue, to: Self.windowTransparencyRange,
+                                                    fallback: Self.defaultWindowTransparency)
+            defaults.set(storedWindowTransparency, forKey: Keys.windowTransparency)
+        }
+    }
+
+    /// Backing opacity for the window environmental foundation (1.0 = fully opaque, 0.20 = max transparent).
+    var windowEnvironmentOpacity: Double {
+        1.0 - windowTransparency
+    }
+
+    /// Visibility ratio for the environmental base layers (1.0 = opaque window, 0.20 = max transparent).
+    var environmentVisibility: Double {
+        windowEnvironmentOpacity
+    }
+
+    /// Shared glass density adjustment for translucent surfaces.
+    var additionalGlassDensity: Double { max(0, glassOpacity - Self.defaultGlassOpacity) * 0.70 }
+
+    func resetWallpaperBlur() {
+        wallpaperBlurOverride = nil
+        defaults.removeObject(forKey: Keys.wallpaperBlurOverride)
+    }
+
+    func resetGlassOpacity() {
+        glassOpacity = Self.defaultGlassOpacity
+        defaults.removeObject(forKey: Keys.glassOpacity)
+    }
+
+    func resetWindowTransparency() {
+        windowTransparency = Self.defaultWindowTransparency
+        defaults.removeObject(forKey: Keys.windowTransparency)
+    }
+
+    private static func clamped(_ value: Double, to range: ClosedRange<Double>, fallback: Double) -> Double {
+        value.isFinite ? min(max(value, range.lowerBound), range.upperBound) : fallback
+    }
+
     /// Loaded custom wallpaper image from local disk.
     @Published private(set) var customWallpaper: NSImage? {
-        didSet { updateDerivedColors() }
+        didSet {
+            customWallpaperAmbientColor = customWallpaper?.averageColor().map { Color(nsColor: $0) }
+            updateDerivedColors()
+        }
     }
 
     /// Dominant / derived ambient lighting color extracted from the active environment.
-    @Published private(set) var derivedAmbientColor: Color = Color.caiPrimary
+    @Published private(set) var derivedAmbientColor: Color = EnvironmentalPalette.defaultPalette.ambientColor
 
     /// Complete environmental color palette derived from the active wallpaper / solid color.
     @Published private(set) var environmentalPalette: EnvironmentalPalette = EnvironmentalPalette.defaultPalette
 
+    /// Shared artwork also supplies secondary windows (Settings, profiles, sheets).
+    @Published private(set) var defaultArtwork: NSImage?
+
+    private var customWallpaperAmbientColor: Color?
+    private var defaultArtworkTask: Task<Void, Never>?
     private let defaults: UserDefaults
+    private let persistedWallpaperURL: URL?
     private let fileManager = FileManager.default
 
     private var wallpaperFileURL: URL {
+        if let persistedWallpaperURL { return persistedWallpaperURL }
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
         let dir = appSupport.appendingPathComponent("CharacterAI", isDirectory: true)
@@ -109,8 +209,9 @@ final class AppPreferences: ObservableObject {
         return dir.appendingPathComponent("custom_wallpaper.png")
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, wallpaperURL: URL? = nil) {
         self.defaults = defaults
+        self.persistedWallpaperURL = wallpaperURL
         let stored = defaults.string(forKey: Keys.avatarShape)
         avatarShape = stored.flatMap(AvatarShape.init(rawValue:)) ?? .circle
         let storedShow = defaults.object(forKey: Keys.showPopularTrending) as? Bool
@@ -119,10 +220,23 @@ final class AppPreferences: ObservableObject {
         let storedMode = defaults.string(forKey: Keys.backgroundMode)
         backgroundMode = storedMode.flatMap(BackgroundMode.init(rawValue:)) ?? .default
 
+        wallpaperBlurOverride = (defaults.object(forKey: Keys.wallpaperBlurOverride) as? NSNumber).map {
+            Self.clamped($0.doubleValue, to: Self.wallpaperBlurRange, fallback: Self.defaultArtworkBlur)
+        }
+        storedGlassOpacity = Self.clamped(
+            (defaults.object(forKey: Keys.glassOpacity) as? NSNumber)?.doubleValue ?? Self.defaultGlassOpacity,
+            to: Self.glassOpacityRange, fallback: Self.defaultGlassOpacity
+        )
+        storedWindowTransparency = Self.clamped(
+            (defaults.object(forKey: Keys.windowTransparency) as? NSNumber)?.doubleValue ?? Self.defaultWindowTransparency,
+            to: Self.windowTransparencyRange, fallback: Self.defaultWindowTransparency
+        )
+
         let storedHex = defaults.string(forKey: Keys.solidColorHex) ?? "#0F1226"
         solidColor = Color(hex: storedHex) ?? Color(red: 0.059, green: 0.071, blue: 0.149)
 
         loadPersistedWallpaper()
+        customWallpaperAmbientColor = customWallpaper?.averageColor().map { Color(nsColor: $0) }
         updateDerivedColors()
     }
 
@@ -200,31 +314,38 @@ final class AppPreferences: ObservableObject {
     /// (Settings, popovers) pass nil and are ignored, so they can never
     /// overwrite the shared environment with their own tint.
     func updateDefaultEnvironment(forAvatarURL url: URL?) {
-        guard backgroundMode == .default, let url else { return }
-        if url == defaultArtworkURL,
-           let palette = defaultArtworkPalette,
-           environmentalPalette == palette {
-            return
+        guard let url else { return }
+        if url != defaultArtworkURL {
+            defaultArtworkTask?.cancel()
+            defaultArtworkTask = nil
+            defaultArtworkURL = url
+            defaultArtwork = nil
+            defaultArtworkPalette = nil
+            if backgroundMode == .default { updateDerivedColors() }
         }
-        defaultArtworkURL = url
+        // Track the selected artwork even in Custom/Solid mode, so reverting
+        // to Default uses the current character rather than a stale palette.
+        guard backgroundMode == .default, defaultArtworkPalette == nil,
+              defaultArtworkTask == nil else { return }
 
-        Task { @MainActor [weak self] in
+        defaultArtworkTask = Task { @MainActor [weak self] in
+            defer {
+                if !Task.isCancelled, self?.defaultArtworkURL == url {
+                    self?.defaultArtworkTask = nil
+                }
+            }
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
-                guard let self,
+                guard !Task.isCancelled, let self,
                       self.backgroundMode == .default,
                       self.defaultArtworkURL == url,
                       let image = NSImage(data: data),
-                      let avg = image.averageColor() else {
-                    return
-                }
-                let color = Color(nsColor: avg)
-                let palette = EnvironmentalPalette.from(color: color)
-                self.derivedAmbientColor = color
-                self.defaultArtworkPalette = palette
-                self.environmentalPalette = palette
+                      let avg = image.averageColor() else { return }
+                self.defaultArtwork = image
+                self.defaultArtworkPalette = EnvironmentalPalette.from(color: Color(nsColor: avg))
+                self.updateDerivedColors()
             } catch {
-                // Keep the current palette on network failure.
+                // A neutral fallback, never an unrelated brand-colour wash.
             }
         }
     }
@@ -239,19 +360,18 @@ final class AppPreferences: ObservableObject {
                 derivedAmbientColor = palette.ambientColor
                 environmentalPalette = palette
             } else {
-                derivedAmbientColor = Color.caiPrimary
+                derivedAmbientColor = EnvironmentalPalette.defaultPalette.ambientColor
                 environmentalPalette = EnvironmentalPalette.defaultPalette
             }
         case .solidColor:
             derivedAmbientColor = solidColor
             environmentalPalette = EnvironmentalPalette.from(color: solidColor)
         case .customWallpaper:
-            if let customWallpaper, let avg = customWallpaper.averageColor() {
-                let color = Color(nsColor: avg)
+            if let color = customWallpaperAmbientColor {
                 derivedAmbientColor = color
                 environmentalPalette = EnvironmentalPalette.from(color: color)
             } else {
-                derivedAmbientColor = Color.caiPrimary
+                derivedAmbientColor = EnvironmentalPalette.defaultPalette.ambientColor
                 environmentalPalette = EnvironmentalPalette.defaultPalette
             }
         }
@@ -262,6 +382,9 @@ final class AppPreferences: ObservableObject {
     func resetToDefaults() {
         avatarShape = .circle
         showPopularTrending = true
+        resetWallpaperBlur()
+        resetGlassOpacity()
+        resetWindowTransparency()
         backgroundMode = .default
         solidColor = Color(red: 0.059, green: 0.071, blue: 0.149)
         clearCustomWallpaper()
@@ -269,6 +392,9 @@ final class AppPreferences: ObservableObject {
         defaults.removeObject(forKey: Keys.showPopularTrending)
         defaults.removeObject(forKey: Keys.backgroundMode)
         defaults.removeObject(forKey: Keys.solidColorHex)
+        defaults.removeObject(forKey: Keys.wallpaperBlurOverride)
+        defaults.removeObject(forKey: Keys.glassOpacity)
+        defaults.removeObject(forKey: Keys.windowTransparency)
     }
 }
 
@@ -311,34 +437,35 @@ extension Color {
 extension NSImage {
     /// Fast average color extraction for ambient lighting tint.
     func averageColor() -> NSColor? {
-        guard let tiff = tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff) else {
-            return nil
+        guard let image = cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        // Normalize arbitrary image profiles/formats to a small sRGB buffer.
+        // This keeps extraction independent of the original bitmap representation.
+        let size = 16
+        var pixels = [UInt8](repeating: 0, count: size * size * 4)
+        let drawn = pixels.withUnsafeMutableBytes { bytes -> Bool in
+            guard let context = CGContext(data: bytes.baseAddress, width: size, height: size,
+                                          bitsPerComponent: 8, bytesPerRow: size * 4,
+                                          space: space,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.interpolationQuality = .medium
+            context.draw(image, in: CGRect(x: 0, y: 0, width: size, height: size))
+            return true
         }
-        let w = rep.pixelsWide
-        let h = rep.pixelsHigh
-        guard w > 0, h > 0 else { return nil }
-
-        var rTotal: CGFloat = 0
-        var gTotal: CGFloat = 0
-        var bTotal: CGFloat = 0
-        var count: CGFloat = 0
-
-        let stepX = max(1, w / 16)
-        let stepY = max(1, h / 16)
-
-        for y in stride(from: 0, to: h, by: stepY) {
-            for x in stride(from: 0, to: w, by: stepX) {
-                if let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) {
-                    rTotal += color.redComponent
-                    gTotal += color.greenComponent
-                    bTotal += color.blueComponent
-                    count += 1
-                }
-            }
+        guard drawn else { return nil }
+        var red = 0, green = 0, blue = 0, alpha = 0
+        for index in stride(from: 0, to: pixels.count, by: 4) {
+            // RGB is premultiplied: divide by total alpha, not pixel count,
+            // to exclude transparent borders from the atmospheric colour.
+            red += Int(pixels[index])
+            green += Int(pixels[index + 1])
+            blue += Int(pixels[index + 2])
+            alpha += Int(pixels[index + 3])
         }
-        guard count > 0 else { return nil }
-        return NSColor(srgbRed: rTotal / count, green: gTotal / count, blue: bTotal / count, alpha: 1.0)
+        guard alpha > 0 else { return nil }
+        return NSColor(srgbRed: CGFloat(red) / CGFloat(alpha),
+                       green: CGFloat(green) / CGFloat(alpha),
+                       blue: CGFloat(blue) / CGFloat(alpha), alpha: 1)
     }
 }
 
@@ -362,14 +489,22 @@ struct EnvironmentalPalette: Equatable {
     /// Translucent tint for selected items (sidebar rows, segmented controls).
     let selectionTint: Color
 
-    /// Default palette: matches the native dark indigo/blue brand atmosphere.
-    static let defaultPalette = EnvironmentalPalette(
-        atmosphericBase: Color(red: 0.059, green: 0.071, blue: 0.149), // #0F1226
-        ambientColor: Color.caiPrimary,                                  // #7B8CFF
-        ambientHighlight: Color(red: 0.431, green: 0.906, blue: 1.0),   // #6EE7FF
-        glassSurfaceTint: Color(red: 0.102, green: 0.122, blue: 0.243), // #1A1F3E
-        selectionTint: Color.caiPrimary.opacity(0.22)
-    )
+    /// No artwork yet (or unavailable): neutral, not a permanent brand gradient.
+    static let defaultPalette = make(color: Color(.sRGB, white: 0.18, opacity: 1),
+                                     hue: 0, saturation: 0, brightness: 0.18)
+
+    /// Opaque accessible fallback. Light appearance needs a light surface for
+    /// semantic black text; dark appearance keeps the deeper environmental tone.
+    func opaqueSurface(isDark: Bool) -> Color {
+        if isDark { return glassSurfaceTint }
+        guard let source = NSColor(ambientColor).usingColorSpace(.sRGB) else { return .white }
+        var hue: CGFloat = 0
+        var saturation: CGFloat = 0
+        var brightness: CGFloat = 0
+        var alpha: CGFloat = 0
+        source.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        return Color(hue: Double(hue), saturation: Double(saturation * 0.12), brightness: 0.96)
+    }
 
     /// Dynamically constructs an environmental tonal palette from any arbitrary source color.
     static func from(color: Color) -> EnvironmentalPalette {
@@ -383,37 +518,23 @@ struct EnvironmentalPalette: Equatable {
         var alpha: CGFloat = 0
         nsColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
 
-        // 1. Deep atmospheric base: Keep the source hue with low brightness and moderate saturation
-        // so dark floor gradients remain within the exact wallpaper color family.
-        let baseBrightness = min(max(brightness * 0.12, 0.04), 0.15)
-        let baseSaturation = min(max(saturation * 0.70, 0.15), 0.85)
-        let baseNS = NSColor(hue: hue, saturation: baseSaturation, brightness: baseBrightness, alpha: 1.0)
-        let atmosphericBase = Color(nsColor: baseNS)
+        return make(color: color, hue: hue, saturation: saturation, brightness: brightness)
+    }
 
-        // 2. Base ambient color: The source color itself.
-        let ambientColor = color
-
-        // 3. Ambient highlight: Lifted brightness and softened saturation within the same hue.
-        let highlightBrightness = min(brightness * 1.25 + 0.15, 1.0)
-        let highlightSaturation = max(saturation * 0.75, 0.15)
-        let highlightNS = NSColor(hue: hue, saturation: highlightSaturation, brightness: highlightBrightness, alpha: 1.0)
-        let ambientHighlight = Color(nsColor: highlightNS)
-
-        // 4. Glass surface tint: Subtle translucent tint keeping hue cohesion.
-        let surfaceBrightness = min(max(brightness * 0.22, 0.08), 0.26)
-        let surfaceSaturation = min(max(saturation * 0.55, 0.12), 0.70)
-        let surfaceNS = NSColor(hue: hue, saturation: surfaceSaturation, brightness: surfaceBrightness, alpha: 1.0)
-        let glassSurfaceTint = Color(nsColor: surfaceNS)
-
-        // 5. Selection tint: Clean translucent accent tint for selected list rows and buttons.
-        let selectionTint = color.opacity(0.24)
-
+    private static func make(color: Color, hue: CGFloat, saturation: CGFloat,
+                             brightness: CGFloat) -> EnvironmentalPalette {
+        // All tones keep the source hue. No minimum saturation: greys, black,
+        // and white must stay neutral rather than acquiring an arbitrary hue.
+        func tone(saturation factor: CGFloat, brightness value: CGFloat) -> Color {
+            Color(hue: Double(hue), saturation: Double(saturation * factor),
+                  brightness: Double(value))
+        }
         return EnvironmentalPalette(
-            atmosphericBase: atmosphericBase,
-            ambientColor: ambientColor,
-            ambientHighlight: ambientHighlight,
-            glassSurfaceTint: glassSurfaceTint,
-            selectionTint: selectionTint
+            atmosphericBase: tone(saturation: 0.70, brightness: max(brightness * 0.12, 0.04)),
+            ambientColor: color,
+            ambientHighlight: tone(saturation: 0.65, brightness: min(brightness * 1.20 + 0.18, 1)),
+            glassSurfaceTint: tone(saturation: 0.55, brightness: max(brightness * 0.22, 0.08)),
+            selectionTint: color.opacity(0.24)
         )
     }
 }
