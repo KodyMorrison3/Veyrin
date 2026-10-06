@@ -23,6 +23,7 @@ xcuserdata/
 /ContractTests/
 /ContractTests/*
 /Docs/
+/Tests/
 
 # Swift Package Manager
 .build/
