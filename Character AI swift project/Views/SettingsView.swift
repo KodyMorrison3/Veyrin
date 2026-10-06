@@ -232,7 +232,7 @@ struct SettingsView: View {
                                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                                .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+                                                .strokeBorder(Color.primary.opacity(0.15), lineWidth: 1)
                                         )
 
                                     VStack(alignment: .leading, spacing: 4) {
@@ -296,7 +296,7 @@ struct SettingsView: View {
                     title: "Environmental Materials",
                     footer: reduceTransparency
                         ? "Reduce Transparency is enabled in macOS. Translucent and transparency effects are disabled; your choices are retained."
-                        : "Window Transparency allows the desktop to show through behind the wallpaper. Glass Opacity adjusts Liquid Glass surface strength. Wallpaper Blur controls the softening applied to background images."
+                        : "Window Transparency adjusts the environmental foundation (true per-pixel desktop transparency is not safely exposed by SwiftUI while preserving readable content). Glass Opacity adjusts Liquid Glass surface strength. Wallpaper Blur controls the softening applied to background images."
                 ) {
                     // 1. Wallpaper Blur
                     VStack(alignment: .leading, spacing: 8) {
@@ -375,7 +375,7 @@ struct SettingsView: View {
                         Button("Reset to Default") { preferences.resetWindowTransparency() }
                             .accessibilityLabel("Reset Window Transparency to Default")
                             .disabled(abs(preferences.windowTransparency - AppPreferences.defaultWindowTransparency) < 0.001)
-                        Text("Controls how much of the desktop shows through the application window. Text, buttons, and content controls always remain crisp and readable.")
+                        Text("Adjusts how strongly the wallpaper/environment is composited beneath the interface. AppKit only exposes opaque or clear window backing; whole-window alpha is intentionally avoided so text and controls remain crisp.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }

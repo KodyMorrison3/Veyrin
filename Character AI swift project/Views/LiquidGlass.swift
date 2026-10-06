@@ -29,18 +29,44 @@ enum GlassSurfaceRole {
     case navigation, floatingControl, popover, sheet, characterMessage, userMessage, searchField, characterHeader
 
     /// In-window Liquid Glass for every role, including the bottom profile
-    /// control. Behind-window NSVisualEffect materials can sample the desktop
-    /// and introduce a foreign green/blue cast despite a correct palette.
-    func systemGlassTint(isDark: Bool, palette: EnvironmentalPalette) -> Color {
+    /// control. Scales smoothly with preferences.glassTintScale.
+    func systemGlassTint(isDark: Bool, palette: EnvironmentalPalette, tintScale: Double = 1.0) -> Color {
         let baseTint = palette.glassSurfaceTint
+        let scale = tintScale
+        // Light mode uses lower system tint: macOS regular glass already adds a
+        // strong milky lift over bright environmental wallpapers.
         switch self {
-        case .navigation: return baseTint.opacity(isDark ? 0.32 : 0.24)
-        case .searchField: return baseTint.opacity(isDark ? 0.16 : 0.12)
-        case .characterHeader: return baseTint.opacity(isDark ? 0.12 : 0.08)
-        case .floatingControl: return baseTint.opacity(isDark ? 0.22 : 0.16)
-        case .characterMessage: return baseTint.opacity(isDark ? 0.42 : 0.30)
-        case .userMessage: return baseTint.opacity(isDark ? 0.18 : 0.12)
-        case .popover, .sheet: return baseTint.opacity(isDark ? 0.36 : 0.26)
+        case .navigation: return baseTint.opacity((isDark ? 0.32 : 0.13) * scale)
+        case .searchField: return baseTint.opacity((isDark ? 0.16 : 0.07) * scale)
+        case .characterHeader: return baseTint.opacity((isDark ? 0.12 : 0.045) * scale)
+        case .floatingControl: return baseTint.opacity((isDark ? 0.22 : 0.09) * scale)
+        case .characterMessage: return baseTint.opacity((isDark ? 0.42 : 0.19) * scale)
+        case .userMessage: return baseTint.opacity((isDark ? 0.18 : 0.07) * scale)
+        case .popover, .sheet: return baseTint.opacity((isDark ? 0.36 : 0.15) * scale)
+        }
+    }
+
+    /// Subtle material wash derived from the active wallpaper tone. Using the
+    /// source color rather than white avoids the milky white slab effect in light mode.
+    func environmentalWash(isDark: Bool, palette: EnvironmentalPalette) -> Color {
+        switch self {
+        case .navigation: return palette.atmosphericBase.opacity(isDark ? 0.12 : 0.055)
+        case .searchField: return palette.ambientColor.opacity(isDark ? 0.035 : 0.025)
+        case .characterHeader: return palette.ambientColor.opacity(isDark ? 0.045 : 0.03)
+        case .floatingControl: return palette.ambientColor.opacity(isDark ? 0.08 : 0.045)
+        case .characterMessage: return palette.ambientColor.opacity(isDark ? 0.13 : 0.075)
+        case .userMessage: return palette.ambientHighlight.opacity(isDark ? 0.08 : 0.10)
+        case .popover, .sheet: return palette.atmosphericBase.opacity(isDark ? 0.11 : 0.055)
+        }
+    }
+
+    var lightModeRimOpacity: Double {
+        switch self {
+        case .navigation, .searchField, .characterHeader: return 0.045
+        case .floatingControl: return 0.065
+        case .characterMessage: return 0.075
+        case .userMessage: return 0.11
+        case .popover, .sheet: return 0.055
         }
     }
 }
@@ -73,27 +99,31 @@ struct GlassSurfaceBackground: View {
             } else {
                 shape.fill(Color.clear)
                     .glassEffect(
-                        Glass.regular.tint(role.systemGlassTint(isDark: isDark, palette: palette)),
+                        Glass.regular.tint(role.systemGlassTint(isDark: isDark, palette: palette, tintScale: preferences.glassTintScale)),
                         in: shape
                     )
 
-                // Increase density behind content, never dim text/icons/controls.
-                shape.fill(palette.opaqueSurface(isDark: isDark)
-                    .opacity(preferences.additionalGlassDensity))
+                // Scale glass density without creating a uniform opaque white card.
+                // The density wash remains tinted by the wallpaper-derived palette.
+                shape.fill(palette.glassSurfaceTint
+                    .opacity(preferences.additionalGlassDensity * (isDark ? 1.0 : 0.55)))
+                shape.fill(role.environmentalWash(isDark: isDark, palette: palette))
 
                 if role == .userMessage {
-                    // User bubbles get a neutral lift; character bubbles retain
-                    // greater environmental depth without a separate hue.
-                    shape.fill(Color.white.opacity(isDark ? 0.14 : 0.20))
+                    // Light neutral lift keeps user messages brighter than character
+                    // messages without bleaching out their wallpaper environment.
+                    shape.fill(Color.white.opacity(isDark ? 0.10 : 0.055))
                 }
 
                 if role == .userMessage || role == .characterMessage || role == .floatingControl {
-                    // Preserve the existing subtle neutral rim on small surfaces.
+                    // Light-mode rims use a restrained dark edge for definition;
+                    // dark mode keeps the existing soft highlight.
+                    let rim = isDark ? Color.white : Color.black
                     shape.strokeBorder(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(role == .userMessage ? 0.14 : (isDark ? 0.08 : 0.12)),
-                                Color.white.opacity(0.02)
+                                rim.opacity(isDark ? (role == .userMessage ? 0.10 : 0.08) : role.lightModeRimOpacity),
+                                rim.opacity(0.008)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -191,6 +221,7 @@ struct ShellEnvironmentalBackground: View {
                     activePalette.opaqueSurface(isDark: isDark)
                 } else {
                     activePalette.atmosphericBase
+                        .opacity(preferences.environmentVisibility)
                 }
 
                 if !reduceTransparency {
@@ -466,7 +497,10 @@ struct WindowTransparencyBridge: NSViewRepresentable {
                 let shouldBeTransparent = self.currentTransparency > 0.001 && !self.currentReduceTransparency
                 if shouldBeTransparent {
                     if window.isOpaque { window.isOpaque = false }
+                    // Clear backing lets the shell’s environmentVisibility composite over the desktop.
+                    // AppKit has only opaque/clear backing here; alphaValue is avoided so text stays crisp.
                     if window.backgroundColor != .clear { window.backgroundColor = .clear }
+                    window.hasShadow = true
                 } else {
                     if !window.isOpaque { window.isOpaque = true }
                     if window.backgroundColor != .windowBackgroundColor { window.backgroundColor = .windowBackgroundColor }

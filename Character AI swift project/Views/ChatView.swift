@@ -12,6 +12,8 @@ struct ChatView: View {
     @State private var turnToRewind: Turn?
     @State private var turnToStartConversationFrom: Turn?
     @State private var selectedModelType: String?
+    @State private var isShowingMemory = false
+    @State private var selectedHistoryChat: RecentChat?
     @State private var environmentalArtwork: Image?
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -192,6 +194,19 @@ struct ChatView: View {
         )) {
             modelSelectionSheet
         }
+        .sheet(isPresented: $isShowingMemory) {
+            MemoryFactsSheet(
+                facts: viewModel.conversationFacts,
+                isLoading: viewModel.isLoadingFacts,
+                errorMessage: viewModel.conversationFactsErrorMessage,
+                dismiss: { isShowingMemory = false }
+            )
+            .frame(width: 520, height: 460)
+            .background { ShellEnvironmentalBackground(vignetteStrength: 0.35) }
+            .presentationBackground(.regularMaterial)
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
         .alert(
             "Unable to Start New Conversation",
             isPresented: Binding(
@@ -223,9 +238,33 @@ struct ChatView: View {
                 externalID: characterID
             )
 
+            await viewModel.loadChat(
+                chatID: chatID
+            )
+
             await viewModel.loadRealTurns(
                 chatID: chatID
             )
+
+            await viewModel.loadCharacterVotedStatus(
+                characterID: characterID
+            )
+
+            await viewModel.loadRecentCharacterChats(
+                characterID: characterID
+            )
+
+            await viewModel.loadAvailableModels()
+
+            await PersonaStore.shared.fetchRemotePersonas(
+                authenticatedClient: viewModel.authenticatedHTTPClient,
+                currentCharacterID: characterID
+            )
+        }
+        .onChange(of: viewModel.chat?.preferredModelType) {
+            if let modelType = viewModel.chat?.preferredModelType, !modelType.isEmpty {
+                selectedModelType = modelType
+            }
         }
         .onChange(of: viewModel.availableModels.map(\.modelType)) {
             guard selectedModelType == nil,
@@ -274,44 +313,9 @@ struct ChatView: View {
 
             Spacer(minLength: 16)
 
-            // Target action icons: Call, Favorite, Share, More
+            // Like mutation is not confirmed, so expose only the passive
+            // character-details menu rather than a misleading local-only heart.
             HStack(spacing: 4) {
-                Button {
-                    // Call / audio action
-                } label: {
-                    Image(systemName: "phone")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.caiMuted)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(QuietHoverButtonStyle())
-                .help("Voice Call")
-
-                Button {
-                    // Favorite action
-                } label: {
-                    Image(systemName: "star")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.caiMuted)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(QuietHoverButtonStyle())
-                .help("Favorite")
-
-                Button {
-                    // Share action
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.caiMuted)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(QuietHoverButtonStyle())
-                .help("Share Character")
-
                 Menu {
                     if let character = viewModel.character {
                         Text(character.name)
@@ -341,20 +345,51 @@ struct ChatView: View {
         .animation(reduceMotion ? nil : GlassMetrics.interaction, value: viewModel.character != nil)
     }
 
-    /// Unified capsule composer: attachment, input with the sticker
+    /// Unified capsule composer: Persona avatar, attachment, input with sticker
     /// accessory, and send share one continuous Liquid Glass capsule.
     /// Behaviour — FocusState, Return-to-send, generating and disabled
     /// states — is unchanged.
     private var composer: some View {
-        HStack(alignment: .center, spacing: 8) {                Button {
-                    presentImageOpenPanel()
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color.caiMuted)
-                        .frame(width: 28, height: 28)
-                        .background(Circle().fill(ShellEnvironmentalBackground.environmentalSurfaceTint(isDark: isDark)))
+        HStack(alignment: .center, spacing: 8) {
+            // Persona avatar entry point on the left
+            ComposerPersonaAvatarButton(
+                currentCharacterID: viewModel.character?.externalID,
+                authenticatedHTTPClient: viewModel.authenticatedHTTPClient,
+                availableModels: viewModel.availableModels,
+                selectedModelType: selectedModelType,
+                currentModelType: viewModel.chat?.preferredModelType,
+                recentChats: viewModel.recentCharacterChats,
+                onSelectModel: { modelType in
+                    selectedModelType = modelType
+                    guard let turn = viewModel.turns.last(where: { $0.chatID == chatID }) else { return }
+                    Task {
+                        guard let newChatID = await viewModel.createConversation(from: turn, modelType: modelType) else {
+                            return
+                        }
+                        selectedHistoryChat = nil
+                        onConversationCreated?(newChatID)
+                    }
+                },
+                isLoadingFacts: viewModel.isLoadingFacts,
+                factsErrorMessage: viewModel.conversationFactsErrorMessage,
+                onOpenMemory: {
+                    isShowingMemory = true
+                    Task { await viewModel.loadFacts(chatID: chatID) }
+                },
+                onOpenHistory: { recentChat in
+                    selectedHistoryChat = recentChat
                 }
+            )
+
+            Button {
+                presentImageOpenPanel()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.caiMuted)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(ShellEnvironmentalBackground.environmentalSurfaceTint(isDark: isDark)))
+            }
             .buttonStyle(.plain)
             .help("Attach an image")
 
@@ -389,17 +424,7 @@ struct ChatView: View {
             }
 
             if !viewModel.isGenerating {
-                Button {
-                    // Stickers & GIFs: presentation-only until a
-                    // sticker/GIF source is confirmed.
-                } label: {
-                    Image(systemName: "photo.on.rectangle.angled")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Color.caiMuted)
                 }
-                .buttonStyle(.plain)
-                .help("Stickers & GIFs")
-            }
 
             Button { sendMessage() } label: {
                 Image(systemName: "arrow.up")
@@ -647,7 +672,7 @@ struct ChatView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
                 }
                 .help(attachment.fileName)
             Button {
@@ -750,32 +775,12 @@ struct ChatView: View {
         if let avatarURL = CharacterImageURL.makeURL(
             avatarFileName: character.avatarFileName
         ) {
-            AsyncImage(url: avatarURL) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                        .onAppear { environmentalArtwork = image }
-
-                case .failure:
-                    fallbackHeaderAvatar(
-                        character: character
-                    )
-
-                case .empty:
-                    ProgressView()
-                        .controlSize(.small)
-
-                @unknown default:
-                    fallbackHeaderAvatar(
-                        character: character
-                    )
-                }
+            CachedAvatarView(url: avatarURL) {
+                fallbackHeaderAvatar(character: character)
             }
             .frame(width: 30, height: 30)
             .clipShape(Circle())
-            .overlay(Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+            .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
         } else {
             fallbackHeaderAvatar(
                 character: character

@@ -97,7 +97,51 @@ struct ConversationService {
             throw NetworkError.invalidURL
         }
 
-        return try await httpClient.get(url)
+        // Try decoding ChatResponse container first as confirmed by the HAR: {"chat": {...}, "metadata": {...}}
+        do {
+            let container: ChatResponse = try await authenticatedHTTPClient.get(url)
+            return container.chat
+        } catch {
+            return try await authenticatedHTTPClient.get(url)
+        }
+    }
+
+    /// Fetches verified conversation facts (Memory) for the current chat from:
+    /// `GET https://neo.character.ai/chat/{chatID}/conversation-facts/`
+    func loadConversationFacts(chatID: String) async throws -> ConversationFactsResponse {
+        guard let url = URL(
+            string: "https://neo.character.ai/chat/\(chatID)/conversation-facts/"
+        ) else {
+            throw NetworkError.invalidURL
+        }
+
+        return try await authenticatedHTTPClient.get(url)
+    }
+
+    /// Fetches verified character voted status from:
+    /// `GET https://neo.character.ai/character/v1/character_voted/{characterID}/voted`
+    func loadCharacterVoted(characterID: String) async throws -> Bool {
+        guard let url = URL(
+            string: "https://neo.character.ai/character/v1/character_voted/\(characterID)/voted"
+        ) else {
+            throw NetworkError.invalidURL
+        }
+
+        let response: CharacterVotedResponse = try await authenticatedHTTPClient.get(url)
+        return response.voted
+    }
+
+    /// Fetches verified recent chat history for a specific character from:
+    /// `GET https://neo.character.ai/chats/recent/{characterID}`
+    func loadCharacterRecentChats(characterID: String) async throws -> [RecentChat] {
+        guard let url = URL(
+            string: "https://neo.character.ai/chats/recent/\(characterID)"
+        ) else {
+            throw NetworkError.invalidURL
+        }
+
+        let response: RecentChatsResponse = try await authenticatedHTTPClient.get(url)
+        return response.chats
     }
 
     func loadAllTurns(

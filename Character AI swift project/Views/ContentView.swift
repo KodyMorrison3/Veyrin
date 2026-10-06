@@ -546,7 +546,6 @@ private struct MainView: View {
 
         @Environment(\.colorScheme) private var colorScheme
         @State private var isHovering = false
-        @ObservedObject private var preferences = AppPreferences.shared
 
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         private let rowCornerRadius: CGFloat = 10
@@ -618,7 +617,7 @@ private struct MainView: View {
             if isSelected {
                 EnvironmentalSelectionBackground(cornerRadius: rowCornerRadius)
             } else if isHovering {
-                shape.fill(Color.white.opacity(0.04))
+                shape.fill(Color.primary.opacity(0.04))
             } else {
                 shape.fill(Color.clear)
             }
@@ -629,34 +628,19 @@ private struct MainView: View {
                 if let avatarURL = CharacterImageURL.makeURL(
                     avatarFileName: conversation.characterAvatarURI
                 ) {
-                    AsyncImage(url: avatarURL) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-
-                        case .failure:
-                            fallbackAvatar
-
-                        case .empty:
-                            ProgressView()
-                                .controlSize(.small)
-
-                        @unknown default:
-                            fallbackAvatar
-                        }
+                    CachedAvatarView(url: avatarURL) {
+                        fallbackAvatar
                     }
                 } else {
                     fallbackAvatar
-                }            }
-
+                }
+            }
             .frame(
                 width: 36,
                 height: 36
             )
             .clipShape(Circle())
-            .overlay(Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+            .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
         }
 
         private var fallbackAvatar: some View {
@@ -678,15 +662,17 @@ private struct MainView: View {
             )
         }
 
-        private var relativeDate: String {
+        private static let relativeDateFormatter: ISO8601DateFormatter = {
             let formatter = ISO8601DateFormatter()
-
             formatter.formatOptions = [
                 .withInternetDateTime,
                 .withFractionalSeconds
             ]
+            return formatter
+        }()
 
-            guard let date = formatter.date(
+        private var relativeDate: String {
+            guard let date = Self.relativeDateFormatter.date(
                 from: conversation.lastUpdated
             ) else {
                 return ""

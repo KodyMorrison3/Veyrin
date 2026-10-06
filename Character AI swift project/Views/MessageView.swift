@@ -8,7 +8,6 @@
 import SwiftUI
 
 struct MessageView: View {
-    @ObservedObject private var preferences = AppPreferences.shared
     let turn: Turn
     let character: Character?
     let onRegenerate: (() -> Void)?
@@ -258,23 +257,8 @@ struct MessageView: View {
                let avatarURL = CharacterImageURL.makeURL(
                 avatarFileName: character.avatarFileName
                ) {
-                AsyncImage(url: avatarURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                        
-                    case .failure:
-                        fallbackAvatar
-                        
-                    case .empty:
-                        ProgressView()
-                            .controlSize(.small)
-                        
-                    @unknown default:
-                        fallbackAvatar
-                    }
+                CachedAvatarView(url: avatarURL) {
+                    fallbackAvatar
                 }
             } else {
                 fallbackAvatar
@@ -282,7 +266,7 @@ struct MessageView: View {
         }
         .frame(width: 32, height: 32)
         .clipShape(Circle())
-        .overlay(Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+        .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
     }
     
     private var fallbackAvatar: some View {

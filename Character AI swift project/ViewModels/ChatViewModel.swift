@@ -7,6 +7,9 @@
 
 import Foundation
 import Combine
+import OSLog
+
+private let chatLogger = Logger(subsystem: "CharacterAI", category: "Chat")
 
 @MainActor
 final class ChatViewModel: ObservableObject {
@@ -29,6 +32,14 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var isCreatingConversationFromTurn = false
     @Published var startConversationErrorMessage: String?
 
+    // Verified endpoints state:
+    @Published private(set) var isCharacterVoted: Bool = false
+    @Published private(set) var conversationFacts: [String: [ConversationFact]] = [:]
+    @Published private(set) var conversationFactsErrorMessage: String?
+    @Published private(set) var recentCharacterChats: [RecentChat] = []
+    @Published private(set) var isLoadingFacts = false
+    @Published private(set) var isLoadingCharacterHistory = false
+
     private struct PendingPinRequest {
         let chatID: String
         let turnID: String
@@ -41,8 +52,9 @@ final class ChatViewModel: ObservableObject {
     private var isReceivingWebSocketMessage = false
     private var receiveWaiters: [CheckedContinuation<Void, Never>] = []
 
-    private let authStore: AuthStore
+    let authStore: AuthStore
     private let conversationService: ConversationService
+    let authenticatedHTTPClient: AuthenticatedHTTPClient
     private let webSocketClient = WebSocketClient()
 
     init(
@@ -50,10 +62,10 @@ final class ChatViewModel: ObservableObject {
         conversationService: ConversationService? = nil
     ) {
         self.authStore = authStore
+        let client = AuthenticatedHTTPClient(authStore: authStore)
+        self.authenticatedHTTPClient = client
         self.conversationService = conversationService ?? ConversationService(
-            authenticatedHTTPClient: AuthenticatedHTTPClient(
-                authStore: authStore
-            )
+            authenticatedHTTPClient: client
         )
     }
 
@@ -161,6 +173,48 @@ final class ChatViewModel: ObservableObject {
         isLoading = false
     }
 
+    /// Loads conversation facts from GET https://neo.character.ai/chat/{chatID}/conversation-facts/
+    func loadFacts(chatID: String) async {
+        isLoadingFacts = true
+        conversationFactsErrorMessage = nil
+        defer { isLoadingFacts = false }
+        do {
+            let response = try await conversationService.loadConversationFacts(chatID: chatID)
+            var mapped: [String: [ConversationFact]] = [:]
+            if let factsDict = response.conversationFacts {
+                for (entity, container) in factsDict {
+                    mapped[entity] = container.facts
+                }
+            }
+            self.conversationFacts = mapped
+        } catch {
+            conversationFactsErrorMessage = error.localizedDescription
+            chatLogger.error("Conversation facts request failed: \(error.localizedDescription, privacy: .private)")
+        }
+    }
+
+    /// Loads character voted state from GET https://neo.character.ai/character/v1/character_voted/{characterID}/voted
+    func loadCharacterVotedStatus(characterID: String) async {
+        do {
+            let voted = try await conversationService.loadCharacterVoted(characterID: characterID)
+            self.isCharacterVoted = voted
+        } catch {
+            chatLogger.error("Character vote-status request failed: \(error.localizedDescription, privacy: .private)")
+        }
+    }
+
+    /// Loads recent chats for character from GET https://neo.character.ai/chats/recent/{characterID}
+    func loadRecentCharacterChats(characterID: String) async {
+        isLoadingCharacterHistory = true
+        defer { isLoadingCharacterHistory = false }
+        do {
+            let chats = try await conversationService.loadCharacterRecentChats(characterID: characterID)
+            self.recentCharacterChats = chats
+        } catch {
+            chatLogger.error("Character history request failed: \(error.localizedDescription, privacy: .private)")
+        }
+    }
+
     func loadRealTurns(
         chatID: String
     ) async {
@@ -171,10 +225,6 @@ final class ChatViewModel: ObservableObject {
             return
         }
         self.character = character
-
-        print("LOADING CHAT HISTORY")
-        print("CHAT ID:", chatID)
-        print("CHARACTER ID:", character.externalID)
 
         if activeChatID != chatID {
             let hadPendingPins = !pendingPinRequests.isEmpty
@@ -210,18 +260,13 @@ final class ChatViewModel: ObservableObject {
                 )
             } catch {
                 // Ordinary history remains usable if the pinned-only query fails.
-                print("LOAD PINNED TURN IDS ERROR:", error)
+                chatLogger.error("Pinned-turn lookup failed: \(error.localizedDescription, privacy: .private)")
                 pinnedIDs = []
             }
             guard activeChatID == chatID else {
                 isLoading = false
                 return
             }
-
-            print(
-                "TOTAL TURNS LOADED:",
-                apiTurns.count
-            )
 
             turns = apiTurns.map { apiTurn in
                 let isPinned = apiTurn.isPinned
@@ -233,16 +278,8 @@ final class ChatViewModel: ObservableObject {
                 )
             }
 
-            print(
-                "UI TURN COUNT:",
-                turns.count
-            )
-
         } catch {
-            print(
-                "LOAD TURNS ERROR:",
-                error
-            )
+            chatLogger.error("Conversation history request failed: \(error.localizedDescription, privacy: .private)")
 
             errorMessage =
                 error.localizedDescription
@@ -306,11 +343,6 @@ final class ChatViewModel: ObservableObject {
                         message: trimmedContent
                     )
 
-            print("SENDING MESSAGE")
-            print("CHAT ID:", chatID)
-            print("CHARACTER ID:", character.externalID)
-            print("MESSAGE:", trimmedContent)
-
             try await webSocketClient.send(
                 message
             )
@@ -342,18 +374,7 @@ final class ChatViewModel: ObservableObject {
                             from: data
                         )
 
-                    print(
-                        "CHARACTER.AI ERROR:"
-                    )
-
-                    print(
-                        errorResponse.comment
-                    )
-
-                    print(
-                        "ERROR CODE:",
-                        errorResponse.errorCode
-                    )
+                    chatLogger.error("Character.AI rejected message generation (code \(errorResponse.errorCode, privacy: .public))")
 
                     if errorResponse.errorCode == 403 {
                         throw NetworkError.serverMessage(
@@ -373,55 +394,18 @@ final class ChatViewModel: ObservableObject {
                     )
 
                 guard let turn = message.turn else {
-                    print(
-                        "WEBSOCKET MESSAGE WITHOUT TURN:"
-                    )
-
-                    print(response)
+                    chatLogger.error("WebSocket response did not contain a turn")
 
                     throw NetworkError.serverMessage(
                         "Character.AI returned a response without a conversation turn."
                     )
                 }
 
-                print("RECEIVED TURN")
-                print(
-                    "REQUEST CHAT ID:",
-                    chatID
-                )
-
-                print(
-                    "RESPONSE CHAT ID:",
-                    turn.turnKey.chatID
-                )
-
-                print(
-                    "TURN ID:",
-                    turn.turnKey.turnID
-                )
-
-                print(
-                    "AUTHOR:",
-                    turn.author.name
-                )
-
                 guard activeChatID == chatID else {
                     break
                 }
                 guard turn.turnKey.chatID == chatID else {
-                    print(
-                        "IGNORING TURN FROM DIFFERENT CHAT"
-                    )
-
-                    print(
-                        "EXPECTED CHAT:",
-                        chatID
-                    )
-
-                    print(
-                        "RECEIVED CHAT:",
-                        turn.turnKey.chatID
-                    )
+                    chatLogger.error("Ignored a WebSocket turn for a different active conversation")
 
                     continue
                 }
@@ -458,10 +442,7 @@ final class ChatViewModel: ObservableObject {
             try await finishPendingPinResponses(chatID: chatID)
         } catch {
             failPendingPinRequests(forChatID: chatID, error: error)
-            print(
-                "SEND MESSAGE ERROR:",
-                error
-            )
+            chatLogger.error("Message generation failed: \(error.localizedDescription, privacy: .private)")
             errorMessage =
                 error.localizedDescription
         }
@@ -523,11 +504,6 @@ final class ChatViewModel: ObservableObject {
                     turnID: turnID
                 )
 
-            print("REGENERATING RESPONSE")
-            print("CHAT ID:", chatID)
-            print("TURN ID:", turnID)
-            print("CHARACTER ID:", character.externalID)
-
             try await webSocketClient.send(
                 message
             )
@@ -559,9 +535,7 @@ final class ChatViewModel: ObservableObject {
                             from: data
                         )
 
-                    print("CHARACTER.AI ERROR:")
-                    print(errorResponse.comment)
-                    print("ERROR CODE:", errorResponse.errorCode)
+                    chatLogger.error("Character.AI rejected response regeneration (code \(errorResponse.errorCode, privacy: .public))")
 
                     throw NetworkError.serverMessage(
                         errorResponse.comment
@@ -619,10 +593,7 @@ final class ChatViewModel: ObservableObject {
             try await finishPendingPinResponses(chatID: chatID)
         } catch {
             failPendingPinRequests(forChatID: chatID, error: error)
-            print(
-                "REGENERATE RESPONSE ERROR:",
-                error
-            )
+            chatLogger.error("Response regeneration failed: \(error.localizedDescription, privacy: .private)")
             errorMessage =
                 error.localizedDescription
         }
@@ -680,11 +651,6 @@ final class ChatViewModel: ObservableObject {
                     newContent: newContent
                 )
 
-            print("EDITING MESSAGE")
-            print("CHAT ID:", chatID)
-            print("TURN ID:", turnID)
-            print("CANDIDATE ID:", candidateID)
-
             try await webSocketClient.send(
                 message
             )
@@ -716,9 +682,7 @@ final class ChatViewModel: ObservableObject {
                             from: data
                         )
 
-                    print("CHARACTER.AI ERROR:")
-                    print(errorResponse.comment)
-                    print("ERROR CODE:", errorResponse.errorCode)
+                    chatLogger.error("Character.AI rejected response regeneration (code \(errorResponse.errorCode, privacy: .public))")
 
                     throw NetworkError.serverMessage(
                         errorResponse.comment
@@ -735,11 +699,6 @@ final class ChatViewModel: ObservableObject {
                     continue
                 }
                 
-                print("EDIT UPDATE RECEIVED")
-                print("TURN ID:", updatedTurn.turnKey.turnID)
-                print("CHAT ID:", updatedTurn.turnKey.chatID)
-                print("PRIMARY CANDIDATE ID:", updatedTurn.primaryCandidateID)
-            
                 guard activeChatID == chatID else {
                     break
                 }
@@ -790,14 +749,12 @@ final class ChatViewModel: ObservableObject {
             try await finishPendingPinResponses(chatID: chatID)
         } catch {
             failPendingPinRequests(forChatID: chatID, error: error)
-            print(
-                "EDIT MESSAGE ERROR:",
-                error
-            )
+            chatLogger.error("Message edit failed: \(error.localizedDescription, privacy: .private)")
             errorMessage =
                 error.localizedDescription
         }
     }
+
 
     func loadAvailableModels() async {
         isLoadingAvailableModels = true
@@ -1148,46 +1105,11 @@ final class ChatViewModel: ObservableObject {
             recentChats =
                 try await conversationService.loadRecentChats()
 
-            print(
-                "RECENT CONVERSATION COUNT:",
-                recentChats.count
-            )
-
-            for conversation in recentChats {
-                print(
-                    "CONVERSATION:",
-                    conversation.chatID,
-                    "| CHARACTER:",
-                    conversation.characterName,
-                    "| STATE:",
-                    conversation.state
-                )
-            }
-
         } catch {
-            print(
-                "LOAD RECENT CHATS ERROR:",
-                error
-            )
+            chatLogger.error("Recent conversations request failed: \(error.localizedDescription, privacy: .private)")
 
             errorMessage =
                 error.localizedDescription
-        }
-
-        do {
-            let characterIDs = [
-                "IH7x6sc3Ksp3WDB0JMYGDySBeaCcpdbCO9pJDtW_AOM",
-                "FTjqU9DJsFr-dD0kUcfUqbqOv6GvESsUpCNrwrUrouI"
-            ]
-
-            try await conversationService.loadChatPreviews(
-                characterIDs: characterIDs
-            )
-        } catch {
-            print(
-                "CHAT PREVIEW TEST ERROR:",
-                error
-            )
         }
 
         isLoading = false

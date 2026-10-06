@@ -57,6 +57,26 @@ final class AppPreferences: ObservableObject {
         static let wallpaperBlurOverride = "preferences.wallpaperBlurOverride"
         static let glassOpacity = "preferences.glassOpacity"
         static let windowTransparency = "preferences.windowTransparency"
+        static let favoriteCharacterIDs = "preferences.favoriteCharacterIDs"
+    }
+
+    /// Set of locally favorited / liked character IDs (UI affordance without fake server sync).
+    @Published private(set) var favoriteCharacterIDs: Set<String> {
+        didSet {
+            defaults.set(Array(favoriteCharacterIDs), forKey: Keys.favoriteCharacterIDs)
+        }
+    }
+
+    func isFavorite(characterID: String) -> Bool {
+        favoriteCharacterIDs.contains(characterID)
+    }
+
+    func toggleFavorite(characterID: String) {
+        if favoriteCharacterIDs.contains(characterID) {
+            favoriteCharacterIDs.remove(characterID)
+        } else {
+            favoriteCharacterIDs.insert(characterID)
+        }
     }
 
     /// Shape of list/card avatars (sidebar rows, Discover cards). In-chat
@@ -143,18 +163,34 @@ final class AppPreferences: ObservableObject {
         }
     }
 
-    /// Backing opacity for the window environmental foundation (1.0 = fully opaque, 0.20 = max transparent).
-    var windowEnvironmentOpacity: Double {
+    /// Weight used by the shell’s layered environmental composition.
+    /// This is environmental opacity rather than true composited AppKit-window alpha;
+    /// using NSWindow.alphaValue would dim glyphs and controls along with the backdrop.
+    var environmentVisibility: Double {
         1.0 - windowTransparency
     }
 
-    /// Visibility ratio for the environmental base layers (1.0 = opaque window, 0.20 = max transparent).
-    var environmentVisibility: Double {
-        windowEnvironmentOpacity
+    /// Compatibility alias for the environmental foundation only; this is not
+    /// the alpha of the complete application window.
+    var windowEnvironmentOpacity: Double { environmentVisibility }
+
+    /// The shared surface system maps Glass Opacity to one consistent fill/tint
+    /// density range, retaining role-specific hierarchy and wallpaper colour.
+    var glassDensity: Double {
+        let progress = (glassOpacity - Self.glassOpacityRange.lowerBound)
+            / (Self.glassOpacityRange.upperBound - Self.glassOpacityRange.lowerBound)
+        return 0.025 + progress * 0.22
     }
 
-    /// Shared glass density adjustment for translucent surfaces.
-    var additionalGlassDensity: Double { max(0, glassOpacity - Self.defaultGlassOpacity) * 0.70 }
+    /// Compatibility alias used by existing shared glass surfaces.
+    var additionalGlassDensity: Double { glassDensity }
+
+    /// Tint scale shared by all system Liquid Glass roles.
+    var glassTintScale: Double {
+        let progress = (glassOpacity - Self.glassOpacityRange.lowerBound)
+            / (Self.glassOpacityRange.upperBound - Self.glassOpacityRange.lowerBound)
+        return 0.65 + progress * 0.70
+    }
 
     func resetWallpaperBlur() {
         wallpaperBlurOverride = nil
@@ -175,7 +211,8 @@ final class AppPreferences: ObservableObject {
         value.isFinite ? min(max(value, range.lowerBound), range.upperBound) : fallback
     }
 
-    /// Loaded custom wallpaper image from local disk.
+    /// Loaded custom wallpaper image from local disk. Palette extraction is done
+    /// once when the image changes and cached alongside the image.
     @Published private(set) var customWallpaper: NSImage? {
         didSet {
             customWallpaperAmbientColor = customWallpaper?.averageColor().map { Color(nsColor: $0) }
@@ -194,6 +231,22 @@ final class AppPreferences: ObservableObject {
 
     private var customWallpaperAmbientColor: Color?
     private var defaultArtworkTask: Task<Void, Never>?
+    private final class ProcessedWallpaper: NSObject {
+        let image: NSImage
+        let palette: EnvironmentalPalette
+
+        init(image: NSImage, palette: EnvironmentalPalette) {
+            self.image = image
+            self.palette = palette
+        }
+    }
+
+    private var processedDefaultArtwork: NSCache<NSURL, ProcessedWallpaper> = {
+        let cache = NSCache<NSURL, ProcessedWallpaper>()
+        cache.countLimit = 12
+        cache.totalCostLimit = 48 * 1024 * 1024
+        return cache
+    }()
     private let defaults: UserDefaults
     private let persistedWallpaperURL: URL?
     private let fileManager = FileManager.default
@@ -232,11 +285,13 @@ final class AppPreferences: ObservableObject {
             to: Self.windowTransparencyRange, fallback: Self.defaultWindowTransparency
         )
 
+        let savedFavorites = defaults.stringArray(forKey: Keys.favoriteCharacterIDs) ?? []
+        self.favoriteCharacterIDs = Set(savedFavorites)
+
         let storedHex = defaults.string(forKey: Keys.solidColorHex) ?? "#0F1226"
         solidColor = Color(hex: storedHex) ?? Color(red: 0.059, green: 0.071, blue: 0.149)
 
         loadPersistedWallpaper()
-        customWallpaperAmbientColor = customWallpaper?.averageColor().map { Color(nsColor: $0) }
         updateDerivedColors()
     }
 
@@ -270,7 +325,7 @@ final class AppPreferences: ObservableObject {
             customWallpaper = image
             backgroundMode = .customWallpaper
         } catch {
-            print("Failed to save custom wallpaper:", error)
+            // Keep the current wallpaper/mode intact if persistence fails.
         }
     }
 
@@ -321,6 +376,10 @@ final class AppPreferences: ObservableObject {
             defaultArtworkURL = url
             defaultArtwork = nil
             defaultArtworkPalette = nil
+            if let cached = processedDefaultArtwork.object(forKey: url as NSURL) {
+                defaultArtwork = cached.image
+                defaultArtworkPalette = cached.palette
+            }
             if backgroundMode == .default { updateDerivedColors() }
         }
         // Track the selected artwork even in Custom/Solid mode, so reverting
@@ -336,13 +395,19 @@ final class AppPreferences: ObservableObject {
             }
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
-                guard !Task.isCancelled, let self,
-                      self.backgroundMode == .default,
-                      self.defaultArtworkURL == url,
-                      let image = NSImage(data: data),
-                      let avg = image.averageColor() else { return }
+                guard !Task.isCancelled, let image = NSImage(data: data),
+                      let avg = image.averageColor(), let self,
+                      self.defaultArtworkURL == url else { return }
+                let palette = EnvironmentalPalette.from(color: Color(nsColor: avg))
+                let processed = ProcessedWallpaper(image: image, palette: palette)
+                self.processedDefaultArtwork.setObject(
+                    processed,
+                    forKey: url as NSURL,
+                    cost: Int(image.size.width * image.size.height * 4)
+                )
+                guard self.backgroundMode == .default else { return }
                 self.defaultArtwork = image
-                self.defaultArtworkPalette = EnvironmentalPalette.from(color: Color(nsColor: avg))
+                self.defaultArtworkPalette = palette
                 self.updateDerivedColors()
             } catch {
                 // A neutral fallback, never an unrelated brand-colour wash.
@@ -380,6 +445,7 @@ final class AppPreferences: ObservableObject {
     /// Removes all stored preferences (Settings → Advanced). Published
     /// properties reset to their defaults and notify observers.
     func resetToDefaults() {
+        favoriteCharacterIDs = []
         avatarShape = .circle
         showPopularTrending = true
         resetWallpaperBlur()
@@ -395,6 +461,7 @@ final class AppPreferences: ObservableObject {
         defaults.removeObject(forKey: Keys.wallpaperBlurOverride)
         defaults.removeObject(forKey: Keys.glassOpacity)
         defaults.removeObject(forKey: Keys.windowTransparency)
+        defaults.removeObject(forKey: Keys.favoriteCharacterIDs)
     }
 }
 
