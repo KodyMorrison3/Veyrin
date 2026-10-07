@@ -15,7 +15,12 @@ private let chatLogger = Logger(subsystem: "CharacterAI", category: "Chat")
 final class ChatViewModel: ObservableObject {
     @Published var character: Character?
     @Published var chat: Chat?
-    @Published var turns: [Turn] = []
+    @Published private(set) var turnStates: [TurnState] = []
+
+    /// Snapshot for existing conversation-level operations. Streaming updates
+    /// publish only through the affected TurnState, not this collection.
+    var turns: [Turn] { turnStates.map(\.turn) }
+    var lastTurnID: String? { turnStates.last?.id }
     @Published var recentChats: [ConversationSummary] = []
     @Published var isLoading = false
     @Published var isGenerating = false
@@ -47,7 +52,9 @@ final class ChatViewModel: ObservableObject {
     }
 
     private var pendingPinRequests: [String: PendingPinRequest] = [:]
-    private var deferredWebSocketMessages: [String] = []
+    private var pendingTurnUpdates: [String: Turn] = [:]
+    private var turnUpdateTasks: [String: Task<Void, Never>] = [:]
+    private var deferredWebSocketMessages: [WebSocketTurnResponse] = []
     private var characterHistoryLoadID: UUID?
     private var activeChatID: String?
     private var isReceivingWebSocketMessage = false
@@ -56,6 +63,7 @@ final class ChatViewModel: ObservableObject {
     let authStore: AuthStore
     private let conversationService: ConversationService
     let authenticatedHTTPClient: AuthenticatedHTTPClient
+    var preferences: AppPreferences { .shared }
     private let webSocketClient = WebSocketClient()
 
     init(
@@ -95,19 +103,15 @@ final class ChatViewModel: ObservableObject {
                     chatID: chatID
                 )
 
-            if !webSocketClient.isConnected {
+            if !(await webSocketClient.isConnected) {
                 try await webSocketClient.connect(
                     sessionToken: authSession.sessionToken
                 )
             }
 
-            try await webSocketClient.send(
-                message
-            )
+            try await webSocketClient.send(message)
 
-            let response =
-                try await webSocketClient.receive()
-
+            let response = try await webSocketClient.receive()
             _ = response // The create-chat acknowledgement may contain private identifiers.
 
             chat = Chat(
@@ -251,13 +255,16 @@ final class ChatViewModel: ObservableObject {
             )
             deferredWebSocketMessages.removeAll()
             if hadPendingPins && !isGenerating {
-                webSocketClient.disconnect()
+                await webSocketClient.disconnect()
             }
         }
         activeChatID = chatID
         isLoading = true
         errorMessage = nil
-        turns = []
+        turnUpdateTasks.values.forEach { $0.cancel() }
+        turnUpdateTasks.removeAll()
+        pendingTurnUpdates.removeAll()
+        turnStates = []
 
         do {
             let apiTurns = try await conversationService.loadAllTurns(
@@ -283,14 +290,14 @@ final class ChatViewModel: ObservableObject {
                 return
             }
 
-            turns = apiTurns.map { apiTurn in
+            turnStates = apiTurns.map { apiTurn in
                 let isPinned = apiTurn.isPinned
                     ?? pinnedIDs.contains(apiTurn.turnKey.turnID)
-                return conversationService.makeUITurn(
+                return TurnState(conversationService.makeUITurn(
                     from: apiTurn,
                     characterID: character.externalID,
                     isPinned: isPinned
-                )
+                ))
             }
 
         } catch {
@@ -342,7 +349,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         do {
-            if !webSocketClient.isConnected {
+            if !(await webSocketClient.isConnected) {
                 try await webSocketClient.connect(
                     sessionToken: authSession.sessionToken
                 )
@@ -363,32 +370,13 @@ final class ChatViewModel: ObservableObject {
             )
 
             while true {
-                let response =
-                    try await receiveChatWebSocketMessage()
-
-                if handlePinResponse(response, activeChatID: chatID) {
+                let decoded = try await receiveChatWebSocketMessage()
+                if handlePinResponse(decoded, activeChatID: chatID) {
                     continue
                 }
 
-                guard let data = response.data(
-                    using: .utf8
-                ) else {
-                    continue
-                }
-
-                let rawMessage =
-                    try JSONDecoder().decode(
-                        WebSocketMessage.self,
-                        from: data
-                    )
-
-                if rawMessage.command == "neo_error" {
-                    let errorResponse =
-                        try JSONDecoder().decode(
-                            WebSocketErrorResponse.self,
-                            from: data
-                        )
-
+                if decoded.command == "neo_error" {
+                    let errorResponse = decoded.asErrorResponse
                     chatLogger.error("Character.AI rejected message generation (code \(errorResponse.errorCode, privacy: .public))")
 
                     if errorResponse.errorCode == 403 {
@@ -396,19 +384,10 @@ final class ChatViewModel: ObservableObject {
                             "Character.AI denied access to this conversation. It may have been deleted or is no longer available."
                         )
                     }
-
-                    throw NetworkError.serverMessage(
-                        errorResponse.comment
-                    )
+                    throw NetworkError.serverMessage(errorResponse.comment)
                 }
 
-                let message =
-                    try JSONDecoder().decode(
-                        WebSocketTurnResponse.self,
-                        from: data
-                    )
-
-                guard let turn = message.turn else {
+                guard let turn = decoded.turn else {
                     chatLogger.error("WebSocket response did not contain a turn")
 
                     throw NetworkError.serverMessage(
@@ -430,24 +409,12 @@ final class ChatViewModel: ObservableObject {
                     characterID: character.externalID
                 )
 
-                if let index = turns.firstIndex(
-                    where: {
-                        $0.turnID == uiTurn.turnID
-                    }
-                ) {
-                    turns[index] = uiTurn
-                } else {
-                    turns.append(uiTurn)
-                }
-
                 let isCharacterTurn =
                     turn.author.authorID ==
                     character.externalID
 
-                let isFinal =
-                    turn.candidates.contains {
-                        $0.isFinal == true
-                    }
+                let isFinal = turn.candidates.contains { $0.isFinal == true }
+                scheduleTurnUpdate(uiTurn, isFinal: isFinal)
 
                 if isCharacterTurn && isFinal {
                     break
@@ -456,6 +423,7 @@ final class ChatViewModel: ObservableObject {
 
             try await finishPendingPinResponses(chatID: chatID)
         } catch {
+            flushPendingTurnUpdates()
             failPendingPinRequests(forChatID: chatID, error: error)
             chatLogger.error("Message generation failed: \(error.localizedDescription, privacy: .private)")
             errorMessage =
@@ -505,7 +473,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         do {
-            if !webSocketClient.isConnected {
+            if !(await webSocketClient.isConnected) {
                 try await webSocketClient.connect(
                     sessionToken: authSession.sessionToken
                 )
@@ -524,46 +492,17 @@ final class ChatViewModel: ObservableObject {
             )
 
             while true {
-                let response =
-                    try await receiveChatWebSocketMessage()
-
-                if handlePinResponse(response, activeChatID: chatID) {
+                let decoded = try await receiveChatWebSocketMessage()
+                if decoded.command == "neo_error" {
+                    let errorResponse = decoded.asErrorResponse
+                    chatLogger.error("Character.AI rejected response operation (code \(errorResponse.errorCode, privacy: .public))")
+                    throw NetworkError.serverMessage(errorResponse.comment)
+                }
+                if handlePinResponse(decoded, activeChatID: chatID) {
                     continue
                 }
 
-                guard let data = response.data(
-                    using: .utf8
-                ) else {
-                    continue
-                }
-
-                let rawMessage =
-                    try JSONDecoder().decode(
-                        WebSocketMessage.self,
-                        from: data
-                    )
-
-                if rawMessage.command == "neo_error" {
-                    let errorResponse =
-                        try JSONDecoder().decode(
-                            WebSocketErrorResponse.self,
-                            from: data
-                        )
-
-                    chatLogger.error("Character.AI rejected response regeneration (code \(errorResponse.errorCode, privacy: .public))")
-
-                    throw NetworkError.serverMessage(
-                        errorResponse.comment
-                    )
-                }
-
-                let message =
-                    try JSONDecoder().decode(
-                        WebSocketTurnResponse.self,
-                        from: data
-                    )
-
-                guard let updatedTurn = message.turn else {
+                guard let updatedTurn = decoded.turn else {
                     continue
                 }
 
@@ -583,22 +522,12 @@ final class ChatViewModel: ObservableObject {
                     characterID: character.externalID
                 )
 
-                if let index = turns.firstIndex(
-                    where: {
-                        $0.turnID == uiTurn.turnID
-                    }
-                ) {
-                    turns[index] = uiTurn
-                }
-
                 let isCharacterTurn =
                     updatedTurn.author.authorID ==
                     character.externalID
 
-                let isFinal =
-                    updatedTurn.candidates.contains {
-                        $0.isFinal == true
-                    }
+                let isFinal = updatedTurn.candidates.contains { $0.isFinal == true }
+                scheduleTurnUpdate(uiTurn, isFinal: isFinal)
 
                 if isCharacterTurn && isFinal {
                     break
@@ -607,6 +536,7 @@ final class ChatViewModel: ObservableObject {
 
             try await finishPendingPinResponses(chatID: chatID)
         } catch {
+            flushPendingTurnUpdates()
             failPendingPinRequests(forChatID: chatID, error: error)
             chatLogger.error("Response regeneration failed: \(error.localizedDescription, privacy: .private)")
             errorMessage =
@@ -652,7 +582,7 @@ final class ChatViewModel: ObservableObject {
             isGenerating = false
         }
         do {
-            if !webSocketClient.isConnected {
+            if !(await webSocketClient.isConnected) {
                 try await webSocketClient.connect(
                     sessionToken: authSession.sessionToken
                 )
@@ -671,46 +601,17 @@ final class ChatViewModel: ObservableObject {
             )
 
             while true {
-                let response =
-                    try await receiveChatWebSocketMessage()
-
-                if handlePinResponse(response, activeChatID: chatID) {
+                let decoded = try await receiveChatWebSocketMessage()
+                if decoded.command == "neo_error" {
+                    let errorResponse = decoded.asErrorResponse
+                    chatLogger.error("Character.AI rejected response operation (code \(errorResponse.errorCode, privacy: .public))")
+                    throw NetworkError.serverMessage(errorResponse.comment)
+                }
+                if handlePinResponse(decoded, activeChatID: chatID) {
                     continue
                 }
 
-                guard let data = response.data(
-                    using: .utf8
-                ) else {
-                    continue
-                }
-
-                let rawMessage =
-                    try JSONDecoder().decode(
-                        WebSocketMessage.self,
-                        from: data
-                    )
-
-                if rawMessage.command == "neo_error" {
-                    let errorResponse =
-                        try JSONDecoder().decode(
-                            WebSocketErrorResponse.self,
-                            from: data
-                        )
-
-                    chatLogger.error("Character.AI rejected response regeneration (code \(errorResponse.errorCode, privacy: .public))")
-
-                    throw NetworkError.serverMessage(
-                        errorResponse.comment
-                    )
-                }
-
-                let message =
-                    try JSONDecoder().decode(
-                        WebSocketTurnResponse.self,
-                        from: data
-                    )
-
-                guard let updatedTurn = message.turn else {
+                guard let updatedTurn = decoded.turn else {
                     continue
                 }
                 
@@ -736,13 +637,7 @@ final class ChatViewModel: ObservableObject {
                     characterID: character.externalID
                 )
 
-                if let index = turns.firstIndex(
-                    where: {
-                        $0.turnID == uiTurn.turnID
-                    }
-                ) {
-                    turns[index] = uiTurn
-                }
+                updateTurn(uiTurn)
 
                 let newCandidateID = updatedTurn.primaryCandidateID
 
@@ -931,7 +826,7 @@ final class ChatViewModel: ObservableObject {
                 }
 
                 let removedIDs = Set(turnIDsToRemove)
-                turns.removeAll { removedIDs.contains($0.turnID) }
+                turnStates.removeAll { removedIDs.contains($0.id) }
             }
         } catch {
             rewindErrorMessage = error.localizedDescription
@@ -977,7 +872,7 @@ final class ChatViewModel: ObservableObject {
                 isPinned: isPinned
             )
 
-            if !webSocketClient.isConnected {
+            if !(await webSocketClient.isConnected) {
                 try await webSocketClient.connect(
                     sessionToken: authSession.sessionToken
                 )
@@ -993,14 +888,14 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    private func receiveChatWebSocketMessage() async throws -> String {
+    private func receiveChatWebSocketMessage() async throws -> WebSocketTurnResponse {
         if !deferredWebSocketMessages.isEmpty {
             return deferredWebSocketMessages.removeFirst()
         }
         return try await receiveWebSocketMessageFromSocket()
     }
 
-    private func receiveWebSocketMessageFromSocket() async throws -> String {
+    private func receiveWebSocketMessageFromSocket() async throws -> WebSocketTurnResponse {
         while isReceivingWebSocketMessage {
             await withCheckedContinuation { continuation in
                 receiveWaiters.append(continuation)
@@ -1015,34 +910,31 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
-        return try await webSocketClient.receive()
+        let data = try await webSocketClient.receive()
+        return try await WebSocketMessageProcessor.shared.decode(data)
     }
 
     private func handlePinResponse(
-        _ response: String,
+        _ decoded: WebSocketTurnResponse,
         activeChatID: String
     ) -> Bool {
-        guard let data = response.data(using: .utf8),
-              let envelope = try? JSONDecoder().decode(WebSocketMessage.self, from: data),
-              let pending = pendingPinRequests[envelope.requestID],
+        guard let pending = pendingPinRequests[decoded.requestID],
               pending.chatID == activeChatID else {
             return false
         }
 
-        if envelope.command == "neo_error",
-           let errorResponse = try? JSONDecoder().decode(WebSocketErrorResponse.self, from: data) {
+        if decoded.command == "neo_error" {
             completePinRequest(
-                requestID: envelope.requestID,
-                error: NetworkError.serverMessage(errorResponse.comment)
+                requestID: decoded.requestID,
+                error: NetworkError.serverMessage(decoded.errorComment ?? "Character.AI rejected the pin update.")
             )
             return true
         }
 
-        guard envelope.command == "update_turn",
-              let update = try? JSONDecoder().decode(WebSocketTurnResponse.self, from: data),
-              let apiTurn = update.turn else {
+        guard decoded.command == "update_turn",
+              let apiTurn = decoded.turn else {
             completePinRequest(
-                requestID: envelope.requestID,
+                requestID: decoded.requestID,
                 error: NetworkError.serverMessage("Character.AI returned an invalid pin response.")
             )
             return true
@@ -1052,7 +944,7 @@ final class ChatViewModel: ObservableObject {
               apiTurn.turnKey.turnID == pending.turnID,
               activeChatID == pending.chatID else {
             completePinRequest(
-                requestID: envelope.requestID,
+                requestID: decoded.requestID,
                 error: NetworkError.serverMessage("The pin response did not match the requested turn.")
             )
             return true
@@ -1060,26 +952,26 @@ final class ChatViewModel: ObservableObject {
 
         guard activeChatID == pending.chatID else {
             completePinRequest(
-                requestID: envelope.requestID,
+                requestID: decoded.requestID,
                 error: NetworkError.serverMessage(
                     "Conversation changed before the pin update completed."
                 )
             )
             return true
         }
-        guard let index = turns.firstIndex(where: {
-            $0.turnID == pending.turnID && $0.chatID == pending.chatID
+        guard let index = turnStates.firstIndex(where: {
+            $0.id == pending.turnID && $0.turn.chatID == pending.chatID
         }) else {
             completePinRequest(
-                requestID: envelope.requestID,
+                requestID: decoded.requestID,
                 error: NetworkError.serverMessage("The requested conversation turn is no longer available.")
             )
             return true
         }
-        turns[index] = turns[index].settingPinned(
+        turnStates[index].update(turnStates[index].turn.settingPinned(
             apiTurn.isPinned ?? pending.isPinned
-        )
-        completePinRequest(requestID: envelope.requestID, error: nil)
+        ))
+        completePinRequest(requestID: decoded.requestID, error: nil)
         return true
     }
 
@@ -1096,10 +988,42 @@ final class ChatViewModel: ObservableObject {
 
     private func finishPendingPinResponses(chatID: String) async throws {
         while pendingPinRequests.values.contains(where: { $0.chatID == chatID }) {
-            let response = try await receiveWebSocketMessageFromSocket()
-            if !handlePinResponse(response, activeChatID: chatID) {
-                deferredWebSocketMessages.append(response)
+            let decoded = try await receiveWebSocketMessageFromSocket()
+            if !handlePinResponse(decoded, activeChatID: chatID) {
+                deferredWebSocketMessages.append(decoded)
             }
+        }
+    }
+
+    private func scheduleTurnUpdate(_ turn: Turn, isFinal: Bool) {
+        let turnID = turn.turnID
+        pendingTurnUpdates[turnID] = turn
+
+        if isFinal {
+            turnUpdateTasks.removeValue(forKey: turnID)?.cancel()
+            flushTurnUpdate(turnID: turnID)
+        } else if turnUpdateTasks[turnID] == nil {
+            turnUpdateTasks[turnID] = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(40))
+                guard !Task.isCancelled else { return }
+                self?.flushTurnUpdate(turnID: turnID)
+            }
+        }
+    }
+
+    private func flushTurnUpdate(turnID: String) {
+        turnUpdateTasks.removeValue(forKey: turnID)
+        guard let turn = pendingTurnUpdates.removeValue(forKey: turnID) else { return }
+        updateTurn(turn)
+    }
+
+    private func updateTurn(_ turn: Turn) {
+        if let state = turnStates.first(where: {
+            $0.id == turn.turnID && $0.turn.chatID == turn.chatID
+        }) {
+            state.update(turn)
+        } else {
+            turnStates.append(TurnState(turn))
         }
     }
 
@@ -1107,9 +1031,9 @@ final class ChatViewModel: ObservableObject {
         from apiTurn: APITurn,
         characterID: String
     ) -> Turn {
-        let existingTurn = turns.first(where: {
-            $0.turnID == apiTurn.turnKey.turnID && $0.chatID == apiTurn.turnKey.chatID
-        })
+        let existingTurn = turnStates.first(where: {
+            $0.id == apiTurn.turnKey.turnID && $0.turn.chatID == apiTurn.turnKey.chatID
+        })?.turn
         return conversationService.makeUITurn(
             from: apiTurn,
             characterID: characterID,
@@ -1156,6 +1080,15 @@ final class ChatViewModel: ObservableObject {
                 "The WebSocket connection closed before the pin update completed."
             )
         )
-        webSocketClient.disconnect()
+        flushPendingTurnUpdates()
+        Task { await webSocketClient.disconnect() }
+    }
+
+    private func flushPendingTurnUpdates() {
+        let turnIDs = Array(pendingTurnUpdates.keys)
+        for turnID in turnIDs {
+            turnUpdateTasks.removeValue(forKey: turnID)?.cancel()
+            flushTurnUpdate(turnID: turnID)
+        }
     }
 }

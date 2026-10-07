@@ -153,6 +153,12 @@ struct ConversationService {
                 )
             }
 
+            // Previews request the latest two turns. Their newest usable turn
+            // is sufficient for /copy; paginate history only when omitted.
+            if let previewSource {
+                return previewSource
+            }
+
             do {
                 let turns = try await loadAllTurns(chatID: preview.chatID)
                 if let latestTurn = turns.last(where: { !$0.candidates.isEmpty }) {

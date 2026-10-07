@@ -2,6 +2,18 @@ import Foundation
 
 /// Parses only the message formatting verified in the Character.AI frontend investigation.
 enum CharacterMessageMarkdown {
+    private final class CachedBlocks: NSObject {
+        let value: [Block]
+        init(_ value: [Block]) { self.value = value }
+    }
+
+    private static let parsedBlocks: NSCache<NSString, CachedBlocks> = {
+        let cache = NSCache<NSString, CachedBlocks>()
+        cache.countLimit = 128
+        cache.totalCostLimit = 8 * 1024 * 1024
+        return cache
+    }()
+
     indirect enum Inline: Equatable {
         case text(String)
         case emphasis([Inline])
@@ -18,6 +30,16 @@ enum CharacterMessageMarkdown {
     }
 
     static func parse(_ source: String) -> [Block] {
+        let key = source as NSString
+        if let cached = parsedBlocks.object(forKey: key) {
+            return cached.value
+        }
+        let blocks = parseUncached(source)
+        parsedBlocks.setObject(CachedBlocks(blocks), forKey: key, cost: max(source.utf8.count, 1))
+        return blocks
+    }
+
+    private static func parseUncached(_ source: String) -> [Block] {
         let lines = source
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -59,6 +81,12 @@ enum CharacterMessageMarkdown {
                 continue
             }
 
+            if containsHTMLTag(line) {
+                blocks.append(.paragraph(parseInline(line)))
+                index += 1
+                continue
+            }
+
             if let heading = heading(in: line) {
                 blocks.append(.heading(level: heading.level, content: parseInline(heading.content)))
                 index += 1
@@ -84,6 +112,7 @@ enum CharacterMessageMarkdown {
                   !lines[index].trimmingCharacters(in: .whitespaces).isEmpty,
                   !isFence(lines[index]),
                   !isHTMLBlock(lines[index]),
+                  !containsHTMLTag(lines[index]),
                   heading(in: lines[index]) == nil,
                   listItem(in: lines[index]) == nil {
                 paragraphLines.append(lines[index])
@@ -160,8 +189,17 @@ enum CharacterMessageMarkdown {
                 continue
             }
 
-            if characters[index] == ("<" as Swift.Character), let end = htmlTagEnd(in: characters, from: index) {
-                index = end + 1
+            if characters[index] == ("<" as Swift.Character),
+               let end = htmlTagEnd(in: characters, from: index) {
+                if let contentEnd = rawHTMLContentEnd(
+                    in: characters,
+                    tagStart: index,
+                    openingTagEnd: end
+                ) {
+                    index = contentEnd
+                } else {
+                    index = end + 1
+                }
                 continue
             }
 
@@ -190,6 +228,20 @@ enum CharacterMessageMarkdown {
         line.drop(while: { $0 == " " || $0 == "\t" }).hasPrefix("```")
     }
 
+    private static func containsHTMLTag(_ line: String) -> Bool {
+        let characters = Array(line)
+        var index = 0
+        while index < characters.count {
+            if characters[index] == "<",
+               let end = htmlTagEnd(in: characters, from: index),
+               isHTMLTagName(in: characters, from: index + 1, through: end) {
+                return true
+            }
+            index += 1
+        }
+        return false
+    }
+
     private static func isHTMLBlock(_ line: String) -> Bool {
         let content = line.trimmingCharacters(in: .whitespaces)
         guard content.first == "<", content.count > 1 else { return false }
@@ -209,7 +261,11 @@ enum CharacterMessageMarkdown {
         let content = line.drop(while: { $0 == " " || $0 == "\t" })
         guard let first = content.first else { return nil }
         if (first == "-" || first == "*" || first == "+"), content.dropFirst().first?.isWhitespace == true {
-            return (false, String(content.dropFirst().drop(while: { $0.isWhitespace })))
+            let item = String(content.dropFirst().drop(while: { $0.isWhitespace }))
+            if item.hasPrefix("[ ] ") || item.hasPrefix("[x] ") || item.hasPrefix("[X] ") {
+                return (false, "- " + item)
+            }
+            return (false, item)
         }
         let digits = content.prefix(while: \.isNumber)
         guard !digits.isEmpty, digits.count < content.count else { return nil }
@@ -257,8 +313,61 @@ enum CharacterMessageMarkdown {
     private static func htmlTagEnd(in characters: [Swift.Character], from start: Int) -> Int? {
         guard start + 1 < characters.count else { return nil }
         let next = characters[start + 1]
-        guard next.isLetter || next == ("/" as Swift.Character) || next == ("!" as Swift.Character) || next == ("?" as Swift.Character) else { return nil }
-        return characters[(start + 1)...].firstIndex(of: (">" as Swift.Character))
+        guard next.isLetter || next == ("/" as Swift.Character) || next == ("!" as Swift.Character) || next == ("?" as Swift.Character),
+              let end = characters[(start + 1)...].firstIndex(of: (">" as Swift.Character)),
+              isHTMLTagName(in: characters, from: start + 1, through: end) else { return nil }
+        return end
+    }
+
+    private static func isHTMLTagName(
+        in characters: [Swift.Character],
+        from start: Int,
+        through end: Int
+    ) -> Bool {
+        guard start < end else { return false }
+        var index = start
+        if characters[index] == "/" || characters[index] == "!" || characters[index] == "?" {
+            index += 1
+        }
+        guard index < end, characters[index].isLetter else { return false }
+        while index < end {
+            let character = characters[index]
+            if character.isWhitespace || character == "/" { return true }
+            guard character.isLetter || character.isNumber || character == "-" || character == "_" else {
+                return false
+            }
+            index += 1
+        }
+        return true
+    }
+
+    private static func rawHTMLContentEnd(
+        in characters: [Swift.Character],
+        tagStart: Int,
+        openingTagEnd: Int
+    ) -> Int? {
+        guard tagStart + 1 < characters.count,
+              characters[tagStart + 1] != "/" else { return nil }
+        let nameStart = tagStart + 1
+        var nameEnd = nameStart
+        while nameEnd < openingTagEnd,
+              !characters[nameEnd].isWhitespace,
+              characters[nameEnd] != "/" {
+            nameEnd += 1
+        }
+        let name = String(characters[nameStart..<nameEnd]).lowercased()
+        guard name == "script" || name == "style" else { return nil }
+
+        let closingTag = Array("</\(name)>")
+        var index = openingTagEnd + 1
+        while index + closingTag.count <= characters.count {
+            let matches = closingTag.enumerated().allSatisfy { offset, expected in
+                String(characters[index + offset]).lowercased() == String(expected)
+            }
+            if matches { return index + closingTag.count }
+            index += 1
+        }
+        return characters.count
     }
 
 }

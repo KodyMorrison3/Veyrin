@@ -8,22 +8,23 @@
 import SwiftUI
 
 struct MessageView: View {
-    let turn: Turn
+    @ObservedObject var turnState: TurnState
+    var turn: Turn { turnState.turn }
     let character: Character?
+    let palette: EnvironmentalPalette
     let onRegenerate: (() -> Void)?
-    let onEdit: ((String) -> Void)?
+    let onEdit: ((String, String) -> Void)?
     let isPinning: Bool
     let onPin: (() -> Void)?
     let isRewinding: Bool
-    let onRewind: (() -> Void)?
-    let onStartNewConversation: (() -> Void)?
+    let onRewind: ((Turn) -> Void)?
+    let onStartNewConversation: ((Turn) -> Void)?
 
     @State private var isEditing = false
     @State private var editedText = ""
     @State private var isShowingActions = false
     @State private var isHoveringMessage = false
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     
     private func copyMessage(_ text: String) {
         NSPasteboard.general.clearContents()
@@ -109,7 +110,7 @@ struct MessageView: View {
                                     return
                                 }
 
-                                onEdit?(newText)
+                                onEdit?(candidate.candidateId, newText)
                                 isEditing = false
                             }
                             .buttonStyle(.borderedProminent)
@@ -157,7 +158,7 @@ struct MessageView: View {
                                         .font(.system(size: 11, weight: .semibold))
                                         .foregroundStyle(Color.caiMuted)
                                         .frame(width: 22, height: 22)
-                                        .background(Circle().fill(ShellEnvironmentalBackground.environmentalSurfaceTint(isDark: colorScheme == .dark)))
+                                        .background(Circle().fill(palette.atmosphericBase.opacity(colorScheme == .dark ? 0.85 : 0.55)))
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("Message actions")
@@ -230,11 +231,10 @@ struct MessageView: View {
             systemImage: "backward.end",
             role: .destructive,
             isDisabled: onRewind == nil || isRewinding
-        ) {
-            let action = onRewind
+        ) {            let action = onRewind
             isShowingActions = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                action?()
+                action?(turn)
             }
         }
 
@@ -246,7 +246,7 @@ struct MessageView: View {
             let action = onStartNewConversation
             isShowingActions = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                action?()
+                action?(turn)
             }
         }
     }
@@ -272,7 +272,7 @@ struct MessageView: View {
     private var fallbackAvatar: some View {
         ZStack {
             Circle()
-                .fill(ShellEnvironmentalBackground.environmentalSurfaceTint(isDark: colorScheme == .dark))
+                .fill(palette.atmosphericBase.opacity(colorScheme == .dark ? 0.85 : 0.55))
             
             Text(turn.authorName.prefix(1))
                 .font(.system(size: 13, weight: .semibold))

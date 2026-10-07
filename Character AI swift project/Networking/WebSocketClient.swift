@@ -1,9 +1,8 @@
 import Foundation
 import OSLog
 
-private let webSocketLogger = Logger(subsystem: "CharacterAI", category: "WebSocket")
-
-final class WebSocketClient {
+actor WebSocketClient {
+    nonisolated private static let logger = Logger(subsystem: "CharacterAI", category: "WebSocket")
     private let session: URLSession
     private var webSocketTask: URLSessionWebSocketTask?
     private(set) var isConnected = false
@@ -46,7 +45,7 @@ final class WebSocketClient {
 
     }
     
-    func receive() async throws -> String {
+    func receive() async throws -> Data {
         guard let webSocketTask else {
             throw NetworkError.invalidResponse
         }
@@ -56,23 +55,22 @@ final class WebSocketClient {
 
             switch message {
             case .string(let text):
-                return text
-
-            case .data(let data):
-                guard let text = String(data: data, encoding: .utf8) else {
+                guard let data = text.data(using: .utf8) else {
                     throw NetworkError.decodingError(
                         NSError(
                             domain: "WebSocketClient",
                             code: 1,
                             userInfo: [
                                 NSLocalizedDescriptionKey:
-                                    "Received WebSocket data that was not valid UTF-8."
+                                    "Received WebSocket text that could not be encoded as UTF-8."
                             ]
                         )
                     )
                 }
+                return data
 
-                return text
+            case .data(let data):
+                return data
 
             @unknown default:
                 throw NetworkError.invalidResponse
@@ -87,7 +85,7 @@ final class WebSocketClient {
             self.webSocketTask = nil
             isConnected = false
 
-            webSocketLogger.error("WebSocket receive failed: \(error.localizedDescription, privacy: .private)")
+            Self.logger.error("WebSocket receive failed: \(error.localizedDescription, privacy: .private)")
             throw error
         }
     }

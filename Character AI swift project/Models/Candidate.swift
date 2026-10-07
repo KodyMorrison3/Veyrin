@@ -1,6 +1,6 @@
 import Foundation
 
-struct Candidate: Codable {
+struct Candidate: Codable, Equatable {
     let candidateId: String
     let rawContent: String
     let isFinal: Bool?

@@ -321,7 +321,7 @@ struct SettingsView: View {
                         Button("Reset to Default") { preferences.resetWallpaperBlur() }
                             .accessibilityLabel("Reset Wallpaper Blur to Default")
                             .disabled(preferences.wallpaperBlurOverride == nil)
-                        Text("Automatic: character artwork 36 pt; custom wallpaper 16 pt. Moving the slider overrides both image modes until reset.")
+                        Text("Automatic: character artwork 18 pt; custom wallpaper 10 pt. Moving the slider overrides both image modes until reset.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
 

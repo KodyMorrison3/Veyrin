@@ -8,11 +8,8 @@ struct CharacterMessageFormattingView: View {
 
     @State private var pendingURL: URL?
 
-    private var blocks: [CharacterMessageMarkdown.Block] {
-        CharacterMessageMarkdown.parse(content)
-    }
-
     var body: some View {
+        let blocks = CharacterMessageMarkdown.parse(content)
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 blockView(block)

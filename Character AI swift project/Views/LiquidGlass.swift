@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import SwiftUI
 
 /// Interaction accents and content colours. Environmental colours belong only
@@ -79,7 +78,7 @@ struct GlassSurfaceBackground: View {
     var cornerRadius: CGFloat = GlassMetrics.controlRadius
     var isFocused = false
 
-    @ObservedObject var preferences = AppPreferences.shared
+    @ObservedObject private var appearanceStore = GlassAppearanceStore.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -90,23 +89,22 @@ struct GlassSurfaceBackground: View {
     }
 
     var body: some View {
-        // Observed so every glass surface re-renders the moment the shared
-        // environmental palette changes (wallpaper, solid colour, artwork).
-        let palette = preferences.environmentalPalette
+        let appearance = appearanceStore.appearance
+        let palette = appearance.palette
         ZStack {
             if reduceTransparency {
                 shape.fill(palette.opaqueSurface(isDark: isDark))
             } else {
                 shape.fill(Color.clear)
                     .glassEffect(
-                        Glass.regular.tint(role.systemGlassTint(isDark: isDark, palette: palette, tintScale: preferences.glassTintScale)),
+                        Glass.regular.tint(role.systemGlassTint(isDark: isDark, palette: palette, tintScale: appearance.tintScale)),
                         in: shape
                     )
 
                 // Scale glass density without creating a uniform opaque white card.
                 // The density wash remains tinted by the wallpaper-derived palette.
                 shape.fill(palette.glassSurfaceTint
-                    .opacity(preferences.additionalGlassDensity * (isDark ? 1.0 : 0.55)))
+                    .opacity(appearance.density * (isDark ? 1.0 : 0.55)))
                 shape.fill(role.environmentalWash(isDark: isDark, palette: palette))
 
                 if role == .userMessage {
@@ -208,11 +206,13 @@ struct ShellEnvironmentalBackground: View {
     /// blurred environment contributes visibly rather than reading as a dark slab.
     var vignetteStrength: Double = 1.0
 
-    @ObservedObject var preferences = AppPreferences.shared
+    @ObservedObject private var wallpaperStore = WallpaperAppearanceStore.shared
+    @ObservedObject private var paletteStore = EnvironmentalPaletteStore.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private var isDark: Bool { colorScheme == .dark }
+    private var wallpaper: WallpaperAppearance { wallpaperStore.appearance }
 
     var body: some View {
         GeometryReader { geometry in
@@ -221,28 +221,28 @@ struct ShellEnvironmentalBackground: View {
                     activePalette.opaqueSurface(isDark: isDark)
                 } else {
                     activePalette.atmosphericBase
-                        .opacity(preferences.environmentVisibility)
+                        .opacity(wallpaper.visibility)
                 }
 
                 if !reduceTransparency {
-                    switch preferences.backgroundMode {
+                    switch wallpaper.mode {
                     case .customWallpaper:
-                        if let customImage = preferences.customWallpaper {
+                        if let customImage = wallpaper.image {
                             Image(nsImage: customImage)
                                 .resizable()
                                 .scaledToFill()
                                 .frame(width: geometry.size.width, height: geometry.size.height)
                                 .clipped()
                                 .saturation(0.95)
-                                .blur(radius: preferences.wallpaperBlur, opaque: true)
-                                .opacity((isDark ? 0.90 : 0.80) * preferences.environmentVisibility)
+                                .blur(radius: wallpaper.blur, opaque: true)
+                                .opacity((isDark ? 0.90 : 0.80) * wallpaper.visibility)
                         }
 
                     case .solidColor:
                         // In solid color mode, the solid color base fills the environment.
                         // We provide a soft atmospheric texture over it.
-                        preferences.solidColor
-                            .opacity((isDark ? 0.55 : 0.75) * preferences.environmentVisibility)
+                        wallpaper.solidColor
+                            .opacity((isDark ? 0.55 : 0.75) * wallpaper.visibility)
 
                     case .default:
                         defaultArtworkView(geometry: geometry)
@@ -250,27 +250,17 @@ struct ShellEnvironmentalBackground: View {
                 }
 
                 if !reduceTransparency {
-                    // Depth and light are tonal variants of the same source, never brand stops.
+                    // Keep one soft tonal veil instead of stacking two composited gradients.
                     LinearGradient(
                         colors: [
-                            activePalette.atmosphericBase.opacity(0.40 * vignetteStrength * preferences.environmentVisibility),
+                            activePalette.atmosphericBase.opacity(0.40 * vignetteStrength * wallpaper.visibility),
                             Color.clear,
-                            activePalette.atmosphericBase.opacity(0.55 * vignetteStrength * preferences.environmentVisibility)
+                            activePalette.atmosphericBase.opacity(0.55 * vignetteStrength * wallpaper.visibility)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
                     )
 
-                    RadialGradient(
-                        colors: [
-                            activePalette.ambientHighlight.opacity((isDark ? 0.16 : 0.08) * preferences.environmentVisibility),
-                            activePalette.ambientColor.opacity((isDark ? 0.10 : 0.05) * preferences.environmentVisibility),
-                            Color.clear
-                        ],
-                        center: .topTrailing,
-                        startRadius: 0,
-                        endRadius: max(geometry.size.width, geometry.size.height) * 0.75
-                    )
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
@@ -279,10 +269,10 @@ struct ShellEnvironmentalBackground: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .onAppear {
-            preferences.updateDefaultEnvironment(forAvatarURL: avatarURL)
+            AppPreferences.shared.updateDefaultEnvironment(forAvatarURL: avatarURL)
         }
         .onChange(of: avatarURL) { _, newURL in
-            preferences.updateDefaultEnvironment(forAvatarURL: newURL)
+            AppPreferences.shared.updateDefaultEnvironment(forAvatarURL: newURL)
         }
     }
 
@@ -298,20 +288,20 @@ struct ShellEnvironmentalBackground: View {
     /// palette through `AppPreferences`, so the shell and all glass surfaces
     /// always render from the same wallpaper-derived color family.
     private var activePalette: EnvironmentalPalette {
-        preferences.environmentalPalette
+        paletteStore.palette
     }
 
     @ViewBuilder
     private func defaultArtworkView(geometry: GeometryProxy) -> some View {
-        if let artwork = preferences.defaultArtwork {
+        if let artwork = wallpaper.image {
             Image(nsImage: artwork)
                 .resizable()
                 .scaledToFill()
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .clipped()
                 .saturation(0.90)
-                .blur(radius: preferences.wallpaperBlur, opaque: true)
-                .opacity((isDark ? 0.80 : 0.55) * preferences.environmentVisibility)
+                .blur(radius: wallpaper.blur, opaque: true)
+                .opacity((isDark ? 0.80 : 0.55) * wallpaper.visibility)
         }
     }
 }
@@ -321,13 +311,14 @@ struct ShellEnvironmentalBackground: View {
 /// tonal lift and a tiny leading marker keep selection legible at every hue.
 struct EnvironmentalSelectionBackground: View {
     var cornerRadius: CGFloat = 10
-    @ObservedObject var preferences = AppPreferences.shared
+    @ObservedObject private var paletteStore = EnvironmentalPaletteStore.shared
+    @ObservedObject private var glassAppearanceStore = GlassAppearanceStore.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        let palette = preferences.environmentalPalette
+        let palette = paletteStore.palette
         let isDark = colorScheme == .dark
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         ZStack(alignment: .leading) {
@@ -339,7 +330,7 @@ struct EnvironmentalSelectionBackground: View {
                     .glassEffect(.clear, in: shape)
                 shape.fill(palette.ambientHighlight.opacity(isDark ? 0.14 : 0.10))
                 shape.fill(palette.opaqueSurface(isDark: isDark)
-                    .opacity(preferences.additionalGlassDensity))
+                    .opacity(glassAppearanceStore.appearance.density))
             }
             Capsule()
                 .fill(Color.primary.opacity(contrast == .increased ? 0.80 : 0.50))

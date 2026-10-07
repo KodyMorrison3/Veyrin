@@ -1,10 +1,10 @@
 import AppKit
+import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct ChatView: View {
     @StateObject private var viewModel: ChatViewModel
-    @ObservedObject private var preferences = AppPreferences.shared
     @State private var messageText = ""
     @State private var attachments: [ComposerAttachment] = []
     @State private var attachmentNotice: String?
@@ -16,7 +16,7 @@ struct ChatView: View {
     @State private var activeChatModelType: String?
     @State private var isShowingMemory = false
     @State private var personaSelectionErrorMessage: String?
-    @State private var environmentalArtwork: Image?
+    @ObservedObject private var environmentalPaletteStore = EnvironmentalPaletteStore.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -59,79 +59,21 @@ struct ChatView: View {
                             Color.clear
                                 .frame(height: 52)
 
-                            ForEach(
-                                viewModel.turns,
-                                id: \.turnID
-                            ) { turn in
-                                MessageView(
-                                    turn: turn,
-                                    character: viewModel.character,
-                                    onRegenerate: turn.isHuman
-                                        ? nil
-                                        : {
-                                            guard viewModel.rewindingFromTurnID == nil else {
-                                                return
-                                            }
-                                            Task {
-                                                await viewModel.regenerateResponse(
-                                                    turnID: turn.turnID,
-                                                    chatID: chatID
-                                                )
-                                            }
-                                        },
-                                    onEdit: { newContent in
-                                        guard let candidate = turn.candidates.first(where: {
-                                            $0.candidateId == turn.primaryCandidateID
-                                        }) else {
-                                            return
-                                        }
-
-                                        Task {
-                                            await viewModel.editMessage(
-                                                turnID: turn.turnID,
-                                                chatID: chatID,
-                                                candidateID: candidate.candidateId,
-                                                newContent: newContent
-                                            )
-                                        }
-                                    },
-                                    isPinning: viewModel.pinningTurnIDs.contains(turn.turnID),
-                                    onPin: {
-                                        Task {
-                                            await viewModel.togglePin(
-                                                turnID: turn.turnID,
-                                                chatID: chatID
-                                            )
-                                        }
-                                    },
-                                    isRewinding: viewModel.rewindingFromTurnID != nil,
-                                    onRewind: !viewModel.isGenerating && !viewModel.isLoading
-                                        ? { turnToRewind = turn }
-                                        : nil,
-                                    onStartNewConversation: !viewModel.isGenerating && !viewModel.isLoading
-                                        ? {
-                                            selectedModelType = nil
-                                            turnToStartConversationFrom = turn
-                                            Task {
-                                                await viewModel.loadAvailableModels()
-                                            }
-                                        }
-                                        : nil
-                                )
-                                .id(turn.turnID)
+                            ForEach(viewModel.turnStates) { turnState in
+                                turnMessage(turnState: turnState)
                             }
                         }
                         .padding(.horizontal, 24)
                         .padding(.bottom, 16)
                         .frame(maxWidth: GlassMetrics.contentWidth)
                         .frame(maxWidth: .infinity)
-                        .animation(reduceMotion ? nil : GlassMetrics.interaction, value: viewModel.turns.count)
+                        .animation(reduceMotion ? nil : GlassMetrics.interaction, value: viewModel.turnStates.count)
                     }
                     .scrollEdgeEffectHidden()
-                    .onChange(of: viewModel.turns.count) {
+                    .onChange(of: viewModel.turnStates.count) {
                         scrollToBottom(using: proxy)
                     }
-                    .onChange(of: viewModel.turns.last?.turnID) {
+                    .onChange(of: viewModel.lastTurnID) {
                         scrollToBottom(using: proxy)
                     }
                 }
@@ -314,6 +256,45 @@ struct ChatView: View {
         .navigationTitle(Text(verbatim: ""))
     }
 
+    private func turnMessage(turnState: TurnState) -> some View {
+        let turn = turnState.turn
+        return MessageView(
+            turnState: turnState,
+            character: viewModel.character,
+            palette: environmentalPaletteStore.palette,
+            onRegenerate: turn.isHuman ? nil : {
+                guard viewModel.rewindingFromTurnID == nil else { return }
+                Task { await viewModel.regenerateResponse(turnID: turn.turnID, chatID: chatID) }
+            },
+            onEdit: { candidateID, newContent in
+                Task {
+                    await viewModel.editMessage(
+                        turnID: turn.turnID,
+                        chatID: chatID,
+                        candidateID: candidateID,
+                        newContent: newContent
+                    )
+                }
+            },
+            isPinning: viewModel.pinningTurnIDs.contains(turn.turnID),
+            onPin: {
+                Task { await viewModel.togglePin(turnID: turn.turnID, chatID: chatID) }
+            },
+            isRewinding: viewModel.rewindingFromTurnID != nil,
+            onRewind: !viewModel.isGenerating && !viewModel.isLoading
+                ? { selectedTurn in turnToRewind = selectedTurn }
+                : nil,
+            onStartNewConversation: !viewModel.isGenerating && !viewModel.isLoading
+                ? { selectedTurn in
+                    selectedModelType = nil
+                    turnToStartConversationFrom = selectedTurn
+                    Task { await viewModel.loadAvailableModels() }
+                }
+                : nil
+        )
+        .id(turnState.id)
+    }
+
     private var floatingCharacterToolbar: some View {
         HStack(spacing: 10) {
             if let character = viewModel.character {
@@ -493,13 +474,7 @@ struct ChatView: View {
                 .font(.title2.weight(.semibold))
             if let character = viewModel.character {
                 HStack(spacing: 10) {
-                    if let environmentalArtwork {
-                        environmentalArtwork.resizable().scaledToFill()
-                            .frame(width: 32, height: 32)
-                            .clipShape(Circle())
-                    } else {
-                        fallbackHeaderAvatar(character: character)
-                    }
+                    characterHeaderAvatar(character: character)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(character.name).font(.headline)
                         Text(character.title).font(.caption).foregroundStyle(.secondary)
@@ -660,7 +635,7 @@ struct ChatView: View {
     private struct ComposerAttachment: Identifiable {
         let id = UUID()
         let fileName: String
-        let image: NSImage
+        let preview: NSImage
         let data: Data
     }
 
@@ -697,7 +672,7 @@ struct ChatView: View {
         _ attachment: ComposerAttachment
     ) -> some View {
         ZStack(alignment: .topTrailing) {
-            Image(nsImage: attachment.image)
+            Image(nsImage: attachment.preview)
                 .resizable()
                 .scaledToFill()
                 .frame(width: 56, height: 56)
@@ -745,6 +720,23 @@ struct ChatView: View {
         }
     }
 
+    private static func downsampledPreview(from data: Data) -> NSImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+            return nil
+        }
+        let thumbnailOptions = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: 512,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true
+        ] as CFDictionary
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions) else {
+            return nil
+        }
+        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+    }
+
     /// Native file-import result: copy each readable image into memory
     /// under scoped access. Failures report a notice; staged attachments
     /// already present are never touched.
@@ -764,14 +756,14 @@ struct ChatView: View {
                 }
             }
             guard let data = try? Data(contentsOf: url),
-                  let nsImage = NSImage(data: data) else {
+                  let preview = Self.downsampledPreview(from: data) else {
                 failures += 1
                 continue
             }
             attachments.append(
                 ComposerAttachment(
                     fileName: url.lastPathComponent,
-                    image: nsImage,
+                    preview: preview,
                     data: data
                 )
             )
@@ -788,15 +780,10 @@ struct ChatView: View {
     private func scrollToBottom(
         using proxy: ScrollViewProxy
     ) {
-        guard let lastTurn = viewModel.turns.last else {
-            return
-        }
+        guard let lastTurnID = viewModel.lastTurnID else { return }
 
         withAnimation(reduceMotion ? nil : GlassMetrics.interaction) {
-            proxy.scrollTo(
-                lastTurn.turnID,
-                anchor: .bottom
-            )
+            proxy.scrollTo(lastTurnID, anchor: .bottom)
         }
     }
 

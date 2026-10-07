@@ -1,6 +1,6 @@
 import Foundation
 
-struct Turn: Codable {
+struct Turn: Codable, Equatable {
     let turnID: String
     let chatID: String
     let authorID: String

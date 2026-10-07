@@ -20,7 +20,7 @@ struct TurnsMeta: Decodable {
     }
 }
 
-struct APITurn: Decodable {
+nonisolated struct APITurn: Decodable, Sendable {
     let turnKey: APITurnKey
     let createTime: String?
     let lastUpdateTime: String?
@@ -42,7 +42,7 @@ struct APITurn: Decodable {
     }
 }
 
-struct APITurnKey: Decodable {
+nonisolated struct APITurnKey: Decodable, Sendable {
     let turnID: String
     let chatID: String
 
@@ -52,7 +52,7 @@ struct APITurnKey: Decodable {
     }
 }
 
-struct TurnAuthor: Decodable {
+nonisolated struct TurnAuthor: Decodable, Sendable {
     let authorID: String
     let name: String
 
@@ -62,7 +62,7 @@ struct TurnAuthor: Decodable {
     }
 }
 
-struct TurnEditor: Decodable {
+nonisolated struct TurnEditor: Decodable, Sendable {
     let authorID: String?
     let name: String?
 
@@ -72,7 +72,7 @@ struct TurnEditor: Decodable {
     }
 }
 
-struct APICandidate: Decodable {
+nonisolated struct APICandidate: Decodable, Sendable {
     let candidateID: String
     let createTime: String?
     let rawContent: String
