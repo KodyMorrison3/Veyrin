@@ -147,8 +147,8 @@ Veyrin is a development project with no packaged release yet, so you'll build it
 
 **Requirements**
 
-- A Mac running macOS 26 or later
-- Xcode with the macOS 26 SDK (Swift 6)
+- A Mac running macOS 27 or later
+- Xcode with the macOS 27 SDK (Swift 6.4)
 - A Character.AI account
 
 **Build and run**
@@ -166,10 +166,11 @@ Then select the app scheme in Xcode and press **Run** (⌘R).
 | Phase | Focus | Status |
 |---|---|---|
 | **1. Foundation** | REST, WebSockets, authentication, conversations, streaming, SwiftUI | ✅ Done |
-| **2. Experience** | Branding, navigation, keyboard shortcuts, error and loading states, session lifecycle | ⬜ Planned |
-| **3. Local state** | Persistence, conversation cache, incremental sync, background refresh, image cache | ⬜ Planned |
-| **4. Performance** | Instruments profiling, streaming batching, memory, request deduplication, large chats | ⬜ Planned |
-| **5. Release** | Production config, signing, app icon, documentation, distribution | ⬜ Planned |
+| **2. Experience** | Branding, navigation, keyboard shortcuts, error and loading states, session lifecycle | ✅ Done |
+| **3. Performance** | Streaming, caching, image processing, request optimisation | ✅ Done |
+| **4. Reliability** | WebSocket routing, cancellation, timeouts, session handling | ✅ Done |
+| **5. Local state** | Persistence, conversation cache, incremental sync, background refresh, image cache | 🚧 In progress |
+| **6. Release** | Production config, signing, app icon, documentation, distribution | ⬜ Planned |
 
 ## Disclaimer
 
