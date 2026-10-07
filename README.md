@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://placehold.co/160x160/111111/FFFFFF?text=V" width="128" height="128" alt="Veyrin logo">
+<img src="Assets/icon.png" width="128" height="128" alt="Veyrin logo">
 
 # Veyrin
 
