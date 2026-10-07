@@ -5,14 +5,55 @@ struct CharacterMessageFormattingView: View {
     let content: String
     // Message bubbles fit short text; other consumers retain the original layout.
     var expandsToFill = true
+    var isStreaming = false
+
+    enum FormattedBlock {
+        case paragraph(AttributedString)
+        case heading(AttributedString)
+        case list(ordered: Bool, items: [AttributedString])
+        case code(language: String, content: String)
+    }
+
+    private final class CachedFormatting: NSObject {
+        let blocks: [FormattedBlock]
+        init(_ blocks: [FormattedBlock]) { self.blocks = blocks }
+    }
+    // MainActor-only values include SwiftUI Font/Color attributes. The fixed
+    // styling recipe is independent of layout, locale and light/dark mode.
+    private static let completedFormatting: NSCache<NSString, CachedFormatting> = {
+        let cache = NSCache<NSString, CachedFormatting>()
+        cache.countLimit = 128
+        cache.totalCostLimit = 8 * 1024 * 1024
+        return cache
+    }()
+
+    func formattedBlocks() -> [FormattedBlock] {
+        let key = content as NSString
+        if !isStreaming, let cached = Self.completedFormatting.object(forKey: key) { return cached.blocks }
+        let blocks = CharacterMessageMarkdown.parse(content, cacheCompletedContent: !isStreaming).map { block in
+            switch block {
+            case .paragraph(let inline): return FormattedBlock.paragraph(attributedString(for: inline))
+            case .heading(let level, let inline): return .heading(attributedString(for: inline, font: headingFont(level)))
+            case .list(let ordered, let items): return .list(ordered: ordered, items: items.map { attributedString(for: $0) })
+            case .code(let language, let code): return .code(language: language, content: code)
+            }
+        }
+        if !isStreaming {
+            // Include source, runs and parse overhead conservatively; NSCache
+            // cost is an estimate, not a precise heap measurement.
+            Self.completedFormatting.setObject(CachedFormatting(blocks), forKey: key,
+                                               cost: max(content.utf8.count * 8, 1))
+        }
+        return blocks
+    }
 
     @State private var pendingURL: URL?
 
     var body: some View {
-        let blocks = CharacterMessageMarkdown.parse(content)
+        let blocks = formattedBlocks()
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                blockView(block)
+            ForEach(blocks.indices, id: \.self) { index in
+                blockView(blocks[index])
             }
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -50,24 +91,24 @@ struct CharacterMessageFormattingView: View {
     }
 
     @ViewBuilder
-    private func blockView(_ block: CharacterMessageMarkdown.Block) -> some View {
+    private func blockView(_ block: FormattedBlock) -> some View {
         switch block {
-        case .paragraph(let inlines):
-            inlineText(inlines)
+        case .paragraph(let text):
+            Text(text)
                 .lineSpacing(4)
                 .frame(maxWidth: expandsToFill ? .infinity : nil, alignment: .leading)
 
-        case .heading(let level, let inlines):
-            inlineText(inlines, font: headingFont(level))
+        case .heading(let text):
+            Text(text)
                 .frame(maxWidth: expandsToFill ? .infinity : nil, alignment: .leading)
 
         case .list(let ordered, let items):
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                ForEach(items.indices, id: \.self) { index in
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
                         Text(ordered ? "\(index + 1)." : "•")
                             .frame(minWidth: 18, alignment: .trailing)
-                        inlineText(item)
+                        Text(items[index])
                             .lineSpacing(4)
                             .frame(maxWidth: expandsToFill ? .infinity : nil, alignment: .leading)
                     }
@@ -78,10 +119,6 @@ struct CharacterMessageFormattingView: View {
         case .code(let language, let code):
             codeBlock(language: language, code: code)
         }
-    }
-
-    private func inlineText(_ inlines: [CharacterMessageMarkdown.Inline], font: Font = .body) -> Text {
-        Text(attributedString(for: inlines, font: font))
     }
 
     private func attributedString(

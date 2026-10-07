@@ -57,14 +57,13 @@ struct FeedService {
             guard 200..<300 ~= httpResponse.statusCode else {
                 throw NetworkError.httpError(httpResponse.statusCode)
             }
-            do {
-                return try JSONDecoder().decode(FeedResponse.self, from: data)
-            } catch {
-                throw NetworkError.decodingError(error)
-            }
+            return try await HTTPResponseDecoder.decode(FeedResponse.self, from: data)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as NetworkError {
             throw error
         } catch {
+            try Task.checkCancellation()
             throw NetworkError.requestFailed(error)
         }
     }

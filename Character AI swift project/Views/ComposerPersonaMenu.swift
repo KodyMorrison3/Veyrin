@@ -318,9 +318,7 @@ struct ComposerPersonaMenu: View {
     }
 
     private func historyDate(for value: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        let date = PresentationDate.parse(value)
         guard let date else { return value }
         return date.formatted(date: .abbreviated, time: .shortened)
     }

@@ -74,13 +74,8 @@ struct CharacterSearchService {
 
         let data = try await responseData(for: request)
 
-        do {
-            return try JSONDecoder()
-                .decode(SearchAutocompleteResponse.self, from: data)
-                .searchAutocomplete
-        } catch {
-            throw NetworkError.decodingError(error)
-        }
+        return try await HTTPResponseDecoder.decode(SearchAutocompleteResponse.self, from: data)
+            .searchAutocomplete
     }
 
     // MARK: - Results (blocked on a web-session credential)
@@ -105,7 +100,7 @@ struct CharacterSearchService {
             // Treat it as the documented web-session requirement, not a crash
             // or a generic server error. Anything else stays a NetworkError.
             if httpResponse.statusCode == 500,
-               let batch = try? JSONDecoder().decode(
+               let batch = try? await HTTPResponseDecoder.decode(
                     TRPCBatchResponse<SearchResultsPayload>.self,
                     from: data
                ),
@@ -118,14 +113,10 @@ struct CharacterSearchService {
             }
 
             let batch: TRPCBatchResponse<SearchResultsPayload>
-            do {
-                batch = try JSONDecoder().decode(
-                    TRPCBatchResponse<SearchResultsPayload>.self,
-                    from: data
-                )
-            } catch {
-                throw NetworkError.decodingError(error)
-            }
+            batch = try await HTTPResponseDecoder.decode(
+                TRPCBatchResponse<SearchResultsPayload>.self,
+                from: data
+            )
 
             guard let entry = batch.entries.first else {
                 throw NetworkError.invalidResponse
@@ -139,11 +130,14 @@ struct CharacterSearchService {
                 throw NetworkError.invalidResponse
             }
             return result.data.json.characters
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as NetworkError {
             throw error
         } catch let error as SearchError {
             throw error
         } catch {
+            try Task.checkCancellation()
             throw NetworkError.requestFailed(error)
         }
     }
@@ -208,9 +202,12 @@ struct CharacterSearchService {
             }
 
             return data
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as NetworkError {
             throw error
         } catch {
+            try Task.checkCancellation()
             throw NetworkError.requestFailed(error)
         }
     }

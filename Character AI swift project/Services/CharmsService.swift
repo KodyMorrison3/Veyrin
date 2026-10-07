@@ -47,7 +47,7 @@ struct CharmsService {
         return response.quests
     }
 
-    private func get<Response: Decodable>(
+    private func get<Response: Decodable & Sendable>(
         userID: String,
         resource: String
     ) async throws -> Response {
@@ -69,14 +69,13 @@ struct CharmsService {
                 throw NetworkError.httpError(httpResponse.statusCode)
             }
 
-            do {
-                return try JSONDecoder().decode(Response.self, from: data)
-            } catch {
-                throw NetworkError.decodingError(error)
-            }
+            return try await HTTPResponseDecoder.decode(Response.self, from: data)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as NetworkError {
             throw error
         } catch {
+            try Task.checkCancellation()
             throw NetworkError.requestFailed(error)
         }
     }

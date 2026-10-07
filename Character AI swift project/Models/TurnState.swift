@@ -13,6 +13,7 @@ final class TurnState: ObservableObject, Identifiable {
     }
 
     func update(_ turn: Turn) {
+        guard self.turn != turn else { return }
         self.turn = turn
     }
 }

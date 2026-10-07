@@ -7,7 +7,7 @@ struct HTTPClient {
         self.session = session
     }
 
-    func get<Response: Decodable>(
+    func get<Response: Decodable & Sendable>(
         _ url: URL
     ) async throws -> Response {
         do {
@@ -21,19 +21,18 @@ struct HTTPClient {
                 throw NetworkError.httpError(httpResponse.statusCode)
             }
 
-            do {
-                return try JSONDecoder().decode(Response.self, from: data)
-            } catch {
-                throw NetworkError.decodingError(error)
-            }
+            return try await HTTPResponseDecoder.decode(Response.self, from: data)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as NetworkError {
             throw error
         } catch {
+            try Task.checkCancellation()
             throw NetworkError.requestFailed(error)
         }
     }
 
-    func post<Body: Encodable, Response: Decodable>(
+    func post<Body: Encodable, Response: Decodable & Sendable>(
         _ url: URL,
         body: Body
     ) async throws -> Response {
@@ -63,14 +62,13 @@ struct HTTPClient {
                 throw NetworkError.httpError(httpResponse.statusCode)
             }
 
-            do {
-                return try JSONDecoder().decode(Response.self, from: data)
-            } catch {
-                throw NetworkError.decodingError(error)
-            }
+            return try await HTTPResponseDecoder.decode(Response.self, from: data)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as NetworkError {
             throw error
         } catch {
+            try Task.checkCancellation()
             throw NetworkError.requestFailed(error)
         }
     }

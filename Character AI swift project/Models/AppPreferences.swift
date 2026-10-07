@@ -19,7 +19,9 @@ import SwiftUI
 
 private let processedWallpaperQueue = DispatchQueue(label: "CharacterAI.WallpaperProcessing", qos: .userInitiated)
 
-private final class WallpaperRequestGeneration: @unchecked Sendable {
+// Synchronous generation checks are required on the serial disk queue.
+// The only mutable field is protected by this lock on every access.
+nonisolated private final class WallpaperRequestGeneration: @unchecked Sendable {
     private let lock = NSLock()
     private var value: UInt64 = 0
 
@@ -41,7 +43,6 @@ private final class WallpaperRequestGeneration: @unchecked Sendable {
     }
 }
 
-private let wallpaperRequestGeneration = WallpaperRequestGeneration()
 
 enum AvatarShape: String, CaseIterable, Identifiable {
     case circle
@@ -112,7 +113,12 @@ final class AppPreferences: ObservableObject {
         didSet { defaults.set(avatarShape.rawValue, forKey: Keys.avatarShape) }
     }
 
-    @Published private var storedGlassOpacity: Double
+    @Published private var storedGlassOpacity: Double {
+        didSet {
+            defaults.set(storedGlassOpacity, forKey: Keys.glassOpacity)
+            updateGlassAppearance()
+        }
+    }
 
 
     /// Whether Discover shows the curated Popular characters / Trending
@@ -196,8 +202,6 @@ final class AppPreferences: ObservableObject {
         set {
             storedWindowTransparency = Self.clamped(newValue, to: Self.windowTransparencyRange,
                                                     fallback: Self.defaultWindowTransparency)
-            defaults.set(storedWindowTransparency, forKey: Keys.windowTransparency)
-            updateWallpaperAppearance()
         }
     }
 
@@ -271,7 +275,6 @@ final class AppPreferences: ObservableObject {
         }
     }
     var glassAppearance: GlassAppearance { GlassAppearanceStore.shared.appearance }
-    private var glassOpacityObservation: AnyCancellable?
     private var lastGlassAppearance = GlassAppearance(
         palette: EnvironmentalPalette.defaultPalette,
         density: 0.11,
@@ -287,7 +290,7 @@ final class AppPreferences: ObservableObject {
 
     private var customWallpaperAmbientColor: Color?
     private var defaultArtworkTask: Task<Void, Never>?
-    private final class ProcessedWallpaper: NSObject, @unchecked Sendable {
+    nonisolated private final class ProcessedWallpaper: NSObject, Sendable {
         let image: NSImage
         let displayImage: NSImage
         let palette: EnvironmentalPalette?
@@ -314,15 +317,13 @@ final class AppPreferences: ObservableObject {
     private let persistedWallpaperURL: URL?
     private let fileManager = FileManager.default
     private var hasLoadedPersistedWallpaper = false
+    private let wallpaperRequestGeneration = WallpaperRequestGeneration()
 
     private var wallpaperFileURL: URL {
         if let persistedWallpaperURL { return persistedWallpaperURL }
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
         let dir = appSupport.appendingPathComponent("CharacterAI", isDirectory: true)
-        if !fileManager.fileExists(atPath: dir.path) {
-            try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
-        }
         return dir.appendingPathComponent("custom_wallpaper.png")
     }
 
@@ -355,13 +356,6 @@ final class AppPreferences: ObservableObject {
         let storedHex = defaults.string(forKey: Keys.solidColorHex) ?? "#0F1226"
         solidColor = Color(hex: storedHex) ?? Color(red: 0.059, green: 0.071, blue: 0.149)
 
-        glassOpacityObservation = $storedGlassOpacity
-            .dropFirst()
-            .sink { [weak self] value in
-                guard let self else { return }
-                self.defaults.set(value, forKey: Keys.glassOpacity)
-                self.updateGlassAppearance()
-            }
         EnvironmentalPaletteStore.shared.update(environmentalPalette)
         updateDerivedColors()
         updateGlassAppearance()
@@ -377,26 +371,9 @@ final class AppPreferences: ObservableObject {
         }
     }
 
-    private nonisolated static func downsampledImage(from data: Data, maxPixelSize: Int) -> NSImage? {
-        guard let cgImage = downsampledCGImage(from: data, maxPixelSize: maxPixelSize) else { return nil }
-        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-    }
-
-    private nonisolated static func downsampledCGImage(from data: Data, maxPixelSize: Int) -> CGImage? {
-        let options = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithData(data as CFData, options) else { return nil }
-        let thumbnailOptions = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true
-        ] as CFDictionary
-        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions) else { return nil }
-        return thumbnail
-    }
-
-    private nonisolated static func pngWallpaper(from data: Data, maxPixelSize: Int) -> ProcessedWallpaper? {
-        guard let thumbnail = downsampledCGImage(from: data, maxPixelSize: maxPixelSize) else { return nil }
+    private nonisolated static func pngWallpaper(from url: URL, maxPixelSize: Int) -> ProcessedWallpaper? {
+        guard let image = ImageProcessing.thumbnail(from: url, maxPixelSize: maxPixelSize),
+              let thumbnail = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
         let pngData = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(pngData as CFMutableData, "public.png" as CFString, 1, nil) else {
             return nil
@@ -416,22 +393,26 @@ final class AppPreferences: ObservableObject {
 
     /// Sets and saves custom wallpaper from chosen file URL.
     func setCustomWallpaper(from sourceURL: URL) {
-        let generation = wallpaperRequestGeneration.advance()
+        let generationGuard = wallpaperRequestGeneration
+        let generation = generationGuard.advance()
         let scoped = sourceURL.startAccessingSecurityScopedResource()
         let destination = wallpaperFileURL
         processedWallpaperQueue.async { [weak self] in
             defer {
                 if scoped { sourceURL.stopAccessingSecurityScopedResource() }
             }
-            guard let sourceData = try? Data(contentsOf: sourceURL),
-                  let processed = Self.pngWallpaper(from: sourceData, maxPixelSize: 1800),
-                  wallpaperRequestGeneration.isCurrent(generation) else { return }
+            guard generationGuard.isCurrent(generation),
+                  let processed = Self.pngWallpaper(from: sourceURL, maxPixelSize: 1800),
+                  generationGuard.isCurrent(generation) else { return }
             let ambientColor = processed.image.averageColor()
             do {
                 guard let pngData = processed.pngData else { return }
+                try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                guard generationGuard.isCurrent(generation) else { return }
                 try pngData.write(to: destination, options: .atomic)
                 Task { @MainActor [weak self] in
-                    guard let self, wallpaperRequestGeneration.isCurrent(generation) else { return }
+                    guard let self, generationGuard.isCurrent(generation) else { return }
                     self.customWallpaperAmbientColor = ambientColor.map { Color(nsColor: $0) }
                     self.customWallpaperDisplayImage = processed.image
                     self.customWallpaper = processed.image
@@ -463,25 +444,21 @@ final class AppPreferences: ObservableObject {
     private func loadPersistedWallpaper() {
         guard !hasLoadedPersistedWallpaper else { return }
         hasLoadedPersistedWallpaper = true
-        guard fileManager.fileExists(atPath: wallpaperFileURL.path) else {
-            customWallpaper = nil
-            customWallpaperDisplayImage = nil
-            if backgroundMode == .customWallpaper { backgroundMode = .default }
-            return
-        }
-
         let url = wallpaperFileURL
-        let generation = wallpaperRequestGeneration.current()
+        let generationGuard = wallpaperRequestGeneration
+        let generation = generationGuard.current()
         processedWallpaperQueue.async { [weak self] in
-            guard let data = try? Data(contentsOf: url),
-                  let displayImage = Self.downsampledImage(from: data, maxPixelSize: 1800),
-                  let ambientColor = displayImage.averageColor(),
-                  wallpaperRequestGeneration.isCurrent(generation) else { return }
+            guard generationGuard.isCurrent(generation) else { return }
+            let displayImage = ImageProcessing.thumbnail(from: url, maxPixelSize: 1800)
+            let ambientColor = displayImage?.averageColor()
             Task { @MainActor [weak self] in
-                guard let self, wallpaperRequestGeneration.isCurrent(generation) else { return }
-                self.customWallpaperAmbientColor = Color(nsColor: ambientColor)
+                guard let self, generationGuard.isCurrent(generation) else { return }
+                self.customWallpaperAmbientColor = ambientColor.map { Color(nsColor: $0) }
                 self.customWallpaperDisplayImage = displayImage
                 self.customWallpaper = displayImage
+                if displayImage == nil && self.backgroundMode == .customWallpaper {
+                    self.backgroundMode = .default
+                }
             }
         }
     }
@@ -532,18 +509,11 @@ final class AppPreferences: ObservableObject {
                 }
             }
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+                let (data, response) = try await URLSession.shared.data(from: url)
+                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return }
                 guard !Task.isCancelled, let self,
                       self.defaultArtworkURL == url else { return }
-                let preparedArtwork: ProcessedWallpaper? = await Task.detached(priority: .utility) {
-                    guard let image = Self.downsampledImage(from: data, maxPixelSize: 1200),
-                          let ambientColor = image.averageColor() else { return nil }
-                    return ProcessedWallpaper(
-                        image: image,
-                        displayImage: image,
-                        ambientColor: ambientColor
-                    )
-                }.value
+                let preparedArtwork = await Self.prepareArtwork(data)
                 guard !Task.isCancelled, self.defaultArtworkURL == url,
                       let preparedArtwork, let avg = preparedArtwork.ambientColor else { return }
                 let displayImage = preparedArtwork.displayImage
@@ -569,6 +539,14 @@ final class AppPreferences: ObservableObject {
                 // A neutral fallback, never an unrelated brand-colour wash.
             }
         }
+    }
+
+    @concurrent
+    private static func prepareArtwork(_ data: Data) async -> ProcessedWallpaper? {
+        guard !Task.isCancelled,
+              let image = ImageProcessing.thumbnail(from: data, maxPixelSize: 1200),
+              let ambientColor = image.averageColor() else { return nil }
+        return ProcessedWallpaper(image: image, displayImage: image, ambientColor: ambientColor)
     }
 
     /// Derives an ambient lighting tint from the current custom wallpaper or solid color.
@@ -729,7 +707,7 @@ extension NSImage {
 /// - base environmental ambient color
 /// - lighter / less-saturated highlight tint
 /// - surface & glass tint variants for Liquid Glass surfaces
-struct EnvironmentalPalette: Equatable {
+struct EnvironmentalPalette: Equatable, Sendable {
     /// Deep atmospheric foundation used for the window base and depth vignettes.
     let atmosphericBase: Color
     /// The source / active environmental ambient color.

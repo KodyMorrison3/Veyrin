@@ -20,7 +20,7 @@ import SwiftUI
  * buttons without duplicating the hierarchy.
  */
 struct UserProfileControl: View {
-    let viewModel: UserProfileViewModel
+    @ObservedObject var viewModel: UserProfileViewModel
     @ObservedObject private var preferences = AppPreferences.shared
     let menuAction: () -> Void
     let profileAction: (String) -> Void
@@ -92,12 +92,8 @@ struct UserProfileControl: View {
                let fileName = profile.avatarFileName,
                !fileName.isEmpty,
                let url = CharacterImageURL.makeURL(avatarFileName: fileName) {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image {
-                        image.resizable().scaledToFill()
-                    } else {
-                        fallback
-                    }
+                CachedAvatarView(url: url) {
+                    fallback
                 }
             } else {
                 fallback
@@ -232,12 +228,8 @@ struct UserProfileDetailView: View {
         Group {
             if let fileName = profile.avatarFileName.nonEmpty,
                let url = CharacterImageURL.makeURL(avatarFileName: fileName) {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image {
-                        image.resizable().scaledToFill()
-                    } else {
-                        fallbackAvatar
-                    }
+                CachedAvatarView(url: url) {
+                    fallbackAvatar
                 }
             } else {
                 fallbackAvatar
@@ -279,13 +271,9 @@ struct UserProfileDetailView: View {
     private func avatar(fileName: String?, name: String?) -> some View {
         if let fileName = fileName.nonEmpty,
            let url = CharacterImageURL.makeURL(avatarFileName: fileName) {
-            AsyncImage(url: url) { phase in
-                if let image = phase.image {
-                    image.resizable().scaledToFill()
-                } else {
+            CachedAvatarView(url: url) {
                     fallbackAvatar(fileName: fileName, name: name)
                 }
-            }
             .frame(width: 44, height: 44)
             .clipShape(RoundedRectangle(cornerRadius: 8))
         } else {

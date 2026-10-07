@@ -63,12 +63,7 @@ struct PopularTrendingService {
 
         let data = try await responseData(for: request)
 
-        do {
-            return try JSONDecoder()
-                .decode(CuratedCharacterListsResponse.self, from: data)
-        } catch {
-            throw NetworkError.decodingError(error)
-        }
+        return try await HTTPResponseDecoder.decode(CuratedCharacterListsResponse.self, from: data)
     }
 
     private func addAuthentication(to request: inout URLRequest) async throws {
@@ -95,9 +90,12 @@ struct PopularTrendingService {
             }
 
             return data
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as NetworkError {
             throw error
         } catch {
+            try Task.checkCancellation()
             throw NetworkError.requestFailed(error)
         }
     }

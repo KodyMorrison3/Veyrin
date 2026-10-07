@@ -1,6 +1,6 @@
 import Foundation
 
-struct TurnKey: Codable {
+nonisolated struct TurnKey: Codable, Hashable, Sendable {
     let turnId: String
     let chatId: String
 

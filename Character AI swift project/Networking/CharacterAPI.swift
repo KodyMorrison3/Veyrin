@@ -41,6 +41,6 @@ private struct GetCharacterInfoRequest: Encodable {
     }
 }
 
-private struct CharacterResponse: Decodable {
+nonisolated private struct CharacterResponse: Decodable, Sendable {
     let character: Character
 }

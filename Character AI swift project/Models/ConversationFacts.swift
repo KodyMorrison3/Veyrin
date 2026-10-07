@@ -1,7 +1,7 @@
 import Foundation
 
 /// Response from `GET https://neo.character.ai/chat/{chatID}/conversation-facts/`
-struct ConversationFactsResponse: Decodable {
+nonisolated struct ConversationFactsResponse: Decodable, Sendable {
     let conversationFacts: [String: EntityConversationFacts]?
     let conversationFactOverrides: [String: EntityFactOverrides]?
 
@@ -12,12 +12,12 @@ struct ConversationFactsResponse: Decodable {
 }
 
 /// Extracted facts for a particular entity (character, user, or other mentioned participants)
-struct EntityConversationFacts: Decodable {
+nonisolated struct EntityConversationFacts: Decodable, Sendable {
     let facts: [ConversationFact]
 }
 
 /// A specific attribute or memo fact identified by Character.AI memory system
-struct ConversationFact: Decodable, Identifiable, Hashable {
+nonisolated struct ConversationFact: Decodable, Identifiable, Hashable, Sendable {
     let category: String
     let value: String
 
@@ -25,17 +25,17 @@ struct ConversationFact: Decodable, Identifiable, Hashable {
 }
 
 /// Fact overrides for an entity
-struct EntityFactOverrides: Decodable {
+nonisolated struct EntityFactOverrides: Decodable, Sendable {
     let overrides: [String: FactOverrideDetail]?
 }
 
-struct FactOverrideDetail: Decodable {
+nonisolated struct FactOverrideDetail: Decodable, Sendable {
     let operation: String?
     let value: String?
 }
 
 /// Response from `GET https://neo.character.ai/character/v1/character_voted/{characterID}/voted`
-struct CharacterVotedResponse: Decodable {
+nonisolated struct CharacterVotedResponse: Decodable, Sendable {
     let status: String
     let voted: Bool
 }

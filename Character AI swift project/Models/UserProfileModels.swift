@@ -13,10 +13,10 @@
 
 import Foundation
 
-struct UserProfileResponse: Decodable {
-    struct Entry: Decodable {
-        struct ResultBody: Decodable {
-            struct DataBody: Decodable {
+nonisolated struct UserProfileResponse: Decodable, Sendable {
+    nonisolated struct Entry: Decodable, Sendable {
+        nonisolated struct ResultBody: Decodable, Sendable {
+            nonisolated struct DataBody: Decodable, Sendable {
                 let json: UserProfile
             }
 
@@ -37,7 +37,7 @@ struct UserProfileResponse: Decodable {
     }
 }
 
-struct UserProfile: Decodable {
+nonisolated struct UserProfile: Decodable, Sendable {
     let username: String?
     let name: String?
     let bio: String?

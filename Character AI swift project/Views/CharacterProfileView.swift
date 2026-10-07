@@ -206,13 +206,9 @@ struct CharacterProfileView: View {
     private func avatar(fileName: String?, name: String?, size: CGFloat) -> some View {
         if let fileName = nonempty(fileName),
            let url = CharacterImageURL.makeURL(avatarFileName: fileName) {
-            AsyncImage(url: url) { phase in
-                if let image = phase.image {
-                    image.resizable().scaledToFill()
-                } else {
+            CachedAvatarView(url: url) {
                     avatarFallback(name: name, size: size)
                 }
-            }
             .frame(width: size, height: size)
             .clipShape(RoundedRectangle(cornerRadius: 12))
         } else {

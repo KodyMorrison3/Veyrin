@@ -1,6 +1,6 @@
 import Foundation
 
-struct AvailableModelsResponse: Decodable {
+nonisolated struct AvailableModelsResponse: Decodable, Sendable {
     let availableModels: [String]
     let defaultModelType: String?
     let freeDefaultModelType: String?
@@ -14,7 +14,7 @@ struct AvailableModelsResponse: Decodable {
     }
 }
 
-struct ModelSelectionOption: Identifiable {
+nonisolated struct ModelSelectionOption: Identifiable, Sendable {
     let modelType: String
     let name: String?
     let isPlusOnly: Bool
@@ -52,7 +52,7 @@ struct ModelSelectionOption: Identifiable {
     }
 }
 
-struct AvailableModelConfiguration: Decodable {
+nonisolated struct AvailableModelConfiguration: Decodable, Sendable {
     let name: String?
     let displayName: String?
     let isPlusOnly: Bool?

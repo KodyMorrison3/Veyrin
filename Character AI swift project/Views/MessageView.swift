@@ -121,7 +121,8 @@ struct MessageView: View {
                     ZStack(alignment: turn.isHuman ? .bottomLeading : .bottomTrailing) {
                         CharacterMessageFormattingView(
                             content: candidate.rawContent,
-                            expandsToFill: false
+                            expandsToFill: false,
+                            isStreaming: candidate.isFinal == false
                         )
                         .font(.system(size: 14))
                         .textSelection(.enabled)
@@ -231,7 +232,8 @@ struct MessageView: View {
             systemImage: "backward.end",
             role: .destructive,
             isDisabled: onRewind == nil || isRewinding
-        ) {            let action = onRewind
+        ) {
+            let action = onRewind
             isShowingActions = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 action?(turn)

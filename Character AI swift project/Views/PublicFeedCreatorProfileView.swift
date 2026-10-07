@@ -45,13 +45,9 @@ struct PublicFeedCreatorProfileView: View {
                 HStack(spacing: 12) {
                     if let avatarFileName = profile.avatarFileName,
                        let url = CharacterImageURL.makeURL(avatarFileName: avatarFileName) {
-                        AsyncImage(url: url) { phase in
-                            if let image = phase.image {
-                                image.resizable().scaledToFill()
-                            } else {
-                                creatorAvatar(profile.name ?? username)
-                            }
-                        }
+                        CachedAvatarView(url: url) {
+                    creatorAvatar(profile.name ?? username)
+                }
                         .frame(width: 60, height: 60)
                         .clipShape(Circle())
                     } else {

@@ -65,15 +65,17 @@ struct UserProfileService {
         let data = try await responseData(for: request)
 
         do {
-            let response = try JSONDecoder()
-                .decode(UserProfileResponse.self, from: data)
+            let response = try await HTTPResponseDecoder.decode(UserProfileResponse.self, from: data)
             guard let profile = response.firstProfile() else {
                 throw NetworkError.invalidResponse
             }
             return profile
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as NetworkError {
             throw error
         } catch {
+            try Task.checkCancellation()
             throw NetworkError.decodingError(error)
         }
     }
@@ -102,9 +104,12 @@ struct UserProfileService {
             }
 
             return data
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as NetworkError {
             throw error
         } catch {
+            try Task.checkCancellation()
             throw NetworkError.requestFailed(error)
         }
     }

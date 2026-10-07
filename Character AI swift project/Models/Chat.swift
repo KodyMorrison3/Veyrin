@@ -1,11 +1,25 @@
 import Foundation
 
-struct ChatResponse: Decodable {
+nonisolated struct ChatResponse: Decodable, Sendable {
     let chat: Chat
     let metadata: ChatMetadataContainer?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if container.contains(.chat) {
+            chat = try container.decode(Chat.self, forKey: .chat)
+            metadata = try container.decodeIfPresent(ChatMetadataContainer.self, forKey: .metadata)
+        } else {
+            // Preserve the already-supported direct shape without refetching.
+            chat = try Chat(from: decoder)
+            metadata = nil
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case chat, metadata }
 }
 
-struct ChatMetadataContainer: Decodable {
+nonisolated struct ChatMetadataContainer: Decodable, Sendable {
     let preferredModelType: String?
 
     enum CodingKeys: String, CodingKey {
@@ -13,7 +27,7 @@ struct ChatMetadataContainer: Decodable {
     }
 }
 
-struct Chat: Codable {
+nonisolated struct Chat: Codable, Sendable {
     let chatID: String
     let creatorID: String
     let visibility: String

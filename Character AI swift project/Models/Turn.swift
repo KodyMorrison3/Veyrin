@@ -1,6 +1,6 @@
 import Foundation
 
-struct Turn: Codable, Equatable {
+nonisolated struct Turn: Codable, Equatable, Sendable {
     let turnID: String
     let chatID: String
     let authorID: String

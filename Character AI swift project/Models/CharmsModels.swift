@@ -8,11 +8,11 @@
 
 import Foundation
 
-struct CharmTransactionsResponse: Codable {
+nonisolated struct CharmTransactionsResponse: Codable, Sendable {
     let transactions: [CharmTransaction]
 }
 
-struct CharmTransaction: Codable, Identifiable {
+nonisolated struct CharmTransaction: Codable, Identifiable, Sendable {
     let transactionID: String
     let userID: String
     let productID: String
@@ -32,11 +32,11 @@ struct CharmTransaction: Codable, Identifiable {
     }
 }
 
-struct CharmQuestsResponse: Codable {
+nonisolated struct CharmQuestsResponse: Codable, Sendable {
     let quests: [CharmQuest]
 }
 
-struct CharmQuest: Codable, Identifiable {
+nonisolated struct CharmQuest: Codable, Identifiable, Sendable {
     let questID: String
     let questTitle: String
     let questProgressAmount: String

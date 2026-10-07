@@ -29,13 +29,14 @@ enum CharacterMessageMarkdown {
         case code(language: String, content: String)
     }
 
-    static func parse(_ source: String) -> [Block] {
+    static func parse(_ source: String, cacheCompletedContent: Bool = true) -> [Block] {
+        guard cacheCompletedContent else { return parseUncached(source) }
         let key = source as NSString
         if let cached = parsedBlocks.object(forKey: key) {
             return cached.value
         }
         let blocks = parseUncached(source)
-        parsedBlocks.setObject(CachedBlocks(blocks), forKey: key, cost: max(source.utf8.count, 1))
+        parsedBlocks.setObject(CachedBlocks(blocks), forKey: key, cost: max(source.utf8.count * 4, 1))
         return blocks
     }
 

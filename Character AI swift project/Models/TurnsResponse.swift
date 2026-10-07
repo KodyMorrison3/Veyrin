@@ -7,12 +7,12 @@
 
 import Foundation
 
-struct TurnsResponse: Decodable {
+nonisolated struct TurnsResponse: Decodable, Sendable {
     let turns: [APITurn]
     let meta: TurnsMeta
 }
 
-struct TurnsMeta: Decodable {
+nonisolated struct TurnsMeta: Decodable, Sendable {
     let nextToken: String?
 
     enum CodingKeys: String, CodingKey {

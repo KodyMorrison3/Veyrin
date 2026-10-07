@@ -35,6 +35,7 @@ struct DiscoverView: View {
         .scrollEdgeEffectHidden()
         // Inherits MainView's full-window ShellEnvironmentalBackground.
         .navigationTitle("Discover")
+        .onDisappear { viewModel.cancelSearch() }
         .task {
             await viewModel.loadInitialPages()
         }
@@ -418,13 +419,9 @@ struct DiscoverView: View {
     private func avatar(fileName: String?, name: String?) -> some View {
         if let fileName = nonempty(fileName),
            let url = CharacterImageURL.makeURL(avatarFileName: fileName) {
-            AsyncImage(url: url) { phase in
-                if let image = phase.image {
-                    image.resizable().scaledToFill()
-                } else {
+            CachedAvatarView(url: url) {
                     avatarFallback(name: name)
                 }
-            }
             .frame(width: 58, height: 58)
             .clipShape(RoundedRectangle(
                 cornerRadius: preferences.avatarShape == .circle ? 29 : 10

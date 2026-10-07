@@ -190,9 +190,9 @@ extension View {
 /// Unified global environmental background system.
 ///
 /// Serves as the single source of truth across the entire app:
-/// 1. Default: Heavy blur (~36pt) on character avatar/artwork as an environmental
+/// 1. Default: Soft blur (18pt) on character avatar/artwork as an environmental
 ///    color/light source rather than something clearly visible.
-/// 2. Custom Wallpaper: Noticeably lighter/moderate blur (16pt) so the user's
+/// 2. Custom Wallpaper: Noticeably lighter/moderate blur (10pt) so the user's
 ///    wallpaper remains recognizable and visually present while softened for Liquid Glass.
 /// 3. Solid Colour: No image blur; solid base with atmospheric/vignette treatment.
 /// Default-mode artwork extraction lives in `AppPreferences`

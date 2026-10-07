@@ -2,7 +2,7 @@ import Foundation
 
 /// Represents a user persona from `GET https://neo.character.ai/character/v1/get_user_personas?force_refresh=0`
 /// and persona settings from `GET / POST https://plus.character.ai/chat/user/settings/`
-struct Persona: Identifiable, Codable, Equatable, Hashable {
+nonisolated struct Persona: Identifiable, Codable, Equatable, Hashable, Sendable {
     let id: String
     var externalID: String
     var displayName: String
@@ -83,12 +83,12 @@ struct Persona: Identifiable, Codable, Equatable, Hashable {
 }
 
 /// Response payload for `GET https://neo.character.ai/character/v1/get_user_personas?force_refresh=0`
-struct UserPersonasResponse: Decodable {
+nonisolated struct UserPersonasResponse: Decodable, Sendable {
     let personas: [UserPersonaItem]
 }
 
 /// A persona item within the Character.AI personas API response
-struct UserPersonaItem: Decodable {
+nonisolated struct UserPersonaItem: Decodable, Sendable {
     let id: Int
     let externalID: String
     let title: String
@@ -133,7 +133,7 @@ struct UserPersonaItem: Decodable {
 }
 
 /// Response from `GET https://plus.character.ai/chat/user/settings/?v=2`
-struct UserSettingsResponse: Decodable {
+nonisolated struct UserSettingsResponse: Decodable, Sendable {
     let personaSettings: PersonaSettingsContainer?
     let personaOverrides: [String: String]?
     let defaultPersonaId: String?
@@ -145,17 +145,17 @@ struct UserSettingsResponse: Decodable {
     }
 }
 
-struct PersonaSettingsContainer: Decodable {
+nonisolated struct PersonaSettingsContainer: Decodable, Sendable {
     let defaultPersonaId: String?
     let characterOverrides: [String: String]?
 }
 
 /// Response from `POST https://plus.character.ai/chat/user/update_settings/`
-struct UpdateSettingsResponse: Decodable {
+nonisolated struct UpdateSettingsResponse: Decodable, Sendable {
     let success: Bool?
 }
 
 /// Request body for `POST https://plus.character.ai/chat/user/update_settings/`
-struct UpdatePersonaOverridesRequest: Encodable {
+nonisolated struct UpdatePersonaOverridesRequest: Encodable, Sendable {
     let personaOverrides: [String: String]
 }

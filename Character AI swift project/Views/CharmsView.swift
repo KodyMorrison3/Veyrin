@@ -172,10 +172,7 @@ struct CharmsView: View {
     }
 
     private func formattedTime(_ value: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = formatter.date(from: value)
-            ?? ISO8601DateFormatter().date(from: value)
+        let date = PresentationDate.parse(value)
         return date?.formatted(date: .abbreviated, time: .shortened) ?? value
     }
 }

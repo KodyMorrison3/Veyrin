@@ -12,7 +12,7 @@
 
 import Foundation
 
-struct CuratedCharacterListsResponse: Decodable {
+nonisolated struct CuratedCharacterListsResponse: Decodable, Sendable {
     /// Keyed by the requested `list_id` (e.g.
     /// `cold_start_popular_characters_l30d_v1`). A list the server omits is
     /// treated as empty by the accessor below, not an error.

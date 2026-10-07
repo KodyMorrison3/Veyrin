@@ -7,6 +7,6 @@
 
 import Foundation
 
-struct ChatPreviewResponse: Decodable {
+nonisolated struct ChatPreviewResponse: Decodable, Sendable {
     let chats: [ChatPreview]
 }

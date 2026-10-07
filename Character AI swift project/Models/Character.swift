@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct Character: Codable {
+nonisolated struct Character: Codable, Sendable {
     let externalID: String
     let title: String
     let name: String

@@ -1,4 +1,3 @@
-import AVKit
 import SwiftUI
 
 struct FeedView: View {
@@ -124,7 +123,6 @@ private struct FeedPostCard: View {
 
     private var isCharacterPost: Bool { item.componentType == 8 }
     private var isMultiCharacterPost: Bool { item.componentType == 7 }
-    private var isMediaPost: Bool { item.componentType == 11 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -164,17 +162,15 @@ private struct FeedPostCard: View {
                     .lineLimit(2)
             }
 
-            if let reactions = post.reactions, !reactions.isEmpty {
-                Text(reactions.sorted { $0.key < $1.key }
-                    .map { "\($0.key) \($0.value)" }
-                    .joined(separator: "  ·  "))
+            if !post.reactionSummary.isEmpty {
+                Text(post.reactionSummary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
 
             if let dateString = post.createdAt,
-               let date = ISO8601DateFormatter().date(from: dateString) {
+               let date = PresentationDate.parse(dateString) {
                 Text(date.formatted(date: .abbreviated, time: .shortened))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -277,13 +273,9 @@ private func feedAvatar(fileName: String?, url: String?, name: String, size: CGF
             return nil
         }()
     if let imageURL {
-        AsyncImage(url: imageURL) { phase in
-            if let image = phase.image {
-                image.resizable().scaledToFill()
-            } else {
-                feedAvatarFallback(name: name, size: size)
-            }
-        }
+        CachedAvatarView(url: imageURL) {
+                    feedAvatarFallback(name: name, size: size)
+                }
         .frame(width: size, height: size)
         .clipShape(Circle())
     } else {

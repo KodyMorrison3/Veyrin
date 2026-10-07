@@ -1,7 +1,7 @@
 import Foundation
 
-struct FeedRequest: Encodable {
-    struct Options: Encodable {
+nonisolated struct FeedRequest: Encodable, Sendable {
+    nonisolated struct Options: Encodable, Sendable {
         let componentTypes: [Int]
 
         enum CodingKeys: String, CodingKey {
@@ -23,7 +23,7 @@ struct FeedRequest: Encodable {
     }
 }
 
-struct FeedResponse: Decodable {
+nonisolated struct FeedResponse: Decodable, Sendable {
     let uuid: String
     let title: String
     let chips: [FeedChip]
@@ -41,7 +41,7 @@ struct FeedResponse: Decodable {
     }
 }
 
-struct FeedChip: Decodable, Identifiable {
+nonisolated struct FeedChip: Decodable, Identifiable, Sendable {
     let label: String
     let reloadCursor: String
 
@@ -53,7 +53,7 @@ struct FeedChip: Decodable, Identifiable {
     }
 }
 
-struct FeedItem: Decodable, Identifiable {
+nonisolated struct FeedItem: Decodable, Identifiable, Sendable {
     let itemID: String
     let componentType: Int
     let post: FeedPost?
@@ -69,7 +69,7 @@ struct FeedItem: Decodable, Identifiable {
     }
 }
 
-struct FeedPost: Decodable {
+nonisolated struct FeedPost: Decodable, Sendable {
     let id: String
     let authorID: String?
     let authorType: Int?
@@ -81,8 +81,28 @@ struct FeedPost: Decodable {
     let createdAt: String?
     let authorInfo: FeedAuthor?
     let reactions: [String: Int]?
+    let reactionSummary: String
     let userReactions: [String: Int]?
     let metadata: FeedPostMetadata?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        authorID = try container.decodeIfPresent(String.self, forKey: .authorID)
+        authorType = try container.decodeIfPresent(Int.self, forKey: .authorType)
+        type = try container.decode(Int.self, forKey: .type)
+        participants = try container.decode([FeedParticipant].self, forKey: .participants)
+        content = try container.decodeIfPresent(String.self, forKey: .content)
+        caption = try container.decodeIfPresent(String.self, forKey: .caption)
+        mediaURLs = try container.decode([String].self, forKey: .mediaURLs)
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        authorInfo = try container.decodeIfPresent(FeedAuthor.self, forKey: .authorInfo)
+        reactions = try container.decodeIfPresent([String: Int].self, forKey: .reactions)
+        userReactions = try container.decodeIfPresent([String: Int].self, forKey: .userReactions)
+        metadata = try container.decodeIfPresent(FeedPostMetadata.self, forKey: .metadata)
+        reactionSummary = (reactions ?? [:]).sorted { $0.key < $1.key }
+            .map { "\($0.key) \($0.value)" }.joined(separator: "  ·  ")
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -101,7 +121,7 @@ struct FeedPost: Decodable {
     }
 }
 
-struct FeedPostMetadata: Decodable {
+nonisolated struct FeedPostMetadata: Decodable, Sendable {
     let conversationID: String?
 
     enum CodingKeys: String, CodingKey {
@@ -109,7 +129,7 @@ struct FeedPostMetadata: Decodable {
     }
 }
 
-struct FeedParticipant: Decodable, Identifiable {
+nonisolated struct FeedParticipant: Decodable, Identifiable, Sendable {
     let id: String
     let name: String?
     let avatarURL: String?
@@ -127,7 +147,7 @@ struct FeedParticipant: Decodable, Identifiable {
     }
 }
 
-struct FeedAuthor: Decodable {
+nonisolated struct FeedAuthor: Decodable, Sendable {
     let username: String?
     let name: String?
     let avatarURL: String?
@@ -139,15 +159,15 @@ struct FeedAuthor: Decodable {
     }
 }
 
-struct FeedCreatorInfo: Decodable {
+nonisolated struct FeedCreatorInfo: Decodable, Sendable {
     let username: String?
 }
 
-struct FeedRecommendedCreatorModule: Decodable {
+nonisolated struct FeedRecommendedCreatorModule: Decodable, Sendable {
     let creators: [FeedRecommendedCreator]
 }
 
-struct FeedRecommendedCreator: Decodable, Identifiable {
+nonisolated struct FeedRecommendedCreator: Decodable, Identifiable, Sendable {
     let displayName: String?
     let username: String
     let avatarFilename: String?

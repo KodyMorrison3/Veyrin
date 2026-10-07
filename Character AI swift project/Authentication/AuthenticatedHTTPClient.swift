@@ -10,6 +10,9 @@ import Foundation
 struct AuthenticatedHTTPClient {
     private let session: URLSession
     private let authStore: AuthStore
+    var resources: ResourceCache { authStore.resources }
+    var conversationCache: ResourceCache { authStore.conversations }
+    var sessionGeneration: UUID { authStore.sessionGeneration }
 
     init(
         session: URLSession = .shared,
@@ -20,7 +23,7 @@ struct AuthenticatedHTTPClient {
     }
 
     @MainActor
-    func get<Response: Decodable>(
+    func get<Response: Decodable & Sendable>(
         _ url: URL,
         headers: [String: String] = [:]
     ) async throws -> Response {
@@ -43,7 +46,12 @@ struct AuthenticatedHTTPClient {
             }
 
             if httpResponse.statusCode == 401 {
-                await authStore.clearSession()
+                // A late 401 from an old account/request must not clear a
+                // newly installed session after the URLSession suspension.
+                if request.value(forHTTPHeaderField: "Authorization")
+                    == authStore.session.map({ "Token \($0.sessionToken)" }) {
+                    authStore.clearSession()
+                }
                 throw NetworkError.unauthenticated
             }
 
@@ -52,24 +60,22 @@ struct AuthenticatedHTTPClient {
                     httpResponse.statusCode
                 )
             }
-
-            do {
-                return try JSONDecoder().decode(
-                    Response.self,
-                    from: data
-                )
-            } catch {
-                throw NetworkError.decodingError(error)
-            }
+            return try await HTTPResponseDecoder.decode(
+                Response.self,
+                from: data
+            )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as NetworkError {
             throw error
         } catch {
+            try Task.checkCancellation()
             throw NetworkError.requestFailed(error)
         }
     }
 
     @MainActor
-    func post<Body: Encodable, Response: Decodable>(
+    func post<Body: Encodable, Response: Decodable & Sendable>(
         _ url: URL,
         body: Body,
         headers: [String: String] = [:]
@@ -97,7 +103,12 @@ struct AuthenticatedHTTPClient {
             }
 
             if httpResponse.statusCode == 401 {
-                await authStore.clearSession()
+                // A late 401 from an old account/request must not clear a
+                // newly installed session after the URLSession suspension.
+                if request.value(forHTTPHeaderField: "Authorization")
+                    == authStore.session.map({ "Token \($0.sessionToken)" }) {
+                    authStore.clearSession()
+                }
                 throw NetworkError.unauthenticated
             }
 
@@ -106,18 +117,16 @@ struct AuthenticatedHTTPClient {
                     httpResponse.statusCode
                 )
             }
-
-            do {
-                return try JSONDecoder().decode(
-                    Response.self,
-                    from: data
-                )
-            } catch {
-                throw NetworkError.decodingError(error)
-            }
+            return try await HTTPResponseDecoder.decode(
+                Response.self,
+                from: data
+            )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as NetworkError {
             throw error
         } catch {
+            try Task.checkCancellation()
             throw NetworkError.requestFailed(error)
         }
     }
@@ -158,7 +167,12 @@ struct AuthenticatedHTTPClient {
             }
 
             if httpResponse.statusCode == 401 {
-                await authStore.clearSession()
+                // A late 401 from an old account/request must not clear a
+                // newly installed session after the URLSession suspension.
+                if request.value(forHTTPHeaderField: "Authorization")
+                    == authStore.session.map({ "Token \($0.sessionToken)" }) {
+                    authStore.clearSession()
+                }
                 throw NetworkError.unauthenticated
             }
 
@@ -167,9 +181,12 @@ struct AuthenticatedHTTPClient {
                     httpResponse.statusCode
                 )
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as NetworkError {
             throw error
         } catch {
+            try Task.checkCancellation()
             throw NetworkError.requestFailed(error)
         }
     }
@@ -194,7 +211,12 @@ struct AuthenticatedHTTPClient {
             }
 
             if httpResponse.statusCode == 401 {
-                await authStore.clearSession()
+                // A late 401 from an old account/request must not clear a
+                // newly installed session after the URLSession suspension.
+                if request.value(forHTTPHeaderField: "Authorization")
+                    == authStore.session.map({ "Token \($0.sessionToken)" }) {
+                    authStore.clearSession()
+                }
                 throw NetworkError.unauthenticated
             }
 
@@ -205,9 +227,12 @@ struct AuthenticatedHTTPClient {
             }
 
             return data
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as NetworkError {
             throw error
         } catch {
+            try Task.checkCancellation()
             throw NetworkError.requestFailed(error)
         }
     }

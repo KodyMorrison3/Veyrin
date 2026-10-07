@@ -25,21 +25,17 @@ final class CharacterViewModel: ObservableObject {
         profileState = .loading
         similarState = .loading
 
-        let profileTask = Task {
-            try await service.loadProfile(externalID: externalID)
-        }
-        let similarTask = Task {
-            try await service.loadSimilarCharacters(externalID: externalID)
-        }
+        async let profile = service.loadProfile(externalID: externalID)
+        async let similar = service.loadSimilarCharacters(externalID: externalID)
 
         do {
-            profileState = .loaded(try await profileTask.value)
+            profileState = .loaded(try await profile)
         } catch {
             profileState = .failed(error.localizedDescription)
         }
 
         do {
-            similarState = .loaded(try await similarTask.value)
+            similarState = .loaded(try await similar)
         } catch {
             similarState = .failed(error.localizedDescription)
         }

@@ -10,7 +10,7 @@ import Foundation
 
 // MARK: - Autocomplete (works with the app's existing Token auth)
 
-struct SearchAutocompleteResponse: Decodable {
+nonisolated struct SearchAutocompleteResponse: Decodable, Sendable {
     let searchAutocomplete: [String]
 
     private enum CodingKeys: String, CodingKey {
@@ -24,10 +24,10 @@ struct SearchAutocompleteResponse: Decodable {
 // on success, or `[ { "error": { "json": … } } ]` on failure (observed as
 // HTTP 500 wrapping an upstream 401 — see the protocol doc §1 and §4).
 
-struct TRPCBatchResponse<Payload: Decodable>: Decodable {
-    struct Entry: Decodable {
-        struct ResultBody: Decodable {
-            struct DataBody: Decodable {
+nonisolated struct TRPCBatchResponse<Payload: Decodable & Sendable>: Decodable, Sendable {
+    nonisolated struct Entry: Decodable, Sendable {
+        nonisolated struct ResultBody: Decodable, Sendable {
+            nonisolated struct DataBody: Decodable, Sendable {
                 let json: Payload
             }
 
@@ -36,8 +36,8 @@ struct TRPCBatchResponse<Payload: Decodable>: Decodable {
 
         /// tRPC error entries wrap their body in a `json` key:
         /// `{"error":{"json":{"message":…,"code":…}}}` (doc §4).
-        struct ErrorBody: Decodable {
-            struct JsonBody: Decodable {
+        nonisolated struct ErrorBody: Decodable, Sendable {
+            nonisolated struct JsonBody: Decodable, Sendable {
                 let message: String?
                 let code: Int?
             }
@@ -58,7 +58,7 @@ struct TRPCBatchResponse<Payload: Decodable>: Decodable {
 
 // MARK: - Results payload
 
-struct SearchResultsPayload: Decodable {
+nonisolated struct SearchResultsPayload: Decodable, Sendable {
     let characters: [CharacterSearchResult]
     let uuid: String?
     let nextCursor: String?
@@ -100,7 +100,7 @@ struct SearchResultsPayload: Decodable {
 
 // MARK: - Character search result (minimal card subset, protocol doc §5)
 
-struct CharacterSearchResult: Decodable {
+nonisolated struct CharacterSearchResult: Decodable, Sendable {
     let externalID: String?
     let name: String?
     let title: String?

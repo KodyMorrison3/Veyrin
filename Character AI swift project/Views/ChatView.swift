@@ -1,12 +1,12 @@
 import AppKit
-import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct ChatView: View {
     @StateObject private var viewModel: ChatViewModel
     @State private var messageText = ""
-    @State private var attachments: [ComposerAttachment] = []
+    @State private var attachments: [ImageProcessing.Attachment] = []
+    @State private var attachmentImportTask: Task<Void, Never>?
     @State private var attachmentNotice: String?
     @FocusState private var isMessageFieldFocused: Bool
     @State private var turnToRewind: Turn?
@@ -251,6 +251,7 @@ struct ChatView: View {
             selectedModelType = firstModel.modelType
         }
         .onDisappear {
+            attachmentImportTask?.cancel()
             viewModel.disconnect()
         }
         .navigationTitle(Text(verbatim: ""))
@@ -351,7 +352,7 @@ struct ChatView: View {
                 authenticatedHTTPClient: viewModel.authenticatedHTTPClient,
                 availableModels: viewModel.availableModels,
                 selectedModelType: selectedModelType,
-                canStartModelConversation: !viewModel.turns.isEmpty
+                canStartModelConversation: viewModel.hasTurns
                     && !viewModel.isGenerating
                     && !viewModel.isLoading
                     && viewModel.rewindingFromTurnID == nil
@@ -363,7 +364,7 @@ struct ChatView: View {
                 isPersonaSelectionInProgress: PersonaStore.shared.isSelectingPersona,
                 isLoadingPersonas: isLoadingPersonaControls || PersonaStore.shared.isLoadingPersonas,
                 onSelectModel: { modelType in
-                    guard let turn = viewModel.turns.last(where: { $0.chatID == chatID }) else { return }
+                    guard let turn = viewModel.lastTurn else { return }
                     Task {
                         guard let newChatID = await viewModel.createConversation(from: turn, modelType: modelType) else {
                             return
@@ -629,16 +630,6 @@ struct ChatView: View {
 
     // MARK: - Image attachments (picker + preview UI only)
 
-    /// An image staged in the composer. Bytes are copied into memory at
-    /// pick time (sandbox-safe), so the selection survives send attempts
-    /// and is only ever removed by the explicit remove button.
-    private struct ComposerAttachment: Identifiable {
-        let id = UUID()
-        let fileName: String
-        let preview: NSImage
-        let data: Data
-    }
-
     /// Staged-attachment strip above the composer: thumbnails with remove
     /// controls plus an honest notice line. Hidden entirely when empty.
     @ViewBuilder
@@ -669,7 +660,7 @@ struct ChatView: View {
     }
 
     private func attachmentThumbnail(
-        _ attachment: ComposerAttachment
+        _ attachment: ImageProcessing.Attachment
     ) -> some View {
         ZStack(alignment: .topTrailing) {
             Image(nsImage: attachment.preview)
@@ -720,63 +711,31 @@ struct ChatView: View {
         }
     }
 
-    private static func downsampledPreview(from data: Data) -> NSImage? {
-        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
-            return nil
-        }
-        let thumbnailOptions = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceThumbnailMaxPixelSize: 512,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true
-        ] as CFDictionary
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions) else {
-            return nil
-        }
-        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
-    }
-
-    /// Native file-import result: copy each readable image into memory
-    /// under scoped access. Failures report a notice; staged attachments
-    /// already present are never touched.
-    private func handlePickedImages(
-        _ result: Result<[URL], Error>
-    ) {
-        guard case .success(let urls) = result, !urls.isEmpty else {
-            // Picker cancelled or failed: keep everything already staged.
-            return
-        }
-        var failures = 0
-        for url in urls {
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer {
-                if scoped {
-                    url.stopAccessingSecurityScopedResource()
-                }
+    /// Sequential background imports bound decode concurrency and keep original
+    /// upload bytes separate from the 512px preview. Disappearing cancels work.
+    private func handlePickedImages(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result, !urls.isEmpty else { return }
+        let previousImport = attachmentImportTask
+        attachmentImportTask = Task {
+            await withTaskCancellationHandler {
+                await previousImport?.value
+            } onCancel: { previousImport?.cancel() }
+            var failures = 0
+            for url in urls {
+                guard !Task.isCancelled else { return }
+                do {
+                    let attachment = try await ImageProcessing.importAttachment(from: url)
+                    guard !Task.isCancelled else { return }
+                    attachments.append(attachment)
+                } catch is CancellationError { return }
+                catch { failures += 1 }
             }
-            guard let data = try? Data(contentsOf: url),
-                  let preview = Self.downsampledPreview(from: data) else {
-                failures += 1
-                continue
-            }
-            attachments.append(
-                ComposerAttachment(
-                    fileName: url.lastPathComponent,
-                    preview: preview,
-                    data: data
-                )
-            )
-        }
-        if failures > 0 {
-            attachmentNotice = failures == 1
+            attachmentNotice = failures == 0 ? nil : failures == 1
                 ? "One image couldn't be attached."
                 : "\(failures) images couldn't be attached."
-        } else {
-            attachmentNotice = nil
         }
     }
-    
+
     private func scrollToBottom(
         using proxy: ScrollViewProxy
     ) {

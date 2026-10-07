@@ -39,6 +39,8 @@ final class DiscoverViewModel: ObservableObject {
     private var feedCursor: String?
     private var scenesCursor: String?
     private var didLoadInitialPages = false
+    private var suggestionsTask: Task<Void, Never>?
+    private var resultsTask: Task<Void, Never>?
     private var suggestionsGeneration = 0
     private var resultsGeneration = 0
     private var lastSearchedQuery: String?
@@ -155,10 +157,14 @@ final class DiscoverViewModel: ObservableObject {
         return trimmed != lastSearchedQuery && !suggestions.isEmpty
     }
 
-    /// Debounces autocomplete while typing; stale responses are dropped by
-    /// generation counter. Results from a previous search are kept visible
-    /// until a new submit replaces them.
+    /// Cancel obsolete debounce and URLSession work; generations also guard
+    /// publication if cancellation races with a completed response.
     private func searchQueryChanged() {
+        suggestionsTask?.cancel()
+        resultsTask?.cancel()
+        suggestions = []
+        isSearchingSuggestions = false
+        isSearchingResults = false
         suggestionsGeneration += 1
         resultsGeneration += 1
         searchNeedsWebSession = false
@@ -181,9 +187,9 @@ final class DiscoverViewModel: ObservableObject {
 
         // Autocomplete as-you-type (works live with the app's Token auth).
         let generation = suggestionsGeneration
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard let self, generation == self.suggestionsGeneration else { return }
+        suggestionsTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+            guard !Task.isCancelled, let self, generation == self.suggestionsGeneration else { return }
             await self.loadSuggestions(for: trimmed, generation: generation)
         }
     }
@@ -191,14 +197,14 @@ final class DiscoverViewModel: ObservableObject {
     private func loadSuggestions(for query: String, generation: Int) async {
         guard let searchService else { return }
         isSearchingSuggestions = true
-        defer { isSearchingSuggestions = false }
+        defer { if generation == suggestionsGeneration { isSearchingSuggestions = false } }
 
         do {
             let fetched = try await searchService.fetchAutocomplete(queryPrefix: query)
-            guard generation == suggestionsGeneration else { return }
+            guard !Task.isCancelled, generation == suggestionsGeneration else { return }
             suggestions = fetched
         } catch {
-            guard generation == suggestionsGeneration else { return }
+            guard !Task.isCancelled, generation == suggestionsGeneration else { return }
             // Suggestions are a nicety; failures stay quiet but honest.
             suggestions = []
         }
@@ -208,6 +214,19 @@ final class DiscoverViewModel: ObservableObject {
     /// The known web-session refusal is surfaced as `searchNeedsWebSession`;
     /// every other failure is a plain `searchError`.
     func submitSearch() async {
+        suggestionsTask?.cancel()
+        resultsTask?.cancel()
+        suggestionsGeneration += 1
+        isSearchingSuggestions = false
+        let task = Task<Void, Never> { [weak self] in await self?.performSearch() }
+        resultsTask = task
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: { task.cancel() }
+    }
+
+    private func performSearch() async {
+        guard !Task.isCancelled else { return }
         let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -217,21 +236,21 @@ final class DiscoverViewModel: ObservableObject {
         isSearchingResults = true
         searchNeedsWebSession = false
         searchError = nil
-        defer { isSearchingResults = false }
+        defer { if generation == resultsGeneration { isSearchingResults = false } }
 
         guard let searchService else { return }
         do {
             let results = try await searchService.searchCharacters(query: trimmed)
-            guard generation == resultsGeneration else { return }
+            guard !Task.isCancelled, generation == resultsGeneration else { return }
             searchResults = results
         } catch is CancellationError {
             return
         } catch SearchError.resultsRequireWebSession {
-            guard generation == resultsGeneration else { return }
+            guard !Task.isCancelled, generation == resultsGeneration else { return }
             searchResults = []
             searchNeedsWebSession = true
         } catch {
-            guard generation == resultsGeneration else { return }
+            guard !Task.isCancelled, generation == resultsGeneration else { return }
             searchResults = []
             searchError = error.localizedDescription
         }
@@ -242,6 +261,17 @@ final class DiscoverViewModel: ObservableObject {
         searchQuery = suggestion
         Task { await submitSearch() }
     }
+
+    func cancelSearch() {
+        suggestionsTask?.cancel()
+        resultsTask?.cancel()
+        suggestionsGeneration += 1
+        resultsGeneration += 1
+        isSearchingSuggestions = false
+        isSearchingResults = false
+    }
+
+    deinit { suggestionsTask?.cancel(); resultsTask?.cancel() }
 
     /// Clearing search restores the plain Discover UI (feed/scenes state was
     /// never modified by searching).

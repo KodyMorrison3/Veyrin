@@ -7,12 +7,12 @@
 
 import Foundation
 
-struct RecentChatsResponse: Decodable {
+nonisolated struct RecentChatsResponse: Decodable, Sendable {
     let chats: [RecentChat]
     let meta: RecentChatsMeta?
 }
 
-struct RecentChatsMeta: Decodable {
+nonisolated struct RecentChatsMeta: Decodable, Sendable {
     let nextToken: String?
 
     enum CodingKeys: String, CodingKey {
@@ -20,7 +20,7 @@ struct RecentChatsMeta: Decodable {
     }
 }
 
-struct RecentChat: Decodable {
+nonisolated struct RecentChat: Decodable, Sendable {
     let chatID: String
     let createTime: String
     let creatorID: String
@@ -46,11 +46,11 @@ struct RecentChat: Decodable {
     }
 }
 
-struct ChatHistoryListResponse: Decodable {
+nonisolated struct ChatHistoryListResponse: Decodable, Sendable {
     let chats: [ChatPreview]
 }
 
-struct ChatPreview: Decodable {
+nonisolated struct ChatPreview: Decodable, Sendable {
     let chatID: String
     let createTime: String
     let creatorID: String
@@ -98,7 +98,7 @@ struct ChatPreview: Decodable {
     }
 }
 
-struct RecentTurnKey: Decodable {
+nonisolated struct RecentTurnKey: Decodable, Sendable {
     let chatID: String
     let turnID: String
 
@@ -108,7 +108,7 @@ struct RecentTurnKey: Decodable {
     }
 }
 
-struct RecentTurnAuthor: Decodable {
+nonisolated struct RecentTurnAuthor: Decodable, Sendable {
     let authorID: String
     let isHuman: Bool?
     let name: String
@@ -120,7 +120,7 @@ struct RecentTurnAuthor: Decodable {
     }
 }
 
-struct RecentTurnCandidate: Decodable {
+nonisolated struct RecentTurnCandidate: Decodable, Sendable {
     let candidateID: String
     let rawContent: String
     let isFinal: Bool?

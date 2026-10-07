@@ -5,13 +5,6 @@
 //  Created by Kody Morrison on 26/09/2026.
 //
 
-//
-//  ConversationService.swift
-//  Character AI swift project
-//
-//  Created by Kody Morrison on 26/09/2026.
-//
-
 import Foundation
 
 private struct SetTurnPinRequest: Encodable {
@@ -62,7 +55,7 @@ private struct CopyConversationOverrides: Encodable {
     }
 }
 
-struct CopyConversationResponse: Decodable {
+nonisolated struct CopyConversationResponse: Decodable, Sendable {
     let newChatID: String
 
     enum CodingKeys: String, CodingKey {
@@ -76,31 +69,26 @@ struct ConversationCopySource {
     let endTurnID: String
 }
 
-struct ConversationService {
-    private let httpClient: HTTPClient
-    private let authenticatedHTTPClient: AuthenticatedHTTPClient
+@MainActor
+struct ConversationService: Sendable {
+    let authenticatedHTTPClient: AuthenticatedHTTPClient
+    var cache: ResourceCache { authenticatedHTTPClient.conversationCache }
+    var resources: ResourceCache { authenticatedHTTPClient.resources }
 
-    init(
-        httpClient: HTTPClient = HTTPClient(),
-        authenticatedHTTPClient: AuthenticatedHTTPClient
-    ) {
-        self.httpClient = httpClient
+    init(authenticatedHTTPClient: AuthenticatedHTTPClient) {
         self.authenticatedHTTPClient = authenticatedHTTPClient
     }
 
-    func loadChat(chatID: String) async throws -> Chat {
+    func loadChat(chatID: String, forceRefresh: Bool = false) async throws -> Chat {
         guard let url = URL(
             string: "https://neo.character.ai/chat/\(chatID)/?load_metadata=true"
         ) else {
             throw NetworkError.invalidURL
         }
 
-        // Try decoding ChatResponse container first as confirmed by the HAR: {"chat": {...}, "metadata": {...}}
-        do {
-            let container: ChatResponse = try await authenticatedHTTPClient.get(url)
-            return container.chat
-        } catch {
-            return try await authenticatedHTTPClient.get(url)
+        return try await resources.value(for: "chat:\(chatID)", ttl: 60, forceRefresh: forceRefresh, cost: { _ in 1024 }) {
+            let response: ChatResponse = try await authenticatedHTTPClient.get(url)
+            return response.chat
         }
     }
 
@@ -159,24 +147,13 @@ struct ConversationService {
                 return previewSource
             }
 
-            do {
-                let turns = try await loadAllTurns(chatID: preview.chatID)
-                if let latestTurn = turns.last(where: { !$0.candidates.isEmpty }) {
-                    return ConversationCopySource(
-                        chatID: preview.chatID,
-                        characterID: characterID,
-                        endTurnID: latestTurn.turnKey.turnID
-                    )
-                }
-            } catch {
-                if let previewSource {
-                    return previewSource
-                }
-                throw error
-            }
-
-            if let previewSource {
-                return previewSource
+            let turns = try await loadAllTurns(chatID: preview.chatID)
+            if let latestTurn = turns.last(where: { !$0.candidates.isEmpty }) {
+                return ConversationCopySource(
+                    chatID: preview.chatID,
+                    characterID: characterID,
+                    endTurnID: latestTurn.turnKey.turnID
+                )
             }
         }
 
@@ -189,8 +166,10 @@ struct ConversationService {
     ) async throws -> [APITurn] {
         var allTurns: [APITurn] = []
         var nextToken: String?
+        var visitedTokens: Set<String> = []
 
         repeat {
+            try Task.checkCancellation()
             var components = URLComponents(
                 string: "https://neo.character.ai/turns/\(chatID)/"
             )
@@ -235,7 +214,9 @@ struct ConversationService {
             )
 
             nextToken = response.meta.nextToken
-
+            if let nextToken, !visitedTokens.insert(nextToken).inserted {
+                throw NetworkError.serverMessage("Conversation pagination returned a repeated cursor.")
+            }
 
         } while nextToken != nil
 
@@ -259,13 +240,11 @@ struct ConversationService {
             throw NetworkError.invalidURL
         }
 
-        let response: AvailableModelsResponse = try await authenticatedHTTPClient.get(
-            url,
-            headers: [
-                "Accept": "application/json",
-                "Origin-ID": "web-next"
-            ]
-        )
+        let response: AvailableModelsResponse = try await resources.value(for: "available-models", ttl: 300, cost: { $0.availableModels.count * 1024 + 512 }) {
+            try await authenticatedHTTPClient.get(url, headers: [
+                "Accept": "application/json", "Origin-ID": "web-next"
+            ])
+        }
 
         return response.availableModels.map { modelType in
             let configuration = response.configs[modelType]
@@ -313,6 +292,8 @@ struct ConversationService {
                 "Request-ID": UUID().uuidString.lowercased()
             ]
         )
+        resources.invalidate("recent-chats")
+        resources.invalidate(prefix: "previews:")
         return response.newChatID
     }
 
@@ -360,6 +341,7 @@ struct ConversationService {
         let body = try JSONEncoder().encode(
             RemoveTurnsRequest(turnIDs: turnIDs)
         )
+        beginMutation(chatID: chatID)
         try await authenticatedHTTPClient.send(
             url,
             method: "POST",
@@ -459,7 +441,8 @@ struct ConversationService {
     func makeCreateChatCommand(
         characterID: String,
         creatorID: String,
-        chatID: String
+        chatID: String,
+        requestID: String = UUID().uuidString
     ) -> CharacterAICommand<CreateChatRequest> {
         let request = createChat(
             characterID: characterID,
@@ -469,7 +452,7 @@ struct ConversationService {
 
         return CharacterAICommand(
             command: "create_chat",
-            requestID: UUID().uuidString,
+            requestID: requestID,
             payload: request,
             originID: "web-next"
         )
@@ -501,6 +484,12 @@ struct ConversationService {
     }
 
     func loadRecentChats() async throws -> [ConversationSummary] {
+        try await resources.value(for: "recent-chats", ttl: 30, cost: { $0.count * 2048 }) {
+            try await fetchRecentChats()
+        }
+    }
+
+    private func fetchRecentChats() async throws -> [ConversationSummary] {
         guard let url = URL(
             string: "https://neo.character.ai/chats/recent/?include_restricted=true"
         ) else {
@@ -523,47 +512,21 @@ struct ConversationService {
             )
         }
 
-        let characterIDs = Array(
-            Set(
-                response.chats.map {
-                    $0.characterID
-                }
+        var seen: Set<String> = []
+        let characterIDs = response.chats.map(\.characterID).filter { seen.insert($0).inserted }
+        let previewGroups = try await previewGroups(characterIDs: characterIDs, tolerateFailures: true)
+        let indices = Dictionary(summaries.enumerated().map { ($0.element.chatID, $0.offset) },
+                                 uniquingKeysWith: { first, _ in first })
+        for preview in previewGroups.flatMap({ $0 }) {
+            guard let lastMessage = preview.lastMessage, let index = indices[preview.chatID] else { continue }
+            let conversation = summaries[index]
+            summaries[index] = ConversationSummary(
+                id: conversation.id, chatID: conversation.chatID,
+                characterID: conversation.characterID, characterName: conversation.characterName,
+                characterAvatarURI: conversation.characterAvatarURI,
+                lastUpdated: conversation.lastUpdated, state: conversation.state,
+                lastMessage: lastMessage
             )
-        )
-
-        for characterID in characterIDs {
-            do {
-                let previews = try await loadChatPreviews(
-                    characterIDs: [characterID]
-                )
-
-                for preview in previews {
-                    guard let lastMessage = preview.lastMessage else {
-                        continue
-                    }
-
-                    if let index = summaries.firstIndex(
-                        where: {
-                            $0.chatID == preview.chatID
-                        }
-                    ) {
-                        let conversation = summaries[index]
-
-                        summaries[index] = ConversationSummary(
-                            id: conversation.id,
-                            chatID: conversation.chatID,
-                            characterID: conversation.characterID,
-                            characterName: conversation.characterName,
-                            characterAvatarURI: conversation.characterAvatarURI,
-                            lastUpdated: conversation.lastUpdated,
-                            state: conversation.state,
-                            lastMessage: lastMessage
-                        )
-                    }
-                }
-            } catch {
-                // Keep the base conversation rows if previews are unavailable.
-            }
         }
 
         return summaries
@@ -572,47 +535,83 @@ struct ConversationService {
     func loadChatPreviews(
         characterIDs: [String]
     ) async throws -> [ChatPreview] {
-        var allPreviews: [ChatPreview] = []
+        try await previewGroups(characterIDs: characterIDs, tolerateFailures: false).flatMap { $0 }
+    }
 
-        for characterID in characterIDs {
-            var components = URLComponents(
-                string: "https://neo.character.ai/chats/"
-            )
-
-            components?.queryItems = [
-                URLQueryItem(
-                    name: "character_ids",
-                    value: characterID
-                ),
-                URLQueryItem(
-                    name: "num_preview_turns",
-                    value: "2"
-                ),
-                URLQueryItem(
-                    name: "include_turn_count",
-                    value: "false"
-                ),
-                URLQueryItem(
-                    name: "num_summaries",
-                    value: "0"
-                ),
-                URLQueryItem(
-                    name: "limit",
-                    value: "100"
-                )
-            ]
-
-            guard let url = components?.url else {
-                throw NetworkError.invalidURL
+    /// The accessible contract only verifies single-character requests. Keep
+    /// that wire format and allow at most three independent requests at once.
+    private func previewGroups(characterIDs: [String], tolerateFailures: Bool) async throws -> [[ChatPreview]] {
+        var results = Array(repeating: [ChatPreview](), count: characterIDs.count)
+        // Small waves avoid capturing an inout task group in a local enqueue
+        // function (unsupported by the current region-isolation checker).
+        for start in stride(from: 0, to: characterIDs.count, by: 3) {
+            try Task.checkCancellation()
+            try await withThrowingTaskGroup(of: (Int, [ChatPreview]).self) { group in
+                for index in start..<min(start + 3, characterIDs.count) {
+                    let characterID = characterIDs[index]
+                    group.addTask {
+                        do { return (index, try await loadPreview(characterID: characterID)) }
+                        catch {
+                            try Task.checkCancellation()
+                            if tolerateFailures { return (index, []) }
+                            throw error
+                        }
+                    }
+                }
+                for try await (index, previews) in group {
+                    results[index] = previews
+                }
             }
+        }
+        return results
+    }
 
-            let response: ChatPreviewResponse =
-                try await authenticatedHTTPClient.get(url)
+    private func loadPreview(characterID: String) async throws -> [ChatPreview] {
+        try await resources.value(for: "previews:\(characterID)", ttl: 30, cost: { previews in
+            previews.reduce(256) { total, preview in
+                total + 512 + (preview.previewTurns ?? []).reduce(0) { $0 + $1.candidates.reduce(0) { $0 + $1.rawContent.utf8.count * 4 + 256 } }
+            }
+        }) {
+            try await fetchPreview(characterID: characterID)
+        }
+    }
 
-            allPreviews.append(contentsOf: response.chats)
+    private func fetchPreview(characterID: String) async throws -> [ChatPreview] {
+        var components = URLComponents(
+            string: "https://neo.character.ai/chats/"
+        )
+
+        components?.queryItems = [
+            URLQueryItem(
+                name: "character_ids",
+                value: characterID
+            ),
+            URLQueryItem(
+                name: "num_preview_turns",
+                value: "2"
+            ),
+            URLQueryItem(
+                name: "include_turn_count",
+                value: "false"
+            ),
+            URLQueryItem(
+                name: "num_summaries",
+                value: "0"
+            ),
+            URLQueryItem(
+                name: "limit",
+                value: "100"
+            )
+        ]
+
+        guard let url = components?.url else {
+            throw NetworkError.invalidURL
         }
 
-        return allPreviews
+        let response: ChatPreviewResponse =
+            try await authenticatedHTTPClient.get(url)
+
+        return response.chats
     }
     
     func makeCreateAndGenerateTurnMessage(
@@ -620,7 +619,8 @@ struct ConversationService {
         userID: String,
         username: String,
         chatID: String,
-        message: String
+        message: String,
+        requestID: String = UUID().uuidString
     ) throws -> String {
         let turnID = UUID()
             .uuidString
@@ -663,7 +663,7 @@ struct ConversationService {
 
         let command = CharacterAICommand(
             command: "create_and_generate_turn",
-            requestID: UUID().uuidString,
+            requestID: requestID,
             payload: request,
             originID: "web-next"
         )
@@ -685,7 +685,8 @@ struct ConversationService {
         characterID: String,
         username: String,
         chatID: String,
-        turnID: String
+        turnID: String,
+        requestID: String = UUID().uuidString
     ) throws -> String {
         let request = GenerateTurnCandidateRequest(
             chatType: "TYPE_ONE_ON_ONE",
@@ -702,7 +703,7 @@ struct ConversationService {
 
         let command = CharacterAICommand(
             command: "generate_turn_candidate",
-            requestID: UUID().uuidString,
+            requestID: requestID,
             payload: request,
             originID: "web-next"
         )
@@ -724,7 +725,8 @@ struct ConversationService {
         chatID: String,
         turnID: String,
         currentCandidateID: String,
-        newContent: String
+        newContent: String,
+        requestID: String = UUID().uuidString
     ) throws -> String {
         let request = EditTurnCandidateRequest(
             chatType: "TYPE_ONE_ON_ONE",
@@ -738,7 +740,7 @@ struct ConversationService {
 
         let command = CharacterAICommand(
             command: "edit_turn_candidate",
-            requestID: UUID().uuidString,
+            requestID: requestID,
             payload: request,
             originID: "web-next"
         )

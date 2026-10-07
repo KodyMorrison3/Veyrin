@@ -56,11 +56,7 @@ struct DiscoverService {
 
         let data = try await responseData(for: request)
 
-        do {
-            return try JSONDecoder().decode(DiscoverFeedResponse.self, from: data)
-        } catch {
-            throw NetworkError.decodingError(error)
-        }
+        return try await HTTPResponseDecoder.decode(DiscoverFeedResponse.self, from: data)
     }
 
     func loadCuratedScenes(cursor: String?) async throws -> CuratedScenesResponse {
@@ -84,11 +80,7 @@ struct DiscoverService {
 
         let data = try await responseData(for: request)
 
-        do {
-            return try JSONDecoder().decode(CuratedScenesResponse.self, from: data)
-        } catch {
-            throw NetworkError.decodingError(error)
-        }
+        return try await HTTPResponseDecoder.decode(CuratedScenesResponse.self, from: data)
     }
 
     private func addAuthentication(to request: inout URLRequest) async throws {
@@ -115,9 +107,12 @@ struct DiscoverService {
             }
 
             return data
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as NetworkError {
             throw error
         } catch {
+            try Task.checkCancellation()
             throw NetworkError.requestFailed(error)
         }
     }

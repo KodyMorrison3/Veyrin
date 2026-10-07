@@ -1,6 +1,6 @@
 import Foundation
 
-struct Candidate: Codable, Equatable {
+nonisolated struct Candidate: Codable, Equatable, Sendable {
     let candidateId: String
     let rawContent: String
     let isFinal: Bool?

@@ -13,7 +13,17 @@ private let authLogger = Logger(subsystem: "CharacterAI", category: "Authenticat
 
 @MainActor
 final class AuthStore: ObservableObject {
-    @Published private(set) var session: AuthSession?
+    @Published private(set) var session: AuthSession? {
+        didSet {
+            sessionGeneration = UUID()
+            resources.clear()
+            conversations.clear()
+        }
+    }
+    /// Non-secret session identity; caches are never keyed by tokens.
+    private(set) var sessionGeneration = UUID()
+    let resources = ResourceCache()
+    let conversations = ResourceCache(countLimit: 8, costLimit: 32 * 1024 * 1024)
 
     private let keychainStore: KeychainStore
     private let sessionKey = "authSession"
@@ -30,14 +40,14 @@ final class AuthStore: ObservableObject {
         self.session = session
     }
 
-    func setSession(_ session: AuthSession) {
-        self.session = session
-
+    func setSession(_ session: AuthSession) throws {
         do {
             let data = try JSONEncoder().encode(session)
             try keychainStore.save(data, forKey: sessionKey)
+            self.session = session
         } catch {
             authLogger.error("Failed to persist authenticated session: \(error.localizedDescription, privacy: .private)")
+            throw error
         }
     }
 

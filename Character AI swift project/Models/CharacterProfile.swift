@@ -1,6 +1,6 @@
 import Foundation
 
-struct CharacterProfile: Decodable, Identifiable {
+nonisolated struct CharacterProfile: Decodable, Identifiable, Sendable {
     let externalID: String
     let name: String?
     let title: String?
@@ -54,12 +54,12 @@ struct CharacterProfile: Decodable, Identifiable {
     }
 }
 
-struct CharacterProfileResponse: Decodable {
+nonisolated struct CharacterProfileResponse: Decodable, Sendable {
     let character: CharacterProfile
     let status: String?
 }
 
-struct SimilarCharacter: Decodable {
+nonisolated struct SimilarCharacter: Decodable, Sendable {
     let externalID: String?
     let name: String?
     let title: String?
@@ -75,6 +75,6 @@ struct SimilarCharacter: Decodable {
     }
 }
 
-struct SimilarCharactersResponse: Decodable {
+nonisolated struct SimilarCharactersResponse: Decodable, Sendable {
     let characters: [SimilarCharacter]
 }

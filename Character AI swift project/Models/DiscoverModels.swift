@@ -1,7 +1,7 @@
 import Foundation
 
-struct DiscoverFeedRequest: Encodable {
-    struct Options: Encodable {
+nonisolated struct DiscoverFeedRequest: Encodable, Sendable {
+    nonisolated struct Options: Encodable, Sendable {
         let componentTypes: [Int]
 
         enum CodingKeys: String, CodingKey {
@@ -26,7 +26,7 @@ struct DiscoverFeedRequest: Encodable {
     }
 }
 
-struct DiscoverFeedResponse: Decodable {
+nonisolated struct DiscoverFeedResponse: Decodable, Sendable {
     let uuid: String?
     let title: String?
     let contents: [DiscoverFeedItem]
@@ -42,7 +42,7 @@ struct DiscoverFeedResponse: Decodable {
     }
 }
 
-struct DiscoverFeedItem: Decodable {
+nonisolated struct DiscoverFeedItem: Decodable, Sendable {
     let itemID: String?
     let componentType: Int?
     let size: Int?
@@ -58,7 +58,7 @@ struct DiscoverFeedItem: Decodable {
     }
 }
 
-struct DiscoverFeedCharacter: Decodable {
+nonisolated struct DiscoverFeedCharacter: Decodable, Sendable {
     let externalID: String?
     let name: String?
     let participantName: String?
@@ -86,7 +86,7 @@ struct DiscoverFeedCharacter: Decodable {
     }
 }
 
-struct CuratedScenesResponse: Decodable {
+nonisolated struct CuratedScenesResponse: Decodable, Sendable {
     let scenes: [CuratedScene]
     let nextCursor: String?
     let version: Int?
@@ -100,7 +100,7 @@ struct CuratedScenesResponse: Decodable {
     }
 }
 
-struct CuratedScene: Decodable {
+nonisolated struct CuratedScene: Decodable, Sendable {
     let sceneID: String?
     let title: String?
     let description: String?

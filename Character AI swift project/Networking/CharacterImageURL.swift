@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct CharacterImageURL {
+nonisolated struct CharacterImageURL {
     static func makeURL(
         avatarFileName: String
     ) -> URL? {
