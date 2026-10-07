@@ -14,14 +14,6 @@
 
 import Foundation
 
-private struct HideCharacterRequest: Encodable {
-    let characterExternalID: String
-
-    enum CodingKeys: String, CodingKey {
-        case characterExternalID = "character_external_id"
-    }
-}
-
 private struct SetTurnPinRequest: Encodable {
     let chatType: String
     let turnKey: SetTurnPinKey
@@ -78,6 +70,12 @@ struct CopyConversationResponse: Decodable {
     }
 }
 
+struct ConversationCopySource {
+    let chatID: String
+    let characterID: String
+    let endTurnID: String
+}
+
 struct ConversationService {
     private let httpClient: HTTPClient
     private let authenticatedHTTPClient: AuthenticatedHTTPClient
@@ -131,17 +129,52 @@ struct ConversationService {
         return response.voted
     }
 
-    /// Fetches verified recent chat history for a specific character from:
-    /// `GET https://neo.character.ai/chats/recent/{characterID}`
-    func loadCharacterRecentChats(characterID: String) async throws -> [RecentChat] {
-        guard let url = URL(
-            string: "https://neo.character.ai/chats/recent/\(characterID)"
-        ) else {
-            throw NetworkError.invalidURL
+    /// Fetches chat history for a character from the HAR-observed list endpoint.
+    /// This `GET /chats/` response contains `{ "chats": [...] }` without pagination metadata.
+    func loadCharacterRecentChats(characterID: String) async throws -> [ChatPreview] {
+        try await loadChatPreviews(characterIDs: [characterID])
+    }
+
+    /// Finds the latest usable turn from the character's most recent conversations.
+    /// The confirmed `/copy` endpoint needs this source turn to create a model-specific branch.
+    func loadLatestConversationCopySource(
+        characterID: String
+    ) async throws -> ConversationCopySource? {
+        let previews = try await loadChatPreviews(characterIDs: [characterID])
+
+        for preview in previews where preview.characterID == characterID {
+            let previewSource = preview.previewTurns?.last(where: {
+                !$0.candidates.isEmpty
+            }).map { turn in
+                ConversationCopySource(
+                    chatID: preview.chatID,
+                    characterID: characterID,
+                    endTurnID: turn.turnKey.turnID
+                )
+            }
+
+            do {
+                let turns = try await loadAllTurns(chatID: preview.chatID)
+                if let latestTurn = turns.last(where: { !$0.candidates.isEmpty }) {
+                    return ConversationCopySource(
+                        chatID: preview.chatID,
+                        characterID: characterID,
+                        endTurnID: latestTurn.turnKey.turnID
+                    )
+                }
+            } catch {
+                if let previewSource {
+                    return previewSource
+                }
+                throw error
+            }
+
+            if let previewSource {
+                return previewSource
+            }
         }
 
-        let response: RecentChatsResponse = try await authenticatedHTTPClient.get(url)
-        return response.chats
+        return nil
     }
 
     func loadAllTurns(
@@ -190,10 +223,6 @@ struct ConversationService {
             let response: TurnsResponse =
                 try await authenticatedHTTPClient.get(url)
 
-            print(
-                "LOADED TURN PAGE:",
-                response.turns.count
-            )
 
             allTurns.append(
                 contentsOf: response.turns
@@ -201,43 +230,9 @@ struct ConversationService {
 
             nextToken = response.meta.nextToken
 
-            print(
-                "NEXT TOKEN:",
-                nextToken != nil ? "YES" : "NONE"
-            )
 
         } while nextToken != nil
 
-        print(
-            "TOTAL TURNS LOADED:",
-            allTurns.count
-        )
-
-        if let firstTurn = allTurns.first,
-           let candidate = firstTurn.candidates.first {
-            print(
-                "FIRST TURN ID:",
-                firstTurn.turnKey.turnID
-            )
-
-            print(
-                "FIRST MESSAGE:",
-                candidate.rawContent
-            )
-        }
-
-        if let lastTurn = allTurns.last,
-           let candidate = lastTurn.candidates.first {
-            print(
-                "LAST TURN ID:",
-                lastTurn.turnKey.turnID
-            )
-
-            print(
-                "LAST MESSAGE:",
-                candidate.rawContent
-            )
-        }
 
         return allTurns
     }
@@ -270,7 +265,7 @@ struct ConversationService {
             let configuration = response.configs[modelType]
             return ModelSelectionOption(
                 modelType: modelType,
-                name: configuration?.name,
+                name: configuration?.displayName ?? configuration?.name,
                 isPlusOnly: configuration?.isPlusOnly ?? false,
                 isFeatured: configuration?.isFeatured ?? false,
                 isBeta: configuration?.isBeta ?? false,
@@ -499,40 +494,6 @@ struct ConversationService {
         return message
     }
 
-    func hideCharacter(externalID: String) async throws {
-        let pathCharacters = CharacterSet.urlPathAllowed.subtracting(
-            CharacterSet(charactersIn: "/?#")
-        )
-        let encodedID = externalID.addingPercentEncoding(
-            withAllowedCharacters: pathCharacters
-        ) ?? externalID
-
-        guard let primaryURL = URL(
-            string: "https://neo.character.ai/chats/recent/\(encodedID)/hide"
-        ), let fallbackURL = URL(
-            string: "https://plus.character.ai/chat/history/hide/"
-        ) else {
-            throw NetworkError.invalidURL
-        }
-
-        do {
-            try await authenticatedHTTPClient.send(
-                primaryURL,
-                method: "PUT"
-            )
-        } catch {
-            let body = try JSONEncoder().encode(
-                HideCharacterRequest(characterExternalID: externalID)
-            )
-
-            try await authenticatedHTTPClient.send(
-                fallbackURL,
-                method: "POST",
-                body: body
-            )
-        }
-    }
-
     func loadRecentChats() async throws -> [ConversationSummary] {
         guard let url = URL(
             string: "https://neo.character.ai/chats/recent/?include_restricted=true"
@@ -595,11 +556,7 @@ struct ConversationService {
                     }
                 }
             } catch {
-                print(
-                    "CHAT PREVIEW LOAD ERROR:",
-                    characterID,
-                    error
-                )
+                // Keep the base conversation rows if previews are unavailable.
             }
         }
 
@@ -624,15 +581,24 @@ struct ConversationService {
                 URLQueryItem(
                     name: "num_preview_turns",
                     value: "2"
+                ),
+                URLQueryItem(
+                    name: "include_turn_count",
+                    value: "false"
+                ),
+                URLQueryItem(
+                    name: "num_summaries",
+                    value: "0"
+                ),
+                URLQueryItem(
+                    name: "limit",
+                    value: "100"
                 )
             ]
 
             guard let url = components?.url else {
                 throw NetworkError.invalidURL
             }
-
-            print("CHAT PREVIEW URL:")
-            print(url.absoluteString)
 
             let response: ChatPreviewResponse =
                 try await authenticatedHTTPClient.get(url)

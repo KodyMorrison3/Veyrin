@@ -7,6 +7,9 @@
 
 import Foundation
 import Combine
+import OSLog
+
+private let authLogger = Logger(subsystem: "CharacterAI", category: "Authentication")
 
 @MainActor
 final class AuthStore: ObservableObject {
@@ -32,39 +35,18 @@ final class AuthStore: ObservableObject {
 
         do {
             let data = try JSONEncoder().encode(session)
-
-            try keychainStore.save(
-                data,
-                forKey: sessionKey
-            )
-
-            print("AUTH SESSION SAVED")
+            try keychainStore.save(data, forKey: sessionKey)
         } catch {
-            print("FAILED TO SAVE AUTH SESSION:", error)
+            authLogger.error("Failed to persist authenticated session: \(error.localizedDescription, privacy: .private)")
         }
     }
 
     func loadStoredSession() {
-        print("LOADING STORED SESSION")
-
         do {
-            guard let data = try keychainStore.loadData(
-                forKey: sessionKey
-            ) else {
-                print("NO STORED AUTH SESSION")
-                return
-            }
-
-            let session = try JSONDecoder().decode(
-                AuthSession.self,
-                from: data
-            )
-
-            self.session = session
-
-            print("STORED AUTH SESSION LOADED")
+            guard let data = try keychainStore.loadData(forKey: sessionKey) else { return }
+            self.session = try JSONDecoder().decode(AuthSession.self, from: data)
         } catch {
-            print("FAILED TO LOAD STORED AUTH SESSION:", error)
+            authLogger.error("Failed to load stored session: \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -72,13 +54,9 @@ final class AuthStore: ObservableObject {
         session = nil
 
         do {
-            try keychainStore.delete(
-                forKey: sessionKey
-            )
-
-            print("AUTH SESSION CLEARED")
+            try keychainStore.delete(forKey: sessionKey)
         } catch {
-            print("FAILED TO CLEAR AUTH SESSION:", error)
+            authLogger.error("Failed to clear stored session: \(error.localizedDescription, privacy: .private)")
         }
     }
 }

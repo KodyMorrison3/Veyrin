@@ -78,6 +78,12 @@ struct APICandidate: Decodable {
     let rawContent: String
     let editor: TurnEditor?
     let isFinal: Bool?
+    let modelType: String?
+    let displayName: String?
+
+    var userFacingModelName: String? {
+        displayName ?? modelType.map(ModelSelectionOption.fallbackDisplayName(for:))
+    }
 
     enum CodingKeys: String, CodingKey {
         case candidateID = "candidate_id"
@@ -85,5 +91,7 @@ struct APICandidate: Decodable {
         case rawContent = "raw_content"
         case editor
         case isFinal = "is_final"
+        case modelType = "model_type"
+        case displayName = "display_name"
     }
 }

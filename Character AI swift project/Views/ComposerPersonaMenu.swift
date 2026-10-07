@@ -1,41 +1,43 @@
 import SwiftUI
 
-/// Compact Liquid Glass popover menu presented when clicking the composer's persona avatar.
-/// Provides access to Persona switching (with server-side persistence), Memory (live conversation facts),
-/// History (recent character chats), and Chat Style / Models (dynamic model selector).
+/// Compact Liquid Glass popover for conversation memory, recent chats,
+/// copied-chat model selection, and server-backed persona overrides.
 struct ComposerPersonaMenu: View {
     @ObservedObject var personaStore = PersonaStore.shared
     let currentCharacterID: String?
     let authenticatedHTTPClient: AuthenticatedHTTPClient?
     let availableModels: [ModelSelectionOption]
     let selectedModelType: String?
-    let currentModelType: String?
-    let recentChats: [RecentChat]
+    let canStartModelConversation: Bool
+    let recentChats: [ChatPreview]
+    let isLoadingHistory: Bool
+    let historyErrorMessage: String?
+    let isCreatingConversation: Bool
+    let isPersonaSelectionInProgress: Bool
+    let isLoadingPersonas: Bool
+    let currentPersonaID: String?
     let onSelectModel: (String) -> Void
-    let isLoadingFacts: Bool
-    let factsErrorMessage: String?
+    let onSelectPersona: (Persona) async -> Bool
     let onOpenMemory: () -> Void
-    let onOpenHistory: (RecentChat) -> Void
+    let onOpenHistory: (ChatPreview) -> Void
+    let onRefreshHistory: () -> Void
     let dismiss: () -> Void
 
     @State private var showingPersonaPicker = false
     @State private var showingStylePicker = false
     @State private var showingHistoryPicker = false
-
-    private var currentPersona: Persona {
-        personaStore.resolvePersona(forCharacterID: currentCharacterID)
-    }
+    @State private var hasStartedHistoryLoad = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Header: Current Persona
             HStack(spacing: 8) {
                 personaIcon(currentPersona, size: 26)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(currentPersona.displayName)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color.caiText)
-                    Text(currentPersona.isDefaultUser ? "No Character.AI persona selected" : "Current persona")
+                    Text(currentPersonaID == nil || currentPersonaID == "default_user"
+                         ? "No Character.AI persona selected" : "Current persona")
                         .font(.system(size: 10))
                         .foregroundStyle(Color.caiMuted)
                 }
@@ -44,235 +46,30 @@ struct ComposerPersonaMenu: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
 
-            Divider()
-                .padding(.vertical, 2)
+            Divider().padding(.vertical, 2)
 
             if showingPersonaPicker {
-                // Nested Persona Selector
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Button {
-                            showingPersonaPicker = false
-                        } label: {
-                            Label("Back", systemImage: "chevron.left")
-                                .font(.caption)
-                        }
-                        .buttonStyle(QuietHoverButtonStyle())
-                        Spacer()
-                        Text("Personas")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Color.caiMuted)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 4)
-
-                    if personaStore.personas.isEmpty {
-                        Text("No Character.AI personas are available.")
-                            .font(.caption)
-                            .foregroundStyle(Color.caiMuted)
-                            .padding(8)
-                    } else {
-                        ScrollView {
-                            VStack(spacing: 2) {
-                                ForEach(personaStore.personas) { persona in
-                                    Button {
-                                        Task {
-                                            await personaStore.selectPersona(
-                                                persona,
-                                                forCharacterID: currentCharacterID,
-                                                authenticatedClient: authenticatedHTTPClient
-                                            )
-                                            showingPersonaPicker = false
-                                        }
-                                    } label: {
-                                        HStack(spacing: 8) {
-                                            personaIcon(persona, size: 20)
-                                            Text(persona.displayName)
-                                                .font(.callout)
-                                                .foregroundStyle(Color.caiText)
-                                                .lineLimit(1)
-                                            Spacer()
-                                            if persona.id == currentPersona.id || persona.externalID == currentPersona.externalID {
-                                                Image(systemName: "checkmark")
-                                                    .font(.caption.weight(.bold))
-                                                    .foregroundStyle(Color.caiPrimary)
-                                            }
-                                        }
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 5)
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(QuietHoverButtonStyle())
-                                    .accessibilityLabel("Select persona \(persona.displayName)")
-                                    .accessibilityAddTraits(persona.externalID == currentPersona.externalID ? .isSelected : [])
-                                }
-                            }
-                        }
-                        .frame(maxHeight: 200)
-                    }
-                }
+                personaPicker
             } else if showingStylePicker {
-                // Nested Chat Style / Model Picker
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Button {
-                            showingStylePicker = false
-                        } label: {
-                            Label("Back", systemImage: "chevron.left")
-                                .font(.caption)
-                        }
-                        .buttonStyle(QuietHoverButtonStyle())
-                        Spacer()
-                        Text("Chat Style / Model")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Color.caiMuted)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 4)
-
-                    Text("Current: \(currentModelType ?? "Character.AI default")")
-                        .font(.caption)
-                        .foregroundStyle(Color.caiMuted)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-
-                    if availableModels.isEmpty {
-                        Text("Available styles couldn't be loaded.")
-                            .font(.caption)
-                            .foregroundStyle(Color.caiMuted)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                    } else {
-                        ScrollView {
-                            VStack(spacing: 2) {
-                                ForEach(availableModels) { model in
-                                    Button {
-                                        onSelectModel(model.modelType)
-                                        showingStylePicker = false
-                                        dismiss()
-                                    } label: {
-                                        HStack(spacing: 8) {
-                                            VStack(alignment: .leading, spacing: 1) {
-                                                Text(model.displayName)
-                                                    .font(.callout)
-                                                    .foregroundStyle(Color.caiText)
-                                                HStack(spacing: 4) {
-                                                    if model.isPlusOnly {
-                                                        Text("Plus")
-                                                            .font(.system(size: 9, weight: .bold))
-                                                            .foregroundStyle(Color.orange)
-                                                    }
-                                                    if model.isBeta {
-                                                        Text("Beta")
-                                                            .font(.system(size: 9))
-                                                            .foregroundStyle(Color.caiMuted)
-                                                    }
-                                                    if model.hasModelSteering {
-                                                        Text("Steering")
-                                                            .font(.system(size: 9))
-                                                            .foregroundStyle(Color.caiPrimary)
-                                                    }
-                                                }
-                                            }
-                                            Spacer()
-                                            if selectedModelType == model.modelType {
-                                                Image(systemName: "checkmark")
-                                                    .font(.caption.weight(.bold))
-                                                    .foregroundStyle(Color.caiPrimary)
-                                            }
-                                        }
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 5)
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(QuietHoverButtonStyle())
-                                    .accessibilityLabel("Select chat style \(model.displayName)")
-                                    .accessibilityAddTraits(model.modelType == currentModelType ? .isSelected : [])
-                                }
-                            }
-                        }
-                        .frame(maxHeight: 220)
-                    }
-                }
+                stylePicker
             } else if showingHistoryPicker {
-                // Character History Submenu
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Button {
-                            showingHistoryPicker = false
-                        } label: {
-                            Label("Back", systemImage: "chevron.left")
-                                .font(.caption)
-                        }
-                        .buttonStyle(QuietHoverButtonStyle())
-                        Spacer()
-                        Text("Recent History")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Color.caiMuted)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 4)
-
-                    if recentChats.isEmpty {
-                        Text("No other chats found for this character.")
-                            .font(.caption)
-                            .foregroundStyle(Color.caiMuted)
-                            .padding(8)
-                    } else {
-                        ScrollView {
-                            VStack(spacing: 2) {
-                                ForEach(recentChats, id: \.chatID) { recent in
-                                    Button {
-                                        let selectedChat = recent
-                                        dismiss()
-                                        onOpenHistory(selectedChat)
-                                    } label: {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(recent.characterName)
-                                                .font(.caption.weight(.medium))
-                                                .foregroundStyle(Color.caiText)
-                                            Text(recent.createTime.prefix(10))
-                                                .font(.system(size: 9))
-                                                .foregroundStyle(Color.caiMuted)
-                                        }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 5)
-                                    }
-                                    .buttonStyle(QuietHoverButtonStyle())
-                                }
-                            }
-                        }
-                        .frame(maxHeight: 180)
-                    }
-                }
+                historyPicker
             } else {
-                GlassActionRow(
-                    title: "Memory",
-                    systemImage: "brain"
-                ) {
+                GlassActionRow(title: "Memory", systemImage: "brain") {
                     dismiss()
                     onOpenMemory()
                 }
-
-                GlassActionRow(
-                    title: "History",
-                    systemImage: "clock.arrow.circlepath"
-                ) {
+                GlassActionRow(title: "History", systemImage: "clock.arrow.circlepath") {
                     showingHistoryPicker = true
+                    if recentChats.isEmpty && historyErrorMessage == nil && !isLoadingHistory {
+                        hasStartedHistoryLoad = true
+                        onRefreshHistory()
+                    }
                 }
-
-                GlassActionRow(
-                    title: "Chat Style",
-                    systemImage: "sparkles"
-                ) {
+                GlassActionRow(title: "Chat Style", systemImage: "sparkles") {
                     showingStylePicker = true
                 }
-
-                GlassActionRow(
-                    title: "Persona",
-                    systemImage: "person.crop.circle"
-                ) {
+                GlassActionRow(title: "Persona", systemImage: "person.crop.circle") {
                     showingPersonaPicker = true
                 }
             }
@@ -283,6 +80,270 @@ struct ComposerPersonaMenu: View {
         .presentationBackground(.regularMaterial)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Conversation controls")
+        .onChange(of: personaStore.personaSelectionErrorMessage) {
+            if personaStore.personaSelectionErrorMessage != nil {
+                showingPersonaPicker = true
+            }
+        }
+    }
+
+    private var currentPersona: Persona {
+        personaStore.resolvePersona(forCharacterID: currentCharacterID)
+    }
+
+    private var personaPicker: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            submenuHeader("Personas") { showingPersonaPicker = false }
+            if let error = personaStore.personaListErrorMessage {
+                Text("Character.AI personas couldn't be loaded: \(error)")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 8)
+            }
+            if let error = personaStore.personaSettingsErrorMessage {
+                Text("Persona settings couldn't be loaded: \(error)")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 8)
+            }
+            if let error = personaStore.personaSelectionErrorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 8)
+            }
+
+            if personaStore.personas.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(isLoadingPersonas
+                         ? "Loading Character.AI personas…"
+                         : "No Character.AI personas are available.")
+                        .font(.caption)
+                        .foregroundStyle(Color.caiMuted)
+                    if isLoadingPersonas {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                .padding(8)
+            } else {
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(personaStore.personas) { persona in
+                            Button {
+                                Task {
+                                    if await onSelectPersona(persona) {
+                                        showingPersonaPicker = false
+                                    }
+                                }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    personaIcon(persona, size: 20)
+                                    Text(persona.displayName)
+                                        .font(.callout)
+                                        .foregroundStyle(Color.caiText)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    if persona.externalID == currentPersonaID {
+                                        Image(systemName: "checkmark")
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(Color.caiPrimary)
+                                    }
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(QuietHoverButtonStyle())
+                            .disabled(isPersonaSelectionInProgress)
+                            .accessibilityLabel("Select persona \(persona.displayName)")
+                            .accessibilityAddTraits(persona.externalID == currentPersonaID ? .isSelected : [])
+                        }
+                    }
+                }
+                .frame(maxHeight: 200)
+            }
+        }
+    }
+
+    private var stylePicker: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            submenuHeader("Chat Style / Model") { showingStylePicker = false }
+            Text("Choose a style to create a copied chat from the latest message.")
+                .font(.caption)
+                .foregroundStyle(Color.caiMuted)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+
+            if availableModels.isEmpty {
+                Text("Available styles couldn't be loaded.")
+                    .font(.caption)
+                    .foregroundStyle(Color.caiMuted)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+            } else if !canStartModelConversation {
+                Text("To create a copied chat in another style, wait for messages to load and finish active updates.")
+                    .font(.caption)
+                    .foregroundStyle(Color.caiMuted)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+            } else {
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(availableModels) { model in
+                            Button {
+                                onSelectModel(model.modelType)
+                                showingStylePicker = false
+                                dismiss()
+                            } label: {
+                                HStack(spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(model.displayName)
+                                            .font(.callout)
+                                            .foregroundStyle(Color.caiText)
+                                        HStack(spacing: 4) {
+                                            if model.isPlusOnly {
+                                                Text("Plus")
+                                                    .font(.system(size: 9, weight: .bold))
+                                                    .foregroundStyle(Color.orange)
+                                            }
+                                            if model.isBeta {
+                                                Text("Beta")
+                                                    .font(.system(size: 9))
+                                                    .foregroundStyle(Color.caiMuted)
+                                            }
+                                            if model.hasModelSteering {
+                                                Text("Steering")
+                                                    .font(.system(size: 9))
+                                                    .foregroundStyle(Color.caiPrimary)
+                                            }
+                                        }
+                                    }
+                                    Spacer()
+                                    if selectedModelType == model.modelType {
+                                        Image(systemName: "checkmark")
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(Color.caiPrimary)
+                                    }
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(QuietHoverButtonStyle())
+                            .disabled(isCreatingConversation)
+                            .accessibilityLabel("Create copied chat using \(model.displayName)")
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+            }
+        }
+    }
+
+    private var historyPicker: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            submenuHeader("Recent History") { showingHistoryPicker = false }
+            if isLoadingHistory && recentChats.isEmpty {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading recent chats…")
+                        .font(.caption)
+                        .foregroundStyle(Color.caiMuted)
+                }
+                .padding(8)
+            } else if let historyErrorMessage, recentChats.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Recent chats couldn't be loaded: \(historyErrorMessage)")
+                        .font(.caption)
+                        .foregroundStyle(Color.caiMuted)
+                    Button("Retry") {
+                        onRefreshHistory()
+                    }
+                    .disabled(isLoadingHistory)
+                }
+                .padding(8)
+            } else if recentChats.isEmpty && !isLoadingHistory && !hasStartedHistoryLoad {
+                ProgressView("Loading recent chats…")
+                    .controlSize(.small)
+                    .padding(8)
+            } else if recentChats.isEmpty {
+                Text("No other chats found for this character.")
+                    .font(.caption)
+                    .foregroundStyle(Color.caiMuted)
+                    .padding(8)
+            } else {
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(recentChats, id: \.chatID) { recent in
+                            Button {
+                                dismiss()
+                                onOpenHistory(recent)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(historyTitle(for: recent))
+                                        .font(.caption.weight(.medium))
+                                        .foregroundStyle(Color.caiText)
+                                    Text(historyDate(for: recent.createTime))
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(Color.caiMuted)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                            }
+                            .buttonStyle(QuietHoverButtonStyle())
+                            .accessibilityLabel(historyAccessibilityLabel(for: recent))
+                        }
+                    }
+                }
+                .frame(maxHeight: 180)
+            }
+        }
+    }
+
+    private func submenuHeader(_ title: String, back: @escaping () -> Void) -> some View {
+        HStack {
+            Button(action: back) {
+                Label("Back", systemImage: "chevron.left")
+                    .font(.caption)
+            }
+            .buttonStyle(QuietHoverButtonStyle())
+            Spacer()
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.caiMuted)
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 4)
+    }
+
+    private func historyDate(for value: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        guard let date else { return value }
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private func historyTitle(for recent: ChatPreview) -> String {
+        guard let message = recent.openingMessage else {
+            return "Conversation"
+        }
+        let cleaned = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return "Conversation" }
+        let words = cleaned.split(whereSeparator: \.isWhitespace)
+        let title = words.prefix(8).joined(separator: " ")
+        let firstSentence: String
+        if let end = title.firstIndex(where: { ".!?。！？".contains($0) }) {
+            firstSentence = String(title[...end])
+        } else {
+            firstSentence = title
+        }
+        return words.count > 8 && firstSentence == title ? title + "…" : firstSentence
+    }
+
+    private func historyAccessibilityLabel(for recent: ChatPreview) -> String {
+        "Open \(historyTitle(for: recent)), \(historyDate(for: recent.createTime))"
     }
 
     private func personaIcon(_ persona: Persona, size: CGFloat) -> some View {
@@ -302,8 +363,7 @@ struct ComposerPersonaMenu: View {
 
     private func fallbackPersonaIcon(_ persona: Persona, size: CGFloat) -> some View {
         ZStack {
-            Circle()
-                .fill(Color.caiPrimary.opacity(0.35))
+            Circle().fill(Color.caiPrimary.opacity(0.35))
             Text(persona.displayName.prefix(1).uppercased())
                 .font(.system(size: size * 0.45, weight: .bold))
                 .foregroundStyle(Color.caiText)
@@ -312,9 +372,7 @@ struct ComposerPersonaMenu: View {
     }
 }
 
-/// Clean native macOS sheet displaying confirmed read-only conversation facts from
-/// `GET https://neo.character.ai/chat/{chatID}/conversation-facts/`.
-/// Fact editing/mutation is isolated as unconfirmed on the backend.
+/// Read-only conversation facts returned by Character.AI's conversation-memory endpoint.
 struct MemoryFactsSheet: View {
     let facts: [String: [ConversationFact]]
     let isLoading: Bool
@@ -336,8 +394,7 @@ struct MemoryFactsSheet: View {
 
             if isLoading && facts.isEmpty {
                 VStack(spacing: 10) {
-                    ProgressView()
-                        .controlSize(.regular)
+                    ProgressView().controlSize(.regular)
                     Text("Loading conversation memory…")
                         .font(.callout)
                         .foregroundStyle(Color.caiMuted)
@@ -385,7 +442,7 @@ struct MemoryFactsSheet: View {
                 .scrollContentBackground(.hidden)
             }
 
-            Text("Memory facts are read directly from Character.AI's server-side memory extraction. Editing and deletion are not captured in current network traffic.")
+            Text("Memory facts are read from Character.AI's server-side extraction. Editing and deletion are not confirmed.")
                 .font(.caption2)
                 .foregroundStyle(Color.caiMuted)
         }

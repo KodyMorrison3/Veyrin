@@ -17,8 +17,6 @@ final class ChatViewModel: ObservableObject {
     @Published var chat: Chat?
     @Published var turns: [Turn] = []
     @Published var recentChats: [ConversationSummary] = []
-    @Published private(set) var hidingCharacterIDs: Set<String> = []
-    @Published var hideErrorMessage: String?
     @Published var isLoading = false
     @Published var isGenerating = false
     @Published var errorMessage: String?
@@ -36,9 +34,11 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var isCharacterVoted: Bool = false
     @Published private(set) var conversationFacts: [String: [ConversationFact]] = [:]
     @Published private(set) var conversationFactsErrorMessage: String?
-    @Published private(set) var recentCharacterChats: [RecentChat] = []
+    @Published private(set) var recentCharacterChats: [ChatPreview] = []
     @Published private(set) var isLoadingFacts = false
     @Published private(set) var isLoadingCharacterHistory = false
+    @Published private(set) var characterHistoryErrorMessage: String?
+    @Published private(set) var characterHistoryCharacterID: String?
 
     private struct PendingPinRequest {
         let chatID: String
@@ -48,6 +48,7 @@ final class ChatViewModel: ObservableObject {
 
     private var pendingPinRequests: [String: PendingPinRequest] = [:]
     private var deferredWebSocketMessages: [String] = []
+    private var characterHistoryLoadID: UUID?
     private var activeChatID: String?
     private var isReceivingWebSocketMessage = false
     private var receiveWaiters: [CheckedContinuation<Void, Never>] = []
@@ -107,8 +108,7 @@ final class ChatViewModel: ObservableObject {
             let response =
                 try await webSocketClient.receive()
 
-            print("CREATE CHAT RESPONSE:")
-            print(response)
+            _ = response // The create-chat acknowledgement may contain private identifiers.
 
             chat = Chat(
                 chatID: chatID,
@@ -121,10 +121,7 @@ final class ChatViewModel: ObservableObject {
             return chatID
 
         } catch {
-            print(
-                "CREATE CHAT ERROR:",
-                error
-            )
+            chatLogger.error("Chat creation failed: \(error.localizedDescription, privacy: .private)")
 
             errorMessage = error.localizedDescription
             return nil
@@ -203,14 +200,32 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    /// Loads recent chats for character from GET https://neo.character.ai/chats/recent/{characterID}
+    /// Loads the character's history list using the HAR-observed GET /chats/ query.
     func loadRecentCharacterChats(characterID: String) async {
+        if isLoadingCharacterHistory && characterHistoryCharacterID == characterID { return }
+
+        let loadID = UUID()
+        characterHistoryLoadID = loadID
+        characterHistoryCharacterID = characterID
         isLoadingCharacterHistory = true
-        defer { isLoadingCharacterHistory = false }
+        characterHistoryErrorMessage = nil
+
+        defer {
+            if characterHistoryLoadID == loadID {
+                characterHistoryLoadID = nil
+                isLoadingCharacterHistory = false
+            }
+        }
+
         do {
-            let chats = try await conversationService.loadCharacterRecentChats(characterID: characterID)
-            self.recentCharacterChats = chats
+            let chats = try await conversationService.loadCharacterRecentChats(
+                characterID: characterID
+            )
+            guard characterHistoryLoadID == loadID else { return }
+            recentCharacterChats = chats
         } catch {
+            guard characterHistoryLoadID == loadID else { return }
+            characterHistoryErrorMessage = error.localizedDescription
             chatLogger.error("Character history request failed: \(error.localizedDescription, privacy: .private)")
         }
     }
@@ -774,6 +789,53 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    func latestConversationCopySource(characterID: String) async throws -> ConversationCopySource? {
+        try await conversationService.loadLatestConversationCopySource(
+            characterID: characterID
+        )
+    }
+
+    func createConversation(
+        characterID: String,
+        source: ConversationCopySource?,
+        modelType: String
+    ) async -> String? {
+        guard !isLoading,
+              !isCreatingConversationFromTurn else {
+            startConversationErrorMessage = "Wait for current conversation updates to finish before creating a new conversation."
+            return nil
+        }
+        guard let source else {
+            startConversationErrorMessage = "A previous conversation turn is required to create a model-specific conversation."
+            return nil
+        }
+        guard source.characterID == characterID else {
+            startConversationErrorMessage = "The source conversation belongs to a different character."
+            return nil
+        }
+        guard availableModels.contains(where: { $0.modelType == modelType }) else {
+            startConversationErrorMessage = "Select an available AI model."
+            return nil
+        }
+
+        isCreatingConversationFromTurn = true
+        startConversationErrorMessage = nil
+        defer {
+            isCreatingConversationFromTurn = false
+        }
+
+        do {
+            return try await conversationService.startNewConversation(
+                chatID: source.chatID,
+                endTurnID: source.endTurnID,
+                modelType: modelType
+            )
+        } catch {
+            startConversationErrorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
     func createConversation(
         from turn: Turn,
         modelType: String
@@ -1067,33 +1129,6 @@ final class ChatViewModel: ObservableObject {
         }
         for requestID in requestIDs {
             completePinRequest(requestID: requestID, error: error)
-        }
-    }
-
-    func hideCharacter(externalID: String) async -> Bool {
-        guard !hidingCharacterIDs.contains(externalID) else {
-            return false
-        }
-
-        hidingCharacterIDs.insert(externalID)
-        hideErrorMessage = nil
-
-        defer {
-            hidingCharacterIDs.remove(externalID)
-        }
-
-        do {
-            try await conversationService.hideCharacter(
-                externalID: externalID
-            )
-
-            recentChats.removeAll {
-                $0.characterID == externalID
-            }
-            return true
-        } catch {
-            hideErrorMessage = error.localizedDescription
-            return false
         }
     }
 

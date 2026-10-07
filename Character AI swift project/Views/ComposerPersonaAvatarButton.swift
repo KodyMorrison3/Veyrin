@@ -1,19 +1,24 @@
 import SwiftUI
 
 /// Persona avatar button embedded in the message composer.
-/// Displays active persona avatar, subtle hover effect, and presents `ComposerPersonaMenu`.
 struct ComposerPersonaAvatarButton: View {
     @ObservedObject var personaStore = PersonaStore.shared
     let currentCharacterID: String?
     let authenticatedHTTPClient: AuthenticatedHTTPClient?
     let availableModels: [ModelSelectionOption]
     let selectedModelType: String?
-    let recentChats: [RecentChat]
+    let canStartModelConversation: Bool
+    let recentChats: [ChatPreview]
+    let isLoadingHistory: Bool
+    let historyErrorMessage: String?
+    let isCreatingConversation: Bool
+    let isPersonaSelectionInProgress: Bool
+    let isLoadingPersonas: Bool
     let onSelectModel: (String) -> Void
-    let isLoadingFacts: Bool
-    let factsErrorMessage: String?
+    let onSelectPersona: (Persona) async -> Bool
     let onOpenMemory: () -> Void
-    let onOpenHistory: (RecentChat) -> Void
+    let onOpenHistory: (ChatPreview) -> Void
+    let onRefreshHistory: () -> Void
 
     @State private var isShowingMenu = false
     @State private var isHovering = false
@@ -39,10 +44,7 @@ struct ComposerPersonaAvatarButton: View {
             .clipShape(Circle())
             .overlay(
                 Circle()
-                    .strokeBorder(
-                        Color.primary.opacity(isHovering ? 0.35 : 0.15),
-                        lineWidth: 1
-                    )
+                    .strokeBorder(Color.primary.opacity(isHovering ? 0.35 : 0.15), lineWidth: 1)
             )
             .scaleEffect(isHovering ? 1.05 : 1.0)
             .animation(.easeOut(duration: 0.15), value: isHovering)
@@ -58,13 +60,19 @@ struct ComposerPersonaAvatarButton: View {
                 authenticatedHTTPClient: authenticatedHTTPClient,
                 availableModels: availableModels,
                 selectedModelType: selectedModelType,
-                currentModelType: selectedModelType,
+                canStartModelConversation: canStartModelConversation,
                 recentChats: recentChats,
+                isLoadingHistory: isLoadingHistory,
+                historyErrorMessage: historyErrorMessage,
+                isCreatingConversation: isCreatingConversation,
+                isPersonaSelectionInProgress: isPersonaSelectionInProgress,
+                isLoadingPersonas: isLoadingPersonas,
+                currentPersonaID: activePersonaForCharacter.externalID,
                 onSelectModel: onSelectModel,
-                isLoadingFacts: isLoadingFacts,
-                factsErrorMessage: factsErrorMessage,
+                onSelectPersona: onSelectPersona,
                 onOpenMemory: onOpenMemory,
                 onOpenHistory: onOpenHistory,
+                onRefreshHistory: onRefreshHistory,
                 dismiss: { isShowingMenu = false }
             )
         }
@@ -72,8 +80,7 @@ struct ComposerPersonaAvatarButton: View {
 
     private var fallbackAvatar: some View {
         ZStack {
-            Circle()
-                .fill(Color.caiPrimary.opacity(0.35))
+            Circle().fill(Color.caiPrimary.opacity(0.35))
             Text(activePersonaForCharacter.displayName.prefix(1).uppercased())
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(Color.caiText)

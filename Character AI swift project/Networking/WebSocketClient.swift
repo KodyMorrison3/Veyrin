@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let webSocketLogger = Logger(subsystem: "CharacterAI", category: "WebSocket")
 
 final class WebSocketClient {
     private let session: URLSession
@@ -41,7 +44,6 @@ final class WebSocketClient {
 
         isConnected = true
 
-        print("WebSocket connection started")
     }
     
     func receive() async throws -> String {
@@ -85,8 +87,7 @@ final class WebSocketClient {
             self.webSocketTask = nil
             isConnected = false
 
-            print("WebSocket connection lost")
-
+            webSocketLogger.error("WebSocket receive failed: \(error.localizedDescription, privacy: .private)")
             throw error
         }
     }
@@ -96,7 +97,6 @@ final class WebSocketClient {
         webSocketTask = nil
         isConnected = false
 
-        print("WebSocket disconnected")
     }
     
     func send(_ message: String) async throws {

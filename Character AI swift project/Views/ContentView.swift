@@ -12,6 +12,13 @@ struct ContentView: View {
     }
 }
 
+private struct NewConversationSelection: Identifiable {
+    let id = UUID()
+    let characterID: String
+    let characterName: String
+    let avatarFileName: String
+}
+
 private struct MainView: View {
     let authStore: AuthStore
 
@@ -23,8 +30,15 @@ private struct MainView: View {
     @FocusState private var isConversationSearchFocused: Bool
     @State private var pendingCreatedChat: ConversationSummary?
     @State private var pendingCopiedConversation: ConversationSummary?
+    @State private var pendingHistoryChat: ConversationSummary?
+    @State private var selectedHistoryConversation: ConversationSummary?
+    @State private var pendingNewConversation: NewConversationSelection?
+    @State private var newConversationCopySource: ConversationCopySource?
+    @State private var isLoadingNewConversationCopySource = false
+    @State private var newConversationCopySourceError: String?
+    @State private var newConversationCreationError: String?
+    @State private var selectedNewConversationModelType: String?
     @State private var profileCharacterID: String?
-    @State private var hideErrorMessage: String?
     @State private var isShowingDiscover = false
     @State private var isShowingFeed = false
     @State private var feedProfileUsername: String?
@@ -58,9 +72,13 @@ private struct MainView: View {
         if pendingCreatedChat?.chatID == selectedChatID {
             return pendingCreatedChat
         }
-        return pendingCopiedConversation?.chatID == selectedChatID
-            ? pendingCopiedConversation
-            : nil
+        if pendingCopiedConversation?.chatID == selectedChatID {
+            return pendingCopiedConversation
+        }
+        if pendingHistoryChat?.chatID == selectedChatID {
+            return pendingHistoryChat
+        }
+        return selectedHistoryConversation?.chatID == selectedChatID ? selectedHistoryConversation : nil
     }
 
     private var filteredRecentChats: [ConversationSummary] {
@@ -114,6 +132,14 @@ private struct MainView: View {
                 )
                 .frame(minWidth: 460, minHeight: 520)
             }
+        }
+        .sheet(item: $pendingNewConversation, onDismiss: {
+            newConversationCopySource = nil
+            newConversationCopySourceError = nil
+            newConversationCreationError = nil
+            selectedNewConversationModelType = nil
+        }) { selection in
+            newConversationModelPicker(for: selection)
         }
         .popover(isPresented: Binding(
             get: { profileCharacterID != nil },
@@ -212,32 +238,188 @@ private struct MainView: View {
         name: String,
         avatarFileName: String
     ) async -> Bool {
-        guard let newChatID = await viewModel.createRealChat(characterID: characterID) else {
+        guard pendingNewConversation == nil else {
             return false
         }
 
-        pendingCreatedChat = ConversationSummary(
-            id: newChatID,
-            chatID: newChatID,
+        let selection = NewConversationSelection(
             characterID: characterID,
             characterName: name,
-            characterAvatarURI: avatarFileName,
-            lastUpdated: ISO8601DateFormatter().string(from: Date()),
-            state: "STATE_ACTIVE",
-            lastMessage: nil
+            avatarFileName: avatarFileName
         )
+        pendingNewConversation = selection
+        newConversationCopySource = nil
+        newConversationCopySourceError = nil
+        newConversationCreationError = nil
+        isLoadingNewConversationCopySource = true
+        selectedNewConversationModelType = nil
 
-        selectedChatID = newChatID
-        isShowingDiscover = false
-        isShowingFeed = false
-
-        await viewModel.loadRecentChats()
-
-        if viewModel.recentChats.contains(where: { $0.chatID == newChatID }) {
-            pendingCreatedChat = nil
+        Task {
+            await viewModel.loadAvailableModels()
+            do {
+                let source = try await viewModel.latestConversationCopySource(
+                    characterID: characterID
+                )
+                guard pendingNewConversation?.id == selection.id else { return }
+                if let source {
+                    newConversationCopySource = source
+                } else {
+                    newConversationCopySourceError = "No previous conversation was found. Character.AI only supports choosing a model when copying an existing conversation turn."
+                }
+                selectedNewConversationModelType = viewModel.availableModels.first?.modelType
+            } catch {
+                guard pendingNewConversation?.id == selection.id else { return }
+                newConversationCopySourceError = error.localizedDescription
+            }
+            if pendingNewConversation?.id == selection.id {
+                isLoadingNewConversationCopySource = false
+            }
         }
 
         return true
+    }
+
+    private func newConversationModelPicker(
+        for selection: NewConversationSelection
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("New Conversation")
+                .font(.title2.weight(.semibold))
+            HStack(spacing: 10) {
+                if let avatarURL = CharacterImageURL.makeURL(
+                    avatarFileName: selection.avatarFileName
+                ) {
+                    CachedAvatarView(url: avatarURL) {
+                        Circle().fill(.quaternary)
+                    }
+                    .frame(width: 36, height: 36)
+                    .clipShape(Circle())
+                }
+                Text(selection.characterName)
+                    .font(.headline)
+            }
+            Text("Choose an AI model. This creates a new conversation by copying the latest turn from your previous chat with this character.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if isLoadingNewConversationCopySource || viewModel.isLoadingAvailableModels {
+                ProgressView("Preparing model choices…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let newConversationCopySourceError {
+                ContentUnavailableView(
+                    "Model Conversation Unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(newConversationCopySourceError)
+                )
+                Spacer(minLength: 0)
+            } else if viewModel.availableModels.isEmpty {
+                ContentUnavailableView(
+                    "Models Unavailable",
+                    systemImage: "sparkles",
+                    description: Text(
+                        viewModel.availableModelsErrorMessage ?? "Available models could not be loaded."
+                    )
+                )
+                Spacer(minLength: 0)
+            } else {
+                List(viewModel.availableModels) { model in
+                    Button {
+                        selectedNewConversationModelType = model.modelType
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: selectedNewConversationModelType == model.modelType
+                                  ? "largecircle.fill.circle" : "circle")
+                                .foregroundStyle(.tint)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(model.displayName)
+                                    .foregroundStyle(.primary)
+                                if model.isPlusOnly || model.isBeta || model.isLegacy || model.isFeatured {
+                                    HStack(spacing: 6) {
+                                        if model.isPlusOnly { Text("Plus") }
+                                        if model.isBeta { Text("Beta") }
+                                        if model.isLegacy { Text("Legacy") }
+                                        if model.isFeatured { Text("Featured") }
+                                    }
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+            }
+
+            if let newConversationCreationError {
+                Label(newConversationCreationError, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Button("Cancel") {
+                    pendingNewConversation = nil
+                }
+                .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Create Conversation") {
+                    guard let source = newConversationCopySource,
+                          let modelType = selectedNewConversationModelType else { return }
+                    Task {
+                        guard let newChatID = await viewModel.createConversation(
+                            characterID: selection.characterID,
+                            source: source,
+                            modelType: modelType
+                        ) else {
+                            newConversationCreationError = viewModel.startConversationErrorMessage
+                                ?? "Unable to create this conversation. Please try again."
+                            return
+                        }
+                        newConversationCreationError = nil
+                        pendingCreatedChat = ConversationSummary(
+                            id: newChatID,
+                            chatID: newChatID,
+                            characterID: selection.characterID,
+                            characterName: selection.characterName,
+                            characterAvatarURI: selection.avatarFileName,
+                            lastUpdated: ISO8601DateFormatter().string(from: Date()),
+                            state: "STATE_ACTIVE",
+                            lastMessage: nil
+                        )
+                        pendingNewConversation = nil
+                        selectedChatID = newChatID
+                        isShowingDiscover = false
+                        isShowingFeed = false
+                        await viewModel.loadRecentChats()
+                        if viewModel.recentChats.contains(where: { $0.chatID == newChatID }) {
+                            pendingCreatedChat = nil
+                        }
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(
+                    newConversationCopySource == nil ||
+                    selectedNewConversationModelType == nil ||
+                    isLoadingNewConversationCopySource ||
+                    viewModel.isLoadingAvailableModels ||
+                    viewModel.isCreatingConversationFromTurn ||
+                    viewModel.availableModels.isEmpty
+                )
+                if viewModel.isCreatingConversationFromTurn {
+                    ProgressView().controlSize(.small)
+                }
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 420, minHeight: 500)
+        .background { ShellEnvironmentalBackground() }
+        .presentationBackground(.regularMaterial)
     }
 
     private var sidebar: some View {
@@ -273,39 +455,6 @@ private struct MainView: View {
                     trailing: 6
                 )
             )
-            .contextMenu {
-                Button(
-                    "Hide Character / Remove from Recents",
-                    systemImage: "eye.slash",
-                    role: .destructive
-                ) {
-                    Task {
-                        let selectedWasHidden = selectedChatID.map { chatID in
-                            viewModel.recentChats.contains(where: {
-                                $0.chatID == chatID &&
-                                $0.characterID == conversation.characterID
-                            })
-                        } ?? false
-
-                        let didHide = await viewModel.hideCharacter(
-                            externalID: conversation.characterID
-                        )
-
-                        if didHide && selectedWasHidden {
-                            selectedChatID = nil
-                        }
-
-                        if let message = viewModel.hideErrorMessage {
-                            hideErrorMessage = message
-                        }
-                    }
-                }
-                .disabled(
-                    viewModel.hidingCharacterIDs.contains(
-                        conversation.characterID
-                    )
-                )
-            }
         }
         // Native `.searchable(placement: .sidebar)` reserves a blurred shelf
         // across every split-view column. Keep the search local to navigation
@@ -392,23 +541,6 @@ private struct MainView: View {
             }
         }
         .glassSurface(.navigation, cornerRadius: 14)
-        .alert(
-            "Unable to Hide Character",
-            isPresented: Binding(
-                get: { hideErrorMessage != nil },
-                set: { isPresented in
-                    if !isPresented {
-                        hideErrorMessage = nil
-                    }
-                }
-            )
-        ) {
-            Button("OK", role: .cancel) {
-                hideErrorMessage = nil
-            }
-        } message: {
-            Text(hideErrorMessage ?? "Please try again.")
-        }
     }
     
     // MARK: User Profile (bottom-left control, account menu, profile popover)
@@ -730,6 +862,29 @@ private struct MainView: View {
                             pendingCopiedConversation = nil
                         }
                     }
+                },
+                onSelectHistoryChat: { recentChat in
+                    guard recentChat.characterID == selectedChat.characterID else {
+                        return
+                    }
+                    let summary = ConversationSummary(
+                        id: recentChat.chatID,
+                        chatID: recentChat.chatID,
+                        characterID: recentChat.characterID,
+                        characterName: selectedChat.characterName,
+                        characterAvatarURI: selectedChat.characterAvatarURI,
+                        lastUpdated: recentChat.createTime,
+                        state: recentChat.state,
+                        lastMessage: nil
+                    )
+                    if !viewModel.recentChats.contains(where: { $0.chatID == recentChat.chatID }) {
+                        selectedHistoryConversation = summary
+                    } else {
+                        selectedHistoryConversation = nil
+                    }
+                    selectedChatID = recentChat.chatID
+                    isShowingDiscover = false
+                    isShowingFeed = false
                 }
             )
             .id(selectedChat.chatID)

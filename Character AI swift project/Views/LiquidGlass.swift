@@ -253,9 +253,9 @@ struct ShellEnvironmentalBackground: View {
                     // Depth and light are tonal variants of the same source, never brand stops.
                     LinearGradient(
                         colors: [
-                            activePalette.atmosphericBase.opacity(0.40 * vignetteStrength),
+                            activePalette.atmosphericBase.opacity(0.40 * vignetteStrength * preferences.environmentVisibility),
                             Color.clear,
-                            activePalette.atmosphericBase.opacity(0.55 * vignetteStrength)
+                            activePalette.atmosphericBase.opacity(0.55 * vignetteStrength * preferences.environmentVisibility)
                         ],
                         startPoint: .top,
                         endPoint: .bottom

@@ -12,8 +12,10 @@ struct ChatView: View {
     @State private var turnToRewind: Turn?
     @State private var turnToStartConversationFrom: Turn?
     @State private var selectedModelType: String?
+    @State private var isLoadingPersonaControls = false
+    @State private var activeChatModelType: String?
     @State private var isShowingMemory = false
-    @State private var selectedHistoryChat: RecentChat?
+    @State private var personaSelectionErrorMessage: String?
     @State private var environmentalArtwork: Image?
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -24,18 +26,21 @@ struct ChatView: View {
     let characterID: String
     let avatarFileName: String?
     let onConversationCreated: ((String) -> Void)?
+    let onSelectHistoryChat: ((ChatPreview) -> Void)?
 
     init(
         chatID: String,
         characterID: String,
         avatarFileName: String? = nil,
         authStore: AuthStore,
-        onConversationCreated: ((String) -> Void)? = nil
+        onConversationCreated: ((String) -> Void)? = nil,
+        onSelectHistoryChat: ((ChatPreview) -> Void)? = nil
     ) {
         self.chatID = chatID
         self.characterID = characterID
         self.avatarFileName = avatarFileName
         self.onConversationCreated = onConversationCreated
+        self.onSelectHistoryChat = onSelectHistoryChat
 
         _viewModel = StateObject(
             wrappedValue: ChatViewModel(
@@ -234,6 +239,8 @@ struct ChatView: View {
             Text(viewModel.pinErrorMessage ?? "Please try again.")
         }
         .task {
+            isLoadingPersonaControls = true
+            defer { isLoadingPersonaControls = false }
             await viewModel.loadCharacter(
                 externalID: characterID
             )
@@ -241,6 +248,7 @@ struct ChatView: View {
             await viewModel.loadChat(
                 chatID: chatID
             )
+            activeChatModelType = viewModel.chat?.preferredModelType
 
             await viewModel.loadRealTurns(
                 chatID: chatID
@@ -262,9 +270,36 @@ struct ChatView: View {
             )
         }
         .onChange(of: viewModel.chat?.preferredModelType) {
+            activeChatModelType = viewModel.chat?.preferredModelType
             if let modelType = viewModel.chat?.preferredModelType, !modelType.isEmpty {
                 selectedModelType = modelType
             }
+        }
+        .alert(
+            "Unable to Continue Conversation",
+            isPresented: Binding(
+                get: { viewModel.errorMessage != nil },
+                set: { if !$0 { viewModel.errorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                viewModel.errorMessage = nil
+            }
+        } message: {
+            Text(viewModel.errorMessage ?? "Please try again.")
+        }
+        .alert(
+            "Unable to Update Persona",
+            isPresented: Binding(
+                get: { personaSelectionErrorMessage != nil },
+                set: { if !$0 { personaSelectionErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                personaSelectionErrorMessage = nil
+            }
+        } message: {
+            Text(personaSelectionErrorMessage ?? "Please try again.")
         }
         .onChange(of: viewModel.availableModels.map(\.modelType)) {
             guard selectedModelType == nil,
@@ -313,28 +348,6 @@ struct ChatView: View {
 
             Spacer(minLength: 16)
 
-            // Like mutation is not confirmed, so expose only the passive
-            // character-details menu rather than a misleading local-only heart.
-            HStack(spacing: 4) {
-                Menu {
-                    if let character = viewModel.character {
-                        Text(character.name)
-                        if !character.title.isEmpty {
-                            Text(character.title)
-                        }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.caiMuted)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Circle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .frame(width: 28, height: 28)
-                .help("More Options")
-            }
         }
         .padding(.leading, 8)
         .padding(.trailing, 10)
@@ -345,8 +358,8 @@ struct ChatView: View {
         .animation(reduceMotion ? nil : GlassMetrics.interaction, value: viewModel.character != nil)
     }
 
-    /// Unified capsule composer: Persona avatar, attachment, input with sticker
-    /// accessory, and send share one continuous Liquid Glass capsule.
+    /// Unified capsule composer: persona, staged image picker, input, and send
+    /// share one continuous Liquid Glass capsule.
     /// Behaviour — FocusState, Return-to-send, generating and disabled
     /// states — is unchanged.
     private var composer: some View {
@@ -357,27 +370,48 @@ struct ChatView: View {
                 authenticatedHTTPClient: viewModel.authenticatedHTTPClient,
                 availableModels: viewModel.availableModels,
                 selectedModelType: selectedModelType,
-                currentModelType: viewModel.chat?.preferredModelType,
-                recentChats: viewModel.recentCharacterChats,
+                canStartModelConversation: !viewModel.turns.isEmpty
+                    && !viewModel.isGenerating
+                    && !viewModel.isLoading
+                    && viewModel.rewindingFromTurnID == nil
+                    && !viewModel.isCreatingConversationFromTurn,
+                recentChats: viewModel.recentCharacterChats.filter { $0.chatID != chatID },
+                isLoadingHistory: viewModel.isLoadingCharacterHistory,
+                historyErrorMessage: viewModel.characterHistoryErrorMessage,
+                isCreatingConversation: viewModel.isCreatingConversationFromTurn,
+                isPersonaSelectionInProgress: PersonaStore.shared.isSelectingPersona,
+                isLoadingPersonas: isLoadingPersonaControls || PersonaStore.shared.isLoadingPersonas,
                 onSelectModel: { modelType in
-                    selectedModelType = modelType
                     guard let turn = viewModel.turns.last(where: { $0.chatID == chatID }) else { return }
                     Task {
                         guard let newChatID = await viewModel.createConversation(from: turn, modelType: modelType) else {
                             return
                         }
-                        selectedHistoryChat = nil
                         onConversationCreated?(newChatID)
                     }
                 },
-                isLoadingFacts: viewModel.isLoadingFacts,
-                factsErrorMessage: viewModel.conversationFactsErrorMessage,
+                onSelectPersona: { persona in
+                    let didSelect = await PersonaStore.shared.selectPersona(
+                        persona,
+                        forCharacterID: viewModel.character?.externalID,
+                        authenticatedClient: viewModel.authenticatedHTTPClient
+                    )
+                    if !didSelect {
+                        personaSelectionErrorMessage = PersonaStore.shared.personaSelectionErrorMessage
+                    }
+                    return didSelect
+                },
                 onOpenMemory: {
                     isShowingMemory = true
                     Task { await viewModel.loadFacts(chatID: chatID) }
                 },
                 onOpenHistory: { recentChat in
-                    selectedHistoryChat = recentChat
+                    onSelectHistoryChat?(recentChat)
+                },
+                onRefreshHistory: {
+                    Task {
+                        await viewModel.loadRecentCharacterChats(characterID: characterID)
+                    }
                 }
             )
 
@@ -391,7 +425,8 @@ struct ChatView: View {
                     .background(Circle().fill(ShellEnvironmentalBackground.environmentalSurfaceTint(isDark: isDark)))
             }
             .buttonStyle(.plain)
-            .help("Attach an image")
+            .help("Stage images for preview; images are not sent")
+            .accessibilityLabel("Stage images for preview; images are not sent")
 
             if viewModel.isGenerating {
                 HStack(spacing: 8) {
@@ -422,9 +457,6 @@ struct ChatView: View {
                     return .handled
                 }
             }
-
-            if !viewModel.isGenerating {
-                }
 
             Button { sendMessage() } label: {
                 Image(systemName: "arrow.up")

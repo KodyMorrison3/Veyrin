@@ -295,8 +295,8 @@ struct SettingsView: View {
                 settingsSection(
                     title: "Environmental Materials",
                     footer: reduceTransparency
-                        ? "Reduce Transparency is enabled in macOS. Translucent and transparency effects are disabled; your choices are retained."
-                        : "Window Transparency adjusts the environmental foundation (true per-pixel desktop transparency is not safely exposed by SwiftUI while preserving readable content). Glass Opacity adjusts Liquid Glass surface strength. Wallpaper Blur controls the softening applied to background images."
+                        ? "Reduce Transparency is enabled in macOS. Translucent effects are replaced with opaque, readable surfaces; your saved choices are retained."
+                        : "Window Transparency adjusts the environmental background strength. Glass Opacity adjusts all shared Liquid Glass surfaces. Wallpaper Blur softens background images. Window backing remains clear/opaque to avoid dimming text and controls."
                 ) {
                     // 1. Wallpaper Blur
                     VStack(alignment: .leading, spacing: 8) {
@@ -348,7 +348,7 @@ struct SettingsView: View {
                         Button("Reset to Default") { preferences.resetGlassOpacity() }
                             .accessibilityLabel("Reset Glass Opacity to Default")
                             .disabled(abs(preferences.glassOpacity - AppPreferences.defaultGlassOpacity) < 0.001)
-                        Text("Governs the opacity and density of Liquid Glass surfaces (sidebar, message bubbles, composer, header) independently of window transparency.")
+                        Text("One shared control for Liquid Glass surface density and tint across navigation, message bubbles, composer, and floating controls.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
 
@@ -375,7 +375,7 @@ struct SettingsView: View {
                         Button("Reset to Default") { preferences.resetWindowTransparency() }
                             .accessibilityLabel("Reset Window Transparency to Default")
                             .disabled(abs(preferences.windowTransparency - AppPreferences.defaultWindowTransparency) < 0.001)
-                        Text("Adjusts how strongly the wallpaper/environment is composited beneath the interface. AppKit only exposes opaque or clear window backing; whole-window alpha is intentionally avoided so text and controls remain crisp.")
+                        Text("Adjusts the wallpaper/environment foundation, not the alpha of the whole application window. AppKit's window backing is clear or opaque; whole-window alpha is avoided so text and controls remain crisp.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }

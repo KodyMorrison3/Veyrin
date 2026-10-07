@@ -4,8 +4,7 @@ import OSLog
 
 private let logger = Logger(subsystem: "CharacterAI", category: "PersonaStore")
 
-/// Manages user personas with remote fetching from `neo.character.ai/character/v1/get_user_personas`
-/// and persona overrides syncing with `plus.character.ai/chat/user/settings/?v=2` / `update_settings/`.
+/// Manages server personas and their per-character settings overrides.
 @MainActor
 final class PersonaStore: ObservableObject {
     static let shared = PersonaStore()
@@ -22,189 +21,172 @@ final class PersonaStore: ObservableObject {
     @Published private(set) var characterOverrides: [String: String] = [:]
     @Published private(set) var defaultPersonaID: String?
     @Published private(set) var isLoadingPersonas = false
+    @Published private(set) var personaSelectionErrorMessage: String?
+    @Published private(set) var isSelectingPersona = false
+    @Published private(set) var personaListErrorMessage: String?
+    @Published private(set) var personaSettingsErrorMessage: String?
 
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-
-        // Cached selectable personas are always server personas. Drop legacy local
-        // placeholder entries (including the former "User Default") during migration.
-        let initialPersonas: [Persona]
+        let saved: [Persona]
         if let data = defaults.data(forKey: Keys.personasList),
-           let saved = try? JSONDecoder().decode([Persona].self, from: data) {
-            initialPersonas = saved.filter {
-                !$0.isDefaultUser && $0.id != "default_user"
-                    && !$0.id.hasPrefix("persona_")
-            }
-            if initialPersonas.count != saved.count,
-               let migrated = try? JSONEncoder().encode(initialPersonas) {
+           let decoded = try? JSONDecoder().decode([Persona].self, from: data) {
+            saved = decoded.filter { !$0.isDefaultUser && $0.id != "default_user" && !$0.id.hasPrefix("persona_") }
+            if saved.count != decoded.count, let migrated = try? JSONEncoder().encode(saved) {
                 defaults.set(migrated, forKey: Keys.personasList)
             }
         } else {
-            initialPersonas = []
+            saved = []
         }
 
-        let savedOverrides = defaults.dictionary(forKey: Keys.characterOverrides) as? [String: String] ?? [:]
-        self.characterOverrides = savedOverrides
-        self.defaultPersonaID = defaults.string(forKey: Keys.defaultPersonaID)
-
+        characterOverrides = defaults.dictionary(forKey: Keys.characterOverrides) as? [String: String] ?? [:]
+        defaultPersonaID = defaults.string(forKey: Keys.defaultPersonaID)
+        let storedDefaultID = defaults.string(forKey: Keys.defaultPersonaID)
         let savedID = defaults.string(forKey: Keys.activePersonaID)
-        let defaultID = defaults.string(forKey: Keys.defaultPersonaID)
-        let resolved = initialPersonas.first(where: { $0.id == savedID || $0.externalID == savedID })
-            ?? initialPersonas.first(where: { $0.id == defaultID || $0.externalID == defaultID })
-            ?? initialPersonas.first
+        let resolved = saved.first(where: { $0.id == savedID || $0.externalID == savedID })
+            ?? saved.first(where: { $0.id == storedDefaultID || $0.externalID == storedDefaultID })
+            ?? saved.first
             ?? Persona.defaultUser()
-        self.personas = initialPersonas
-        self.activePersona = resolved
+        personas = saved
+        activePersona = resolved
     }
 
-    /// Resolves the active persona for a specific character, taking into account
-    /// characterOverrides or default persona settings.
     func resolvePersona(forCharacterID characterID: String?) -> Persona {
-        if let characterID, let overridePersonaID = characterOverrides[characterID],
-           let matched = personas.first(where: { $0.externalID == overridePersonaID || $0.id == overridePersonaID }) {
-            return matched
+        if let characterID, let id = characterOverrides[characterID],
+           let persona = personas.first(where: { $0.externalID == id || $0.id == id }) {
+            return persona
         }
-        if let defaultID = defaultPersonaID,
-           let matched = personas.first(where: { $0.externalID == defaultID || $0.id == defaultID }) {
-            return matched
+        if let defaultPersonaID,
+           let persona = personas.first(where: { $0.externalID == defaultPersonaID || $0.id == defaultPersonaID }) {
+            return persona
         }
-        if let selected = personas.first(where: {
+        return personas.first(where: {
             $0.externalID == activePersona.externalID || $0.id == activePersona.id
-        }) {
-            return selected
-        }
-        return activePersona
+        }) ?? activePersona
     }
 
-    /// Fetches real user personas from Character.AI backend
     func fetchRemotePersonas(
         authenticatedClient: AuthenticatedHTTPClient,
         currentCharacterID: String? = nil
     ) async {
-        guard !isLoadingPersonas else { return }
+        if isLoadingPersonas { return }
+        personaListErrorMessage = nil
+        personaSettingsErrorMessage = nil
         isLoadingPersonas = true
         defer { isLoadingPersonas = false }
 
-        // 1. Fetch Personas List
-        if let url = URL(string: "https://neo.character.ai/character/v1/get_user_personas?force_refresh=0") {
-            do {
-                let response: UserPersonasResponse = try await authenticatedClient.get(url)
-                let remoteList = response.personas.map { $0.toPersona() }
-                self.personas = remoteList
-                persistPersonas()
-
-                // Keep an existing local selection if it is still an actual remote persona.
-                // The server's default is resolved after settings load below.
-                if let currentActive = remoteList.first(where: {
-                    $0.id == activePersona.id || $0.externalID == activePersona.externalID
-                }) {
-                    self.activePersona = currentActive
-                } else if let defaultID = defaultPersonaID,
-                          let defaultPersona = remoteList.first(where: {
-                              $0.id == defaultID || $0.externalID == defaultID
-                          }) {
-                    self.activePersona = defaultPersona
-                } else if let firstPersona = remoteList.first {
-                    self.activePersona = firstPersona
-                }
-            } catch {
-                logger.error("Failed to load user personas: \(error.localizedDescription, privacy: .public)")
+        guard let personasURL = URL(string: "https://neo.character.ai/character/v1/get_user_personas?force_refresh=0") else {
+            personaListErrorMessage = "The persona list address is invalid."
+            return
+        }
+        do {
+            let response: UserPersonasResponse = try await authenticatedClient.get(personasURL)
+            let fetched = response.personas.map { $0.toPersona() }
+            personas = fetched
+            persistPersonas()
+            if let match = fetched.first(where: { $0.id == activePersona.id || $0.externalID == activePersona.externalID }) {
+                activePersona = match
+            } else if let first = fetched.first {
+                activePersona = first
             }
+        } catch {
+            personaListErrorMessage = error.localizedDescription
+            logger.error("Failed to load user personas: \(error.localizedDescription, privacy: .private)")
         }
 
-        // 2. Fetch User Settings & Persona Overrides
-        if let settingsURL = URL(string: "https://plus.character.ai/chat/user/settings/?v=2") {
-            do {
-                let response: UserSettingsResponse = try await authenticatedClient.get(settingsURL)
-                if let settings = response.personaSettings {
-                    if let defID = settings.defaultPersonaId {
-                        self.defaultPersonaID = defID
-                        defaults.set(defID, forKey: Keys.defaultPersonaID)
-                    }
-                    if let overrides = settings.characterOverrides {
-                        self.characterOverrides = overrides
-                        defaults.set(overrides, forKey: Keys.characterOverrides)
-                    }
-                    let selectedID = currentCharacterID.flatMap { settings.characterOverrides?[$0] }
-                        ?? settings.defaultPersonaId
-                    if let selectedID,
-                       let selectedPersona = personas.first(where: {
-                           $0.id == selectedID || $0.externalID == selectedID
-                       }) {
-                        self.activePersona = selectedPersona
-                        defaults.set(selectedPersona.id, forKey: Keys.activePersonaID)
-                    }
-                } else if let overrides = response.personaOverrides {
-                    self.characterOverrides = overrides
-                    defaults.set(overrides, forKey: Keys.characterOverrides)
-                    if let defID = response.defaultPersonaId {
-                        self.defaultPersonaID = defID
-                        defaults.set(defID, forKey: Keys.defaultPersonaID)
-                    }
-                    let selectedID = currentCharacterID.flatMap { response.personaOverrides?[$0] }
-                        ?? response.defaultPersonaId
-                    if let selectedID,
-                       let selectedPersona = personas.first(where: {
-                           $0.id == selectedID || $0.externalID == selectedID
-                       }) {
-                        self.activePersona = selectedPersona
-                        defaults.set(selectedPersona.id, forKey: Keys.activePersonaID)
-                    }
+        guard let settingsURL = URL(string: "https://plus.character.ai/chat/user/settings/?v=2") else {
+            personaSettingsErrorMessage = "The persona settings address is invalid."
+            return
+        }
+        do {
+            let response: UserSettingsResponse = try await authenticatedClient.get(settingsURL)
+            if let settings = response.personaSettings {
+                if let defaultID = settings.defaultPersonaId {
+                    defaultPersonaID = defaultID
+                    defaults.set(defaultID, forKey: Keys.defaultPersonaID)
                 }
-            } catch {
-                logger.error("Failed to load persona settings: \(error.localizedDescription, privacy: .public)")
+                if let overrides = settings.characterOverrides {
+                    characterOverrides = overrides
+                    defaults.set(overrides, forKey: Keys.characterOverrides)
+                }
+                let selectedID = currentCharacterID.flatMap { settings.characterOverrides?[$0] }
+                    ?? settings.defaultPersonaId
+                updateActivePersona(matching: selectedID)
+            } else {
+                if let overrides = response.personaOverrides {
+                    characterOverrides = overrides
+                    defaults.set(overrides, forKey: Keys.characterOverrides)
+                }
+                if let defaultID = response.defaultPersonaId {
+                    defaultPersonaID = defaultID
+                    defaults.set(defaultID, forKey: Keys.defaultPersonaID)
+                }
+                let selectedID = currentCharacterID.flatMap { response.personaOverrides?[$0] }
+                    ?? response.defaultPersonaId
+                updateActivePersona(matching: selectedID)
             }
+        } catch {
+            personaSettingsErrorMessage = error.localizedDescription
+            logger.error("Failed to load persona settings: \(error.localizedDescription, privacy: .private)")
         }
     }
 
-    /// Selects a persona and optionally updates the Character.AI backend override for a specific character
+    /// Writes the per-character override. The write endpoint's contract still
+    /// needs live confirmation; no local selection is committed on failure.
     func selectPersona(
         _ persona: Persona,
-        forCharacterID characterID: String? = nil,
-        authenticatedClient: AuthenticatedHTTPClient? = nil
-    ) async {
-        guard personas.contains(where: { $0.externalID == persona.externalID }) else { return }
-
-        guard let characterID, !characterID.isEmpty else { return }
-
-        guard personas.contains(where: { $0.externalID == persona.externalID }) else { return }
-        guard let characterID, !characterID.isEmpty else { return }
-        guard let authenticatedClient else {
-            logger.error("Persona selection could not be saved because no authenticated client was provided")
-            return
+        forCharacterID characterID: String?,
+        authenticatedClient: AuthenticatedHTTPClient?
+    ) async -> Bool {
+        personaSelectionErrorMessage = nil
+        guard !isSelectingPersona else { return false }
+        guard let characterID, !characterID.isEmpty else {
+            personaSelectionErrorMessage = "Persona selection requires a character conversation."
+            return false
+        }
+        guard personas.contains(where: { $0.externalID == persona.externalID }) else {
+            personaSelectionErrorMessage = "That persona is no longer available."
+            return false
+        }
+        guard let authenticatedClient,
+              let url = URL(string: "https://plus.character.ai/chat/user/update_settings/") else {
+            personaSelectionErrorMessage = "An authenticated persona settings request is unavailable."
+            return false
         }
 
         var updated = characterOverrides
         updated[characterID] = persona.externalID
-
+        isSelectingPersona = true
+        defer { isSelectingPersona = false }
         do {
-            guard let url = URL(string: "https://plus.character.ai/chat/user/update_settings/") else { return }
-            let request = UpdatePersonaOverridesRequest(personaOverrides: updated)
-            let _: UpdateSettingsResponse = try await authenticatedClient.post(url, body: request)
+            let body = try JSONEncoder().encode(UpdatePersonaOverridesRequest(personaOverrides: updated))
+            try await authenticatedClient.send(url, method: "POST", body: body)
             characterOverrides = updated
             defaults.set(updated, forKey: Keys.characterOverrides)
+            return true
         } catch {
+            personaSelectionErrorMessage = error.localizedDescription
             logger.error("Failed to update persona override: \(error.localizedDescription, privacy: .private)")
+            return false
         }
     }
 
-    /// Syncs the default persona with the signed-in user profile if available
-    /// Updates the private no-persona fallback identity; it is never included in
-    /// `personas` and can therefore never appear as a selectable Persona.
     func syncDefaultUser(username: String, avatarFileName: String?) {
-        let cleanUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanUsername.isEmpty, activePersona.isDefaultUser else { return }
-        activePersona = Persona.defaultUser(
-            username: cleanUsername,
-            avatarFileName: avatarFileName
-        )
+        let clean = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, activePersona.isDefaultUser else { return }
+        activePersona = Persona.defaultUser(username: clean, avatarFileName: avatarFileName)
+    }
+
+    private func updateActivePersona(matching id: String?) {
+        guard let id, let persona = personas.first(where: { $0.id == id || $0.externalID == id }) else { return }
+        activePersona = persona
+        defaults.set(persona.id, forKey: Keys.activePersonaID)
     }
 
     private func persistPersonas() {
-        if let data = try? JSONEncoder().encode(personas) {
-            defaults.set(data, forKey: Keys.personasList)
-        }
+        guard let data = try? JSONEncoder().encode(personas) else { return }
+        defaults.set(data, forKey: Keys.personasList)
     }
 }

@@ -7,6 +7,9 @@
 
 import Foundation
 import Security
+import OSLog
+
+private let keychainLogger = Logger(subsystem: "CharacterAI", category: "Keychain")
 
 struct KeychainStore {
     private let service = "com.kodymorrison.CharacterAI"
@@ -60,8 +63,6 @@ struct KeychainStore {
     func load(
         forKey key: String
     ) throws -> String? {
-        print("KEYCHAIN LOAD:", key)
-
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -77,13 +78,12 @@ struct KeychainStore {
             &result
         )
 
-        print("KEYCHAIN STATUS:", key, status)
-
         if status == errSecItemNotFound {
             return nil
         }
 
         guard status == errSecSuccess else {
+            keychainLogger.error("Keychain read failed (OSStatus \(status, privacy: .public))")
             throw KeychainError.operationFailed(status)
         }
 
@@ -141,8 +141,6 @@ struct KeychainStore {
     func loadData(
         forKey key: String
     ) throws -> Data? {
-        print("KEYCHAIN LOAD:", key)
-
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -158,13 +156,12 @@ struct KeychainStore {
             &result
         )
 
-        print("KEYCHAIN STATUS:", key, status)
-
         if status == errSecItemNotFound {
             return nil
         }
 
         guard status == errSecSuccess else {
+            keychainLogger.error("Keychain data read failed (OSStatus \(status, privacy: .public))")
             throw KeychainError.operationFailed(status)
         }
 
