@@ -55,6 +55,38 @@ nonisolated struct Turn: Codable, Equatable, Sendable {
         )
     }
 
+    /// Mirrors the web client's update semantics (`updateTurn`/`updateCandidate`
+    /// merge into the stored turn instead of replacing it): an incoming frame
+    /// supersedes the fields it carries, but a partial frame — for example a
+    /// censored final update that omits candidate content or the primary id —
+    /// can never erase candidate content or the resolvable primary candidate
+    /// already held for this turn.
+    func merged(onto existing: Turn) -> Turn {
+        var mergedCandidates = candidates
+        if mergedCandidates.isEmpty { mergedCandidates = existing.candidates }
+
+        var mergedPrimary = primaryCandidateID
+        if mergedPrimary.isEmpty || !mergedCandidates.contains(where: { $0.candidateId == mergedPrimary }) {
+            if mergedCandidates.contains(where: { $0.candidateId == existing.primaryCandidateID }) {
+                mergedPrimary = existing.primaryCandidateID
+            } else {
+                mergedPrimary = mergedCandidates.first?.candidateId ?? mergedPrimary
+            }
+        }
+
+        guard mergedCandidates != candidates || mergedPrimary != primaryCandidateID else { return self }
+        return Turn(
+            turnID: turnID,
+            chatID: chatID,
+            authorID: authorID,
+            authorName: authorName,
+            isHuman: isHuman,
+            candidates: mergedCandidates,
+            primaryCandidateID: mergedPrimary,
+            isPinned: isPinned
+        )
+    }
+
     enum CodingKeys: String, CodingKey {
         case turnID = "turn_id"
         case chatID = "chat_id"

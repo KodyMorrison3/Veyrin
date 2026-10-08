@@ -381,16 +381,21 @@ struct DiscoverView: View {
         .contentShape(RoundedRectangle(cornerRadius: 12))
     }
 
+    private var scenePlaceholder: some View {
+        Rectangle().fill(.secondary.opacity(0.12))
+            .overlay { Image(systemName: "sparkles").foregroundStyle(.secondary) }
+    }
+
     private func sceneCard(_ scene: CuratedScene) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let urlString = scene.backgroundImageURL, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image {
-                        image.resizable().scaledToFill()
-                    } else {
-                        Rectangle().fill(.secondary.opacity(0.12))
-                            .overlay { Image(systemName: "sparkles").foregroundStyle(.secondary) }
-                    }
+                // 140 pt tall, filled across a column of at least 260 pt: 640 px covers 2x for landscape art.
+                CachedRemoteImage(url: url, maxPixelSize: 640) { image in
+                    image.scaledToFill()
+                } placeholder: {
+                    scenePlaceholder
+                } failure: {
+                    scenePlaceholder
                 }
                 .frame(height: 140)
                 .clipped()

@@ -1,9 +1,12 @@
 import Foundation
+import OSLog
 
 /// MainActor owns routing state, not JSON decoding or the socket transport.
 /// Register before sending so an immediate response cannot precede its waiter.
 @MainActor
 final class WebSocketRouter {
+    private static let logger = Logger(subsystem: "CharacterAI", category: "WebSocketRouter")
+
     private struct Pending {
         let id: UUID
         let continuation: AsyncThrowingStream<WebSocketTurnResponse, Error>.Continuation
@@ -32,7 +35,18 @@ final class WebSocketRouter {
             do {
                 while !Task.isCancelled {
                     let data = try await client.receive()
-                    let response = try await WebSocketMessageProcessor.shared.decode(data)
+                    let response: WebSocketTurnResponse
+                    do {
+                        response = try await WebSocketMessageProcessor.shared.decode(data)
+                    } catch {
+                        // One unparseable frame is a protocol failure for the
+                        // operations awaiting responses — surfaced as an error,
+                        // never as a valid turn — but it must not tear down the
+                        // socket and routing for every other pending operation.
+                        Self.logger.error("Undecodable WebSocket frame: \(error.localizedDescription, privacy: .private)")
+                        self?.failPendingOperations(NetworkError.decodingError(error), generation: generation)
+                        continue
+                    }
                     guard !Task.isCancelled else { return }
                     self?.route(response, generation: generation)
                 }
@@ -84,11 +98,20 @@ final class WebSocketRouter {
     }
 
     private func route(_ response: WebSocketTurnResponse, generation: UUID) {
-        guard generation == self.generation, let operation = pending[response.requestID] else { return }
+        guard generation == self.generation,
+              let requestID = response.requestID,
+              let operation = pending[requestID] else { return }
         if case .dropped = operation.continuation.yield(response) {
             // Never silently discard final/error frames or grow an unbounded queue.
-            finish(response.requestID, error: NetworkError.serverMessage("WebSocket response buffer overflowed."))
+            finish(response.requestID ?? "", error: NetworkError.serverMessage("WebSocket response buffer overflowed."))
         }
+    }
+
+    /// Fails every pending operation with the given error while keeping the
+    /// connection and receive loop alive.
+    private func failPendingOperations(_ error: Error, generation: UUID) {
+        guard generation == self.generation else { return }
+        for id in Array(pending.keys) { finish(id, error: error) }
     }
 
     private func failed(_ error: Error, generation: UUID) {

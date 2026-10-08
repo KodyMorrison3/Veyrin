@@ -173,12 +173,6 @@ final class PersonaStore: ObservableObject {
         }
     }
 
-    func syncDefaultUser(username: String, avatarFileName: String?) {
-        let clean = username.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty, activePersona.isDefaultUser else { return }
-        activePersona = Persona.defaultUser(username: clean, avatarFileName: avatarFileName)
-    }
-
     private func updateActivePersona(matching id: String?) {
         guard let id, let persona = personas.first(where: { $0.id == id || $0.externalID == id }) else { return }
         activePersona = persona

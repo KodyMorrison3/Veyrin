@@ -40,6 +40,21 @@ nonisolated struct APITurn: Decodable, Sendable {
         case primaryCandidateID = "primary_candidate_id"
         case isPinned = "is_pinned"
     }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        turnKey = try container.decode(APITurnKey.self, forKey: .turnKey)
+        createTime = try container.decodeIfPresent(String.self, forKey: .createTime)
+        lastUpdateTime = try container.decodeIfPresent(String.self, forKey: .lastUpdateTime)
+        // Streaming and filtered frames omit turn-level fields the web client
+        // itself guards (`e.primary_candidate_id && (...)`); they must decode
+        // rather than abort the whole response.
+        state = try container.decodeIfPresent(String.self, forKey: .state) ?? ""
+        author = try container.decode(TurnAuthor.self, forKey: .author)
+        candidates = try container.decode([APICandidate].self, forKey: .candidates)
+        primaryCandidateID = try container.decodeIfPresent(String.self, forKey: .primaryCandidateID) ?? ""
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned)
+    }
 }
 
 nonisolated struct APITurnKey: Decodable, Sendable {
@@ -59,6 +74,13 @@ nonisolated struct TurnAuthor: Decodable, Sendable {
     enum CodingKeys: String, CodingKey {
         case authorID = "author_id"
         case name
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        authorID = try container.decode(String.self, forKey: .authorID)
+        // The web client renders author names with `?? ""` guards.
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
     }
 }
 
@@ -80,6 +102,7 @@ nonisolated struct APICandidate: Decodable, Sendable {
     let isFinal: Bool?
     let modelType: String?
     let displayName: String?
+    let isSafetyTruncated: Bool?
 
     var userFacingModelName: String? {
         displayName ?? modelType.map(ModelSelectionOption.fallbackDisplayName(for:))
@@ -93,5 +116,22 @@ nonisolated struct APICandidate: Decodable, Sendable {
         case isFinal = "is_final"
         case modelType = "model_type"
         case displayName = "display_name"
+        case isSafetyTruncated = "safety_truncated"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // The web client tolerates absent candidate identity/content
+        // (`o.candidate_id ? ... : -1`, `o.raw_content?.trim()`), including on
+        // censored (`safety_truncated`) candidates. A frame omitting them must
+        // still decode so the turn is represented instead of failing routing.
+        candidateID = try container.decodeIfPresent(String.self, forKey: .candidateID) ?? ""
+        createTime = try container.decodeIfPresent(String.self, forKey: .createTime)
+        rawContent = try container.decodeIfPresent(String.self, forKey: .rawContent) ?? ""
+        editor = try container.decodeIfPresent(TurnEditor.self, forKey: .editor)
+        isFinal = try container.decodeIfPresent(Bool.self, forKey: .isFinal)
+        modelType = try container.decodeIfPresent(String.self, forKey: .modelType)
+        displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
+        isSafetyTruncated = try container.decodeIfPresent(Bool.self, forKey: .isSafetyTruncated)
     }
 }

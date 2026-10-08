@@ -43,7 +43,6 @@ actor WebSocketClient: WebSocketTransport {
     private var connectionTimeout: Task<Void, Never>?
     private var connectionWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     private(set) var state: State = .disconnected
-    var isConnected: Bool { state == .connected }
 
     init(session: URLSession = .shared) {
         self.session = session

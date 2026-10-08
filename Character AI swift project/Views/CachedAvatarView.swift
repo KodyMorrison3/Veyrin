@@ -30,3 +30,54 @@ struct CachedAvatarView<Placeholder: View>: View {
         }
     }
 }
+
+/// Feed and Discover media through ImageCacheService, decoded at `maxPixelSize`.
+/// Keeps loading and failure as separate states so each can show its own content.
+struct CachedRemoteImage<Content: View, Placeholder: View, Failure: View>: View {
+    let url: URL
+    let maxPixelSize: Int
+    let content: (Image) -> Content
+    let placeholder: () -> Placeholder
+    let failure: () -> Failure
+
+    @State private var state: LoadState = .loading
+
+    private enum LoadState {
+        case loading
+        case loaded(URL, NSImage)
+        case failed(URL)
+    }
+
+    init(
+        url: URL,
+        maxPixelSize: Int,
+        @ViewBuilder content: @escaping (Image) -> Content,
+        @ViewBuilder placeholder: @escaping () -> Placeholder,
+        @ViewBuilder failure: @escaping () -> Failure
+    ) {
+        self.url = url
+        self.maxPixelSize = maxPixelSize
+        self.content = content
+        self.placeholder = placeholder
+        self.failure = failure
+    }
+
+    var body: some View {
+        Group {
+            switch state {
+            case .loaded(let loadedURL, let image) where loadedURL == url:
+                content(Image(nsImage: image).resizable())
+            case .failed(let failedURL) where failedURL == url:
+                failure()
+            default:
+                placeholder()
+            }
+        }
+        .task(id: url) {
+            state = .loading
+            let image = await ImageCacheService.shared.fetchImage(for: url, maxPixelSize: maxPixelSize)
+            guard !Task.isCancelled else { return }
+            state = image.map { .loaded(url, $0) } ?? .failed(url)
+        }
+    }
+}

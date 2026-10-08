@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import OSLog
 
 @main
 struct CharacterAIApp: App {
@@ -14,8 +13,6 @@ struct CharacterAIApp: App {
 
     init() {
         let authStore = AuthStore()
-
-        authStore.loadStoredSession()
 
         _authStore = StateObject(wrappedValue: authStore)
     }

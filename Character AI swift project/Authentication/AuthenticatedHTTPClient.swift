@@ -32,7 +32,7 @@ struct AuthenticatedHTTPClient {
             request.setValue(value, forHTTPHeaderField: name)
         }
 
-        try addAuthentication(
+        let generation = try addAuthentication(
             to: &request
         )
 
@@ -46,12 +46,11 @@ struct AuthenticatedHTTPClient {
             }
 
             if httpResponse.statusCode == 401 {
-                // A late 401 from an old account/request must not clear a
-                // newly installed session after the URLSession suspension.
-                if request.value(forHTTPHeaderField: "Authorization")
-                    == authStore.session.map({ "Token \($0.sessionToken)" }) {
-                    authStore.clearSession()
-                }
+                // Only the session this request was made with may be cleared.
+                authStore.invalidateSession(
+                    ifGeneration: generation,
+                    authorization: request.value(forHTTPHeaderField: "Authorization")
+                )
                 throw NetworkError.unauthenticated
             }
 
@@ -89,7 +88,7 @@ struct AuthenticatedHTTPClient {
             request.setValue(value, forHTTPHeaderField: name)
         }
 
-        try addAuthentication(
+        let generation = try addAuthentication(
             to: &request
         )
 
@@ -103,12 +102,11 @@ struct AuthenticatedHTTPClient {
             }
 
             if httpResponse.statusCode == 401 {
-                // A late 401 from an old account/request must not clear a
-                // newly installed session after the URLSession suspension.
-                if request.value(forHTTPHeaderField: "Authorization")
-                    == authStore.session.map({ "Token \($0.sessionToken)" }) {
-                    authStore.clearSession()
-                }
+                // Only the session this request was made with may be cleared.
+                authStore.invalidateSession(
+                    ifGeneration: generation,
+                    authorization: request.value(forHTTPHeaderField: "Authorization")
+                )
                 throw NetworkError.unauthenticated
             }
 
@@ -153,7 +151,7 @@ struct AuthenticatedHTTPClient {
             request.setValue(value, forHTTPHeaderField: name)
         }
 
-        try addAuthentication(
+        let generation = try addAuthentication(
             to: &request
         )
 
@@ -167,12 +165,11 @@ struct AuthenticatedHTTPClient {
             }
 
             if httpResponse.statusCode == 401 {
-                // A late 401 from an old account/request must not clear a
-                // newly installed session after the URLSession suspension.
-                if request.value(forHTTPHeaderField: "Authorization")
-                    == authStore.session.map({ "Token \($0.sessionToken)" }) {
-                    authStore.clearSession()
-                }
+                // Only the session this request was made with may be cleared.
+                authStore.invalidateSession(
+                    ifGeneration: generation,
+                    authorization: request.value(forHTTPHeaderField: "Authorization")
+                )
                 throw NetworkError.unauthenticated
             }
 
@@ -191,56 +188,12 @@ struct AuthenticatedHTTPClient {
         }
     }
 
-    @MainActor
-    func getRaw(
-        _ url: URL
-    ) async throws -> Data {
-        var request = URLRequest(url: url)
-
-        try addAuthentication(
-            to: &request
-        )
-
-        do {
-            let (data, response) = try await session.data(
-                for: request
-            )
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw NetworkError.invalidResponse
-            }
-
-            if httpResponse.statusCode == 401 {
-                // A late 401 from an old account/request must not clear a
-                // newly installed session after the URLSession suspension.
-                if request.value(forHTTPHeaderField: "Authorization")
-                    == authStore.session.map({ "Token \($0.sessionToken)" }) {
-                    authStore.clearSession()
-                }
-                throw NetworkError.unauthenticated
-            }
-
-            guard 200..<300 ~= httpResponse.statusCode else {
-                throw NetworkError.httpError(
-                    httpResponse.statusCode
-                )
-            }
-
-            return data
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as NetworkError {
-            throw error
-        } catch {
-            try Task.checkCancellation()
-            throw NetworkError.requestFailed(error)
-        }
-    }
-
+    /// Attaches the current session and returns its generation, so a failure
+    /// can be attributed to the session that made the request.
     @MainActor
     private func addAuthentication(
         to request: inout URLRequest
-    ) throws {
+    ) throws -> UUID {
         guard let session = authStore.session else {
             throw NetworkError.unauthenticated
         }
@@ -249,5 +202,6 @@ struct AuthenticatedHTTPClient {
             "Token \(session.sessionToken)",
             forHTTPHeaderField: "Authorization"
         )
+        return authStore.sessionGeneration
     }
 }

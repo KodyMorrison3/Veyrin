@@ -46,10 +46,6 @@ nonisolated struct RecentChat: Decodable, Sendable {
     }
 }
 
-nonisolated struct ChatHistoryListResponse: Decodable, Sendable {
-    let chats: [ChatPreview]
-}
-
 nonisolated struct ChatPreview: Decodable, Sendable {
     let chatID: String
     let createTime: String
@@ -95,39 +91,5 @@ nonisolated struct ChatPreview: Decodable, Sendable {
             return nil
         }
         return candidate.rawContent
-    }
-}
-
-nonisolated struct RecentTurnKey: Decodable, Sendable {
-    let chatID: String
-    let turnID: String
-
-    enum CodingKeys: String, CodingKey {
-        case chatID = "chat_id"
-        case turnID = "turn_id"
-    }
-}
-
-nonisolated struct RecentTurnAuthor: Decodable, Sendable {
-    let authorID: String
-    let isHuman: Bool?
-    let name: String
-
-    enum CodingKeys: String, CodingKey {
-        case authorID = "author_id"
-        case isHuman = "is_human"
-        case name
-    }
-}
-
-nonisolated struct RecentTurnCandidate: Decodable, Sendable {
-    let candidateID: String
-    let rawContent: String
-    let isFinal: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case candidateID = "candidate_id"
-        case rawContent = "raw_content"
-        case isFinal = "is_final"
     }
 }

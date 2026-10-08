@@ -41,6 +41,8 @@ final class ChatViewModel: ObservableObject {
     @Published var rewindErrorMessage: String?
     @Published private(set) var rewindingFromTurnID: String?
     @Published private(set) var availableModels: [ModelSelectionOption] = []
+    /// Tier of the signed-in account; nil when the server did not report it.
+    @Published private(set) var subscriptionTier: SubscriptionTier?
     @Published private(set) var isLoadingAvailableModels = false
     @Published private(set) var availableModelsErrorMessage: String?
     @Published private(set) var isCreatingConversationFromTurn = false
@@ -63,8 +65,12 @@ final class ChatViewModel: ObservableObject {
     private var historyLoadID: UUID?
     private var characterLoadID: UUID?
     private var chatLoadID: UUID?
+    /// Chats whose latest generation was censored. Until a non-empty server
+    /// history confirms the filtered turn, an empty complete history must not
+    /// erase turns already on screen. Chats without a filtered turn are unaffected.
+    private var chatsAwaitingFilteredHistory: Set<String> = []
 
-    private func mergeTurns(_ turns: [Turn], removeMissing: Bool) {
+    private func mergeTurns(_ turns: [Turn], removeMissing: Bool, isServerConfirmed: Bool) {
         let states = turns.map { turn -> TurnState in
             if let state = turnState(turnID: turn.turnID, chatID: turn.chatID) {
                 state.update(turn)
@@ -72,7 +78,16 @@ final class ChatViewModel: ObservableObject {
             }
             return TurnState(turn)
         }
-        if removeMissing { replaceTurns(states) }
+        if removeMissing {
+            if states.isEmpty, !turnStates.isEmpty, let chatID = activeChatID,
+               chatsAwaitingFilteredHistory.contains(chatID) {
+                return
+            }
+            if isServerConfirmed, !states.isEmpty, let chatID = activeChatID {
+                chatsAwaitingFilteredHistory.remove(chatID)
+            }
+            replaceTurns(states)
+        }
         else {
             let incoming = Set(states.map(\.id))
             replaceTurns(states + turnStates.filter { !incoming.contains($0.id) })
@@ -106,7 +121,8 @@ final class ChatViewModel: ObservableObject {
     }
 
     func createRealChat(
-        characterID: String
+        characterID: String,
+        preferredModelFallback: String? = nil
     ) async -> String? {
         guard let authSession = authStore.session else {
             errorMessage = "Not authenticated."
@@ -124,6 +140,7 @@ final class ChatViewModel: ObservableObject {
         let sessionGeneration = authStore.sessionGeneration
 
         do {
+            var createdChat: Chat?
             let command = conversationService.makeCreateChatCommand(
                 characterID: characterID,
                 creatorID: authSession.userID,
@@ -140,20 +157,23 @@ final class ChatViewModel: ObservableObject {
                 if response.command == "neo_error" {
                     throw NetworkError.serverMessage(response.asErrorResponse.comment)
                 }
+                guard response.command == "create_chat_response" else { continue }
+                createdChat = response.chat
                 acknowledged = true
                 break
             }
             guard acknowledged else { throw NetworkError.invalidResponse }
 
             chat = Chat(
-                chatID: chatID,
-                creatorID: authSession.userID,
-                visibility: "VISIBILITY_PRIVATE",
-                characterID: characterID,
-                type: "TYPE_ONE_ON_ONE"
+                chatID: createdChat?.chatID ?? chatID,
+                creatorID: createdChat?.creatorID ?? authSession.userID,
+                visibility: createdChat?.visibility ?? "VISIBILITY_PRIVATE",
+                characterID: createdChat?.characterID ?? characterID,
+                type: createdChat?.type ?? "TYPE_ONE_ON_ONE",
+                preferredModelType: createdChat?.preferredModelType ?? preferredModelFallback
             )
 
-            return chatID
+            return createdChat?.chatID ?? chatID
 
         } catch {
             chatLogger.error("Chat creation failed: \(error.localizedDescription, privacy: .private)")
@@ -189,7 +209,7 @@ final class ChatViewModel: ObservableObject {
             guard chatLoadID == id, authStore.sessionGeneration == session, !Task.isCancelled else { return }
             chat = loaded
         } catch is CancellationError { return }
-        catch { if chatLoadID == id, authStore.sessionGeneration == session { errorMessage = error.localizedDescription } }
+        catch { chatLogger.error("Chat metadata request failed: \(error.localizedDescription, privacy: .private)") }
     }
 
     /// Loads conversation facts from GET https://neo.character.ai/chat/{chatID}/conversation-facts/
@@ -264,7 +284,10 @@ final class ChatViewModel: ObservableObject {
         historyLoadID = loadID
         let cached = conversationService.cachedHistory(chatID: chatID)
         if let cached, cached.characterID == character.externalID {
-            mergeTurns(cached.turns, removeMissing: true)
+            // An incomplete cached snapshot (for example page one of a history
+            // whose pagination was cancelled) must union with the visible turns,
+            // never replace them.
+            mergeTurns(cached.turns, removeMissing: cached.isComplete, isServerConfirmed: false)
         }
         // Keep warm content visible. A cold ascending history renders each
         // verified page immediately; no undocumented newest-first mode is used.
@@ -282,12 +305,12 @@ final class ChatViewModel: ObservableObject {
             )
             guard historyLoadID == loadID, activeChatID == chatID,
                   authStore.sessionGeneration == session, !Task.isCancelled else { return }
-            mergeTurns(snapshot.turns, removeMissing: snapshot.isComplete)
+            mergeTurns(snapshot.turns, removeMissing: snapshot.isComplete, isServerConfirmed: true)
             while snapshot.nextToken != nil {
                 snapshot = try await conversationService.loadNextHistoryPage(chatID: chatID, snapshot: snapshot)
                 guard historyLoadID == loadID, activeChatID == chatID,
                       authStore.sessionGeneration == session, !Task.isCancelled else { return }
-                mergeTurns(snapshot.turns, removeMissing: snapshot.isComplete)
+                mergeTurns(snapshot.turns, removeMissing: snapshot.isComplete, isServerConfirmed: true)
             }
         } catch is CancellationError { return }
         catch {
@@ -394,7 +417,13 @@ final class ChatViewModel: ObservableObject {
                     turn.author.authorID ==
                     character.externalID
 
-                let isFinal = turn.candidates.contains { $0.isFinal == true }
+                // A censored candidate terminates the generation: the HAR-persisted
+                // filtered turn pairs `safety_truncated` with `is_final`, and the
+                // web client ends generation when it observes the filter marker.
+                let isFinal = turn.candidates.contains { $0.isFinal == true || $0.isSafetyTruncated == true }
+                if turn.candidates.contains(where: { $0.isSafetyTruncated == true }) {
+                    chatsAwaitingFilteredHistory.insert(turn.turnKey.chatID)
+                }
                 scheduleTurnUpdate(uiTurn, isFinal: isFinal)
 
                 if isCharacterTurn && isFinal {
@@ -505,7 +534,12 @@ final class ChatViewModel: ObservableObject {
                     updatedTurn.author.authorID ==
                     character.externalID
 
-                let isFinal = updatedTurn.candidates.contains { $0.isFinal == true }
+                // Same terminal rule as sendMessage: a censored candidate ends
+                // the regeneration even if the frame omits `is_final`.
+                let isFinal = updatedTurn.candidates.contains { $0.isFinal == true || $0.isSafetyTruncated == true }
+                if updatedTurn.candidates.contains(where: { $0.isSafetyTruncated == true }) {
+                    chatsAwaitingFilteredHistory.insert(updatedTurn.turnKey.chatID)
+                }
                 scheduleTurnUpdate(uiTurn, isFinal: isFinal)
 
                 if isCharacterTurn && isFinal {
@@ -646,6 +680,12 @@ final class ChatViewModel: ObservableObject {
     }
 
 
+    /// Default model for a fresh conversation: DeepSqueak for Plus, Pipsqueak 3
+    /// for free, otherwise the first listed model.
+    var defaultModelType: String? {
+        ModelDefaults.defaultModelType(tier: subscriptionTier, availableModels: availableModels)
+    }
+
     func loadAvailableModels() async {
         isLoadingAvailableModels = true
         availableModelsErrorMessage = nil
@@ -654,6 +694,10 @@ final class ChatViewModel: ObservableObject {
             isLoadingAvailableModels = false
         }
 
+        // Loaded before the models are published, so the default is ready
+        // whenever the model list changes.
+        subscriptionTier = await loadSubscriptionTier()
+
         do {
             availableModels = try await conversationService.loadAvailableModels()
             if availableModels.isEmpty {
@@ -661,6 +705,18 @@ final class ChatViewModel: ObservableObject {
             }
         } catch {
             availableModelsErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func loadSubscriptionTier() async -> SubscriptionTier? {
+        guard let username = authStore.session?.username, !username.isEmpty else { return nil }
+        do {
+            let profile = try await UserProfileService(authStore: authStore).loadProfile(username: username)
+            return SubscriptionTier(subscriptionType: profile.subscriptionType)
+        } catch {
+            // Unknown tier keeps the server's first model; the failure is logged, not shown.
+            chatLogger.error("Subscription tier request failed: \(error.localizedDescription, privacy: .private)")
+            return nil
         }
     }
 
@@ -901,12 +957,17 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func updateTurn(_ turn: Turn) {
-        conversationService.cacheCompletedTurn(turn)
-        if let state = turnState(turnID: turn.turnID, chatID: turn.chatID) {
-            state.update(turn)
+        // Merge like the web client's updateCandidate: a partial frame (e.g. a
+        // censored final update without candidate content) cannot clobber the
+        // turn already held for this ID.
+        let existing = turnState(turnID: turn.turnID, chatID: turn.chatID)?.turn
+        let mergedTurn = existing.map { turn.merged(onto: $0) } ?? turn
+        conversationService.cacheCompletedTurn(mergedTurn)
+        if let state = turnState(turnID: mergedTurn.turnID, chatID: mergedTurn.chatID) {
+            state.update(mergedTurn)
         } else {
-            let state = TurnState(turn)
-            turnsByKey[TurnKey(turnId: turn.turnID, chatId: turn.chatID)] = state
+            let state = TurnState(mergedTurn)
+            turnsByKey[TurnKey(turnId: mergedTurn.turnID, chatId: mergedTurn.chatID)] = state
             turnStates.append(state)
         }
     }

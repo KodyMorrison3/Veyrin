@@ -212,10 +212,6 @@ final class AppPreferences: ObservableObject {
         1.0 - windowTransparency
     }
 
-    /// Compatibility alias for the environmental foundation only; this is not
-    /// the alpha of the complete application window.
-    var windowEnvironmentOpacity: Double { environmentVisibility }
-
     /// The shared surface system maps Glass Opacity to one consistent fill/tint
     /// density range, retaining role-specific hierarchy and wallpaper colour.
     var glassDensity: Double {
@@ -280,8 +276,6 @@ final class AppPreferences: ObservableObject {
         density: 0.11,
         tintScale: 0.92
     )
-    var wallpaperAppearance: WallpaperAppearance { WallpaperAppearanceStore.shared.appearance }
-
     /// Shared artwork also supplies secondary windows (Settings, profiles, sheets).
     @Published private(set) var defaultArtwork: NSImage?
     @Published private(set) var defaultArtworkDisplayImage: NSImage? {

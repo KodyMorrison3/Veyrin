@@ -129,8 +129,10 @@ struct ConversationService: Sendable {
         characterID: String
     ) async throws -> ConversationCopySource? {
         let previews = try await loadChatPreviews(characterIDs: [characterID])
+        ProfileNavigationTrace.logCopySource("copy-source previews=\(previews.count) matching=\(previews.filter { $0.characterID == characterID }.count)")
 
         for preview in previews where preview.characterID == characterID {
+            ProfileNavigationTrace.logCopySource("copy-source chat=\(preview.chatID) previewTurns=\(preview.previewTurns?.count ?? -1) withCandidates=\(preview.previewTurns?.filter { !$0.candidates.isEmpty }.count ?? -1)")
             let previewSource = preview.previewTurns?.last(where: {
                 !$0.candidates.isEmpty
             }).map { turn in
@@ -148,6 +150,7 @@ struct ConversationService: Sendable {
             }
 
             let turns = try await loadAllTurns(chatID: preview.chatID)
+            ProfileNavigationTrace.logCopySource("copy-source chat=\(preview.chatID) fullTurns=\(turns.count) withCandidates=\(turns.filter { !$0.candidates.isEmpty }.count)")
             if let latestTurn = turns.last(where: { !$0.candidates.isEmpty }) {
                 return ConversationCopySource(
                     chatID: preview.chatID,
@@ -170,56 +173,18 @@ struct ConversationService: Sendable {
 
         repeat {
             try Task.checkCancellation()
-            var components = URLComponents(
-                string: "https://neo.character.ai/turns/\(chatID)/"
+            let response = try await loadTurnPage(
+                chatID: chatID,
+                nextToken: nextToken,
+                pinnedOnly: pinnedOnly
             )
-
-            var queryItems = [
-                URLQueryItem(
-                    name: "order_by_asc",
-                    value: "true"
-                )
-            ]
-
-            if pinnedOnly {
-                queryItems.append(
-                    URLQueryItem(
-                        name: "pinned_only",
-                        value: "true"
-                    )
-                )
-            }
-
-            if let nextToken {
-                queryItems.append(
-                    URLQueryItem(
-                        name: "next_token",
-                        value: nextToken
-                    )
-                )
-            }
-
-            components?.queryItems = queryItems
-
-            guard let url = components?.url else {
-                throw NetworkError.invalidURL
-            }
-
-            let response: TurnsResponse =
-                try await authenticatedHTTPClient.get(url)
-
-
-            allTurns.append(
-                contentsOf: response.turns
-            )
+            allTurns.append(contentsOf: response.turns)
 
             nextToken = response.meta.nextToken
             if let nextToken, !visitedTokens.insert(nextToken).inserted {
                 throw NetworkError.serverMessage("Conversation pagination returned a repeated cursor.")
             }
-
         } while nextToken != nil
-
 
         return allTurns
     }
@@ -370,24 +335,13 @@ struct ConversationService: Sendable {
                     candidateId: candidate.candidateID,
                     rawContent: candidate.rawContent,
                     isFinal: candidate.isFinal,
-                    modelType: "MODEL_TYPE_UNSPECIFIED"
+                    modelType: "MODEL_TYPE_UNSPECIFIED",
+                    isSafetyTruncated: candidate.isSafetyTruncated
                 )
             },
             primaryCandidateID: apiTurn.primaryCandidateID,
             isPinned: isPinned ?? apiTurn.isPinned ?? false
         )
-    }
-
-    func makeUITurns(
-        from response: TurnsResponse,
-        characterID: String
-    ) -> [Turn] {
-        response.turns.map { apiTurn in
-            makeUITurn(
-                from: apiTurn,
-                characterID: characterID
-            )
-        }
     }
 
     func createChat(
@@ -456,31 +410,6 @@ struct ConversationService: Sendable {
             payload: request,
             originID: "web-next"
         )
-    }
-
-    func makeCreateChatMessage(
-        characterID: String,
-        creatorID: String,
-        chatID: String
-    ) throws -> String {
-        let command = makeCreateChatCommand(
-            characterID: characterID,
-            creatorID: creatorID,
-            chatID: chatID
-        )
-
-        let encoder = JSONEncoder()
-
-        let data = try encoder.encode(command)
-
-        guard let message = String(
-            data: data,
-            encoding: .utf8
-        ) else {
-            throw NetworkError.invalidResponse
-        }
-
-        return message
     }
 
     func loadRecentChats() async throws -> [ConversationSummary] {

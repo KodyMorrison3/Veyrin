@@ -138,16 +138,15 @@ private struct FeedPostCard: View {
             participants
 
             if let media = post.mediaURLs.first, let url = URL(string: media) {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image {
-                        image.resizable().scaledToFit()
-                    } else if phase.error != nil {
-                        ContentUnavailableView("Media Unavailable", systemImage: "photo")
-                            .frame(maxWidth: .infinity, minHeight: 180)
-                    } else {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, minHeight: 180)
-                    }
+                // Full card width is at most 704 pt; 1408 px covers 2x for the widest layout.
+                CachedRemoteImage(url: url, maxPixelSize: 1408) { image in
+                    image.scaledToFit()
+                } placeholder: {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, minHeight: 180)
+                } failure: {
+                    ContentUnavailableView("Media Unavailable", systemImage: "photo")
+                        .frame(maxWidth: .infinity, minHeight: 180)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             }

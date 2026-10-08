@@ -187,29 +187,21 @@ struct ChatView: View {
                 externalID: characterID
             )
 
-            await viewModel.loadChat(
-                chatID: chatID
-            )
-            activeChatModelType = viewModel.chat?.preferredModelType
-
-            await viewModel.loadRealTurns(
-                chatID: chatID
-            )
-
-            await viewModel.loadCharacterVotedStatus(
-                characterID: characterID
-            )
-
-            await viewModel.loadRecentCharacterChats(
-                characterID: characterID
-            )
-
-            await viewModel.loadAvailableModels()
-
-            await PersonaStore.shared.fetchRemotePersonas(
+            // Only the history needs the character loaded above; the rest is independent.
+            async let chatLoad: Void = viewModel.loadChat(chatID: chatID)
+            async let historyLoad: Void = viewModel.loadRealTurns(chatID: chatID)
+            async let votedLoad: Void = viewModel.loadCharacterVotedStatus(characterID: characterID)
+            async let recentLoad: Void = viewModel.loadRecentCharacterChats(characterID: characterID)
+            async let modelsLoad: Void = viewModel.loadAvailableModels()
+            async let personasLoad: Void = PersonaStore.shared.fetchRemotePersonas(
                 authenticatedClient: viewModel.authenticatedHTTPClient,
                 currentCharacterID: characterID
             )
+
+            await chatLoad
+            activeChatModelType = viewModel.chat?.preferredModelType
+
+            _ = await (historyLoad, votedLoad, recentLoad, modelsLoad, personasLoad)
         }
         .onChange(of: viewModel.chat?.preferredModelType) {
             activeChatModelType = viewModel.chat?.preferredModelType
@@ -245,10 +237,10 @@ struct ChatView: View {
         }
         .onChange(of: viewModel.availableModels.map(\.modelType)) {
             guard selectedModelType == nil,
-                  let firstModel = viewModel.availableModels.first else {
+                  let defaultModelType = viewModel.defaultModelType else {
                 return
             }
-            selectedModelType = firstModel.modelType
+            selectedModelType = defaultModelType
         }
         .onDisappear {
             attachmentImportTask?.cancel()

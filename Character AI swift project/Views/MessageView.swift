@@ -118,67 +118,108 @@ struct MessageView: View {
                     }
                     .frame(maxWidth: 480)
                 } else {
-                    ZStack(alignment: turn.isHuman ? .bottomLeading : .bottomTrailing) {
-                        CharacterMessageFormattingView(
-                            content: candidate.rawContent,
-                            expandsToFill: false,
-                            isStreaming: candidate.isFinal == false
-                        )
-                        .font(.system(size: 14))
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .glassSurface(
-                            turn.isHuman ? .userMessage : .characterMessage,
-                            cornerRadius: GlassMetrics.messageRadius
-                        )
-                        .foregroundStyle(Color.caiText)
-                        .clipShape(
-                            RoundedRectangle(
-                                cornerRadius: GlassMetrics.messageRadius,
-                                style: .continuous
-                            )
-                        )
-                        .contextMenu {
-                            messageActionRows(candidate: candidate)
-                        }
+                    if candidate.isFiltered, !turn.isHuman {
+                        VStack(alignment: .leading, spacing: 6) {
+                            messageBubble(candidate: candidate)
 
-                        // Subtle action trigger overlay on hover or pinned
-                        if turn.isPinned || isHoveringMessage || isShowingActions {
-                            HStack(spacing: 2) {
-                                if turn.isPinned {
-                                    Image(systemName: "pin.fill")
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(Color.caiPrimary)
-                                }
-
-                                Button {
-                                    isShowingActions = true
-                                } label: {
-                                    Image(systemName: "ellipsis")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(Color.caiMuted)
-                                        .frame(width: 22, height: 22)
-                                        .background(Circle().fill(palette.atmosphericBase.opacity(colorScheme == .dark ? 0.85 : 0.55)))
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Message actions")
-                                .popover(isPresented: $isShowingActions, arrowEdge: .top) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        messageActionRows(candidate: candidate)
-                                    }
-                                    .padding(8)
-                                    .frame(width: 260)
-                                    .presentationBackground(.regularMaterial)
-                                }
-                            }
-                            .padding(4)
-                            .transition(.opacity)
+                            // HAR: the web client renders a filter notice under a
+                            // censored candidate (`safety_truncated`) while keeping the
+                            // turn in place. Adapted to the existing glass message
+                            // styling rather than the web's HTML block.
+                            filteredNotice
                         }
+                    } else {
+                        messageBubble(candidate: candidate)
                     }
                 }
             }
         }
+    }
+
+    /// The existing glass message bubble with its pin/action overlay. Normal
+    /// messages render this directly, so their layout hierarchy is unchanged.
+    private func messageBubble(candidate: Candidate) -> some View {
+        ZStack(alignment: turn.isHuman ? .bottomLeading : .bottomTrailing) {
+            CharacterMessageFormattingView(
+                content: candidate.rawContent,
+                expandsToFill: false,
+                isStreaming: candidate.isFinal == false
+            )
+            .font(.system(size: 14))
+            .textSelection(.enabled)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .glassSurface(
+                turn.isHuman ? .userMessage : .characterMessage,
+                cornerRadius: GlassMetrics.messageRadius
+            )
+            .foregroundStyle(Color.caiText)
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: GlassMetrics.messageRadius,
+                    style: .continuous
+                )
+            )
+            .contextMenu {
+                messageActionRows(candidate: candidate)
+            }
+
+        // Subtle action trigger overlay on hover or pinned
+        if turn.isPinned || isHoveringMessage || isShowingActions {
+            HStack(spacing: 2) {
+                if turn.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.caiPrimary)
+                }
+
+                Button {
+                    isShowingActions = true
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.caiMuted)
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(palette.atmosphericBase.opacity(colorScheme == .dark ? 0.85 : 0.55)))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Message actions")
+                .popover(isPresented: $isShowingActions, arrowEdge: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        messageActionRows(candidate: candidate)
+                    }
+                    .padding(8)
+                    .frame(width: 260)
+                    .presentationBackground(.regularMaterial)
+                }
+            }
+            .padding(4)
+            .transition(.opacity)
+        }
+        }
+    }
+
+    private var filteredNotice: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.shield.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.caiMuted)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("This content has been filtered")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.caiText)
+                Text("Please make sure your chats comply with our Terms and Community Guidelines. Send a new message to continue.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.caiMuted)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: 480, alignment: .leading)
+        .glassSurface(.floatingControl, cornerRadius: GlassMetrics.controlRadius)
+        .clipShape(RoundedRectangle(cornerRadius: GlassMetrics.controlRadius, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("This content has been filtered. Send a new message to continue the conversation.")
     }
 
     @ViewBuilder

@@ -7,17 +7,24 @@ struct CharacterProfileView: View {
 
     let characterID: String
     let onStartConversation: (CharacterProfile) async -> Bool
+    let onSelectSimilarCharacter: (String) -> Void
+    let onBack: (() -> Void)?
 
+    @State private var traceTag = String(UUID().uuidString.prefix(6))
     @State private var isStartingConversation = false
     @State private var startConversationError: String?
 
     init(
         characterID: String,
         authStore: AuthStore,
-        onStartConversation: @escaping (CharacterProfile) async -> Bool
+        onStartConversation: @escaping (CharacterProfile) async -> Bool,
+        onSelectSimilarCharacter: @escaping (String) -> Void,
+        onBack: (() -> Void)? = nil
     ) {
         self.characterID = characterID
         self.onStartConversation = onStartConversation
+        self.onSelectSimilarCharacter = onSelectSimilarCharacter
+        self.onBack = onBack
         _viewModel = StateObject(wrappedValue: CharacterViewModel(authStore: authStore))
     }
 
@@ -44,8 +51,39 @@ struct CharacterProfileView: View {
         .frame(minWidth: 460, minHeight: 520)
         .background { ShellEnvironmentalBackground() }
         .presentationBackground(.regularMaterial)
+        .safeAreaInset(edge: .top) {
+            if let onBack {
+                HStack {
+                    Button(action: onBack) {
+                        Label("Back", systemImage: "chevron.backward")
+                    }
+                    .buttonStyle(.borderless)
+                    Spacer()
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 10)
+                .background(.bar)
+                .onAppear { ProfileNavigationTrace.log("backBar appear id=\(characterID) tag=\(traceTag)") }
+            }
+        }
+        .onAppear { ProfileNavigationTrace.log("view appear id=\(characterID) tag=\(traceTag)") }
+        .onDisappear { ProfileNavigationTrace.log("view disappear id=\(characterID) tag=\(traceTag)") }
+        .onChange(of: traceBranch) { _, branch in
+            ProfileNavigationTrace.log("branch=\(branch) id=\(characterID) tag=\(traceTag)")
+        }
         .task(id: characterID) {
+            ProfileNavigationTrace.log("task start id=\(characterID) tag=\(traceTag)")
             await viewModel.load(externalID: characterID)
+            ProfileNavigationTrace.log("task end id=\(characterID) tag=\(traceTag) cancelled=\(Task.isCancelled)")
+        }
+    }
+
+    private var traceBranch: String {
+        switch viewModel.profileState {
+        case .idle: "idle"
+        case .loading: "loading"
+        case .failed: "failed"
+        case .loaded(let profile): "loaded:\(profile.externalID)"
         }
     }
 
@@ -108,19 +146,7 @@ struct CharacterProfileView: View {
                     } else {
                         section("Similar characters") {
                             ForEach(Array(characters.enumerated()), id: \.offset) { _, similar in
-                                HStack(spacing: 10) {
-                                    avatar(fileName: similar.avatarFileName, name: similar.name ?? similar.title, size: 38)
-                                    VStack(alignment: .leading) {
-                                        Text(similar.name ?? similar.title ?? "Character")
-                                            .font(.headline)
-                                        if let title = nonempty(similar.title), title != similar.name {
-                                            Text(title).font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        if let description = nonempty(similar.description) {
-                                            Text(description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                                        }
-                                    }
-                                }
+                                similarCharacterRow(similar)
                             }
                         }
                     }
@@ -160,6 +186,7 @@ struct CharacterProfileView: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
+        .onAppear { ProfileNavigationTrace.log("content appear id=\(profile.externalID) tag=\(traceTag)") }
     }
 
     private func header(_ profile: CharacterProfile) -> some View {
@@ -224,6 +251,36 @@ struct CharacterProfileView: View {
                 .font(.system(size: size * 0.4, weight: .semibold))
         }
         .frame(width: size, height: size)
+    }
+
+    @ViewBuilder
+    private func similarCharacterRow(_ similar: SimilarCharacter) -> some View {
+        let content = HStack(spacing: 10) {
+            avatar(fileName: similar.avatarFileName, name: similar.name ?? similar.title, size: 38)
+            VStack(alignment: .leading) {
+                Text(similar.name ?? similar.title ?? "Character")
+                    .font(.headline)
+                if let title = nonempty(similar.title), title != similar.name {
+                    Text(title).font(.caption).foregroundStyle(.secondary)
+                }
+                if let description = nonempty(similar.description) {
+                    Text(description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
+            }
+        }
+        // Without an external ID there is nothing to open, so the row stays static.
+        if let externalID = similar.profileID {
+            Button {
+                onSelectSimilarCharacter(externalID)
+            } label: {
+                content
+            }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .pointerStyle(.link)
+        } else {
+            content
+        }
     }
 
     private func section<Content: View>(

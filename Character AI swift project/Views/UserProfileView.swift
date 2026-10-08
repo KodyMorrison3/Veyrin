@@ -15,15 +15,12 @@ import SwiftUI
  * sidebar bottom panel. It renders the avatar, display name and username and
  * opens an account-menu popover on tap.
  *
- * This view deliberately exposes a `menuAction` closure so the sidebar can
- * drive the popover lifecycle and reuse the same layout for related account
- * buttons without duplicating the hierarchy.
+ * The sidebar owns the account-menu popover lifecycle through `menuAction`.
  */
 struct UserProfileControl: View {
     @ObservedObject var viewModel: UserProfileViewModel
     @ObservedObject private var preferences = AppPreferences.shared
     let menuAction: () -> Void
-    let profileAction: (String) -> Void
 
     var body: some View {
         Button {
@@ -62,13 +59,6 @@ struct UserProfileControl: View {
         .padding(.vertical, 6)
         .glassSurface(.floatingControl, cornerRadius: GlassMetrics.controlRadius)
         .contentShape(Rectangle())
-    }
-
-    private var username: String {
-        if case .loaded(let profile) = viewModel.state, let name = profile.username {
-            return name
-        }
-        return viewModel.username
     }
 
     private var displayName: String {

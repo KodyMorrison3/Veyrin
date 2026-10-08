@@ -9,9 +9,13 @@ import Foundation
 
 nonisolated struct WebSocketTurnResponse: Decodable, Sendable {
     let turn: APITurn?
+    let chat: Chat?
     let chatInfo: ChatInfo?
     let command: String
-    let requestID: String
+    /// Control frames (`{"command": "ok"}` replies to `update_primary_candidate`,
+    /// verified in captured traffic) carry no `request_id` and must not abort
+    /// routing; operations route by the requests they registered.
+    let requestID: String?
     let errorComment: String?
     let errorCode: Int?
     let subCode: Int?
@@ -20,7 +24,7 @@ nonisolated struct WebSocketTurnResponse: Decodable, Sendable {
     var asErrorResponse: WebSocketErrorResponse {
         WebSocketErrorResponse(
             command: command,
-            requestID: requestID,
+            requestID: requestID ?? "",
             comment: errorComment ?? "Character.AI rejected the request.",
             errorCode: errorCode ?? 0,
             subCode: subCode,
@@ -30,6 +34,7 @@ nonisolated struct WebSocketTurnResponse: Decodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case turn
+        case chat
         case chatInfo = "chat_info"
         case command
         case requestID = "request_id"
@@ -42,6 +47,15 @@ nonisolated struct WebSocketTurnResponse: Decodable, Sendable {
 
 nonisolated struct ChatInfo: Decodable, Sendable {
     let type: String
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decodeIfPresent(String.self, forKey: .type) ?? ""
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type
+    }
 }
 
 nonisolated struct WebSocketErrorResponse: Decodable, Sendable {

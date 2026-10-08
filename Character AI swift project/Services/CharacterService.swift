@@ -17,10 +17,6 @@ struct CharacterService {
         }
     }
 
-    func cachedProfile(externalID: String, language: String = "en") -> CharacterProfile? {
-        httpClient.resources.cached("profile:\(language):\(externalID)", as: CharacterProfile.self, maxAge: 900)
-    }
-
     private func fetchProfile(externalID: String, language: String) async throws -> CharacterProfile {
         guard let url = URL(string: "https://neo.character.ai/character/v1/get_character_info") else {
             throw NetworkError.invalidURL

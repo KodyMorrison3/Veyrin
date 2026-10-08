@@ -66,6 +66,14 @@ nonisolated struct SimilarCharacter: Decodable, Sendable {
     let description: String?
     let avatarFileName: String?
 
+    /// The ID that opens this character's profile, or nil when the entry has none.
+    var profileID: String? {
+        guard let externalID, !externalID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return externalID
+    }
+
     enum CodingKeys: String, CodingKey {
         case externalID = "external_id"
         case name

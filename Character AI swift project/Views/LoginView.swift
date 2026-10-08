@@ -15,6 +15,7 @@ struct LoginView: View {
     @State private var username = ""
     @State private var userID = ""
     @State private var keychainError: String?
+    @State private var isSigningIn = false
 
     private enum Field: Hashable {
         case token, username, userID
@@ -85,8 +86,8 @@ struct LoginView: View {
                     }
                     .padding(.bottom, 20)
 
-                    if let keychainError {
-                        Label(keychainError, systemImage: "exclamationmark.circle.fill")
+                    if let errorMessage = keychainError ?? authStore.authMessage {
+                        Label(errorMessage, systemImage: "exclamationmark.circle.fill")
                             .font(.callout)
                             .foregroundStyle(.red)
                             .fixedSize(horizontal: false, vertical: true)
@@ -102,7 +103,7 @@ struct LoginView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(Color.caiPrimary)
                     .controlSize(.large)
-                    .disabled(trimmedToken.isEmpty)
+                    .disabled(trimmedToken.isEmpty || isSigningIn)
                     .accessibilityLabel("Sign in with session token")
                     .padding(.bottom, 16)
 
@@ -152,20 +153,31 @@ struct LoginView: View {
         }
     }
 
+    /// The session is validated before it is saved or authenticated. On failure
+    /// the token stays in the field so it can be corrected.
     private func signIn() {
-        guard !trimmedToken.isEmpty else { return }
-        let session = AuthSession(
-            sessionToken: trimmedToken,
-            userID: userID,
-            username: username
-        )
+        guard !trimmedToken.isEmpty, !isSigningIn else { return }
+        isSigningIn = true
+        keychainError = nil
 
-        do {
-            try authStore.setSession(session)
-            sessionToken = ""
-            keychainError = nil
-        } catch {
-            keychainError = "Couldn't save the session to Keychain. Please try again."
+        Task {
+            defer { isSigningIn = false }
+            do {
+                try await authStore.signIn(
+                    sessionToken: trimmedToken,
+                    userID: userID,
+                    username: username
+                )
+                sessionToken = ""
+            } catch is CancellationError {
+                // A newer sign-in attempt replaced this one.
+            } catch SessionValidationError.invalidSession {
+                keychainError = "Character.AI rejected this session ID. Check that you copied the complete session token and try again."
+            } catch SessionValidationError.unavailable {
+                keychainError = "Couldn't verify the session with Character.AI. Check your connection and try again."
+            } catch {
+                keychainError = "Couldn't save the session to Keychain. Please try again."
+            }
         }
     }
 }

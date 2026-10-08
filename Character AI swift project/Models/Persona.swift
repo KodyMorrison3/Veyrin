@@ -150,11 +150,6 @@ nonisolated struct PersonaSettingsContainer: Decodable, Sendable {
     let characterOverrides: [String: String]?
 }
 
-/// Response from `POST https://plus.character.ai/chat/user/update_settings/`
-nonisolated struct UpdateSettingsResponse: Decodable, Sendable {
-    let success: Bool?
-}
-
 /// Request body for `POST https://plus.character.ai/chat/user/update_settings/`
 nonisolated struct UpdatePersonaOverridesRequest: Encodable, Sendable {
     let personaOverrides: [String: String]
