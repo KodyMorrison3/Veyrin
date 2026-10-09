@@ -46,6 +46,8 @@ Veyrin is an **unofficial** macOS client for [Character.AI](https://character.ai
 
 ## Screenshots
 
+> **Privacy note:** The black boxes visible in these screenshots are intentional redactions to protect personal information and private Character.AI activity. They are not rendering glitches or missing UI elements.
+
 ### Conversations
 
 ![Veyrin conversation interface](screenshots/Convo.png)
