@@ -3,11 +3,11 @@
 //  Character AI swift project
 //
 //  Models for the curated popular/trending character lists
-//  (`recommendation/v1/curated_character_lists`), live-verified 2026-10-01 —
-//  see Docs/PopularTrendingDiscovery.md. The per-character display subset is
-//  identical to the Discover feed character, so `DiscoverFeedCharacter` is
-//  reused; the Int 0/1 flags and nullable voice/lorebook ids observed on this
-//  endpoint are deliberately unmodeled (not displayed).
+//  (`recommendation/v1/curated_character_lists`), live-verified 2026-10-01
+//  against the web client. The per-character display subset is identical to
+//  the Discover feed character, so `DiscoverFeedCharacter` is reused; the
+//  Int 0/1 flags and nullable voice/lorebook ids observed on this endpoint are
+//  deliberately unmodeled (not displayed).
 //
 
 import Foundation

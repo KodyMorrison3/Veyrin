@@ -129,6 +129,16 @@ open "Character AI swift project.xcodeproj"
 
 In Xcode, select the **Character AI swift project** scheme and press **Run** (⌘R).
 
+### Package a DMG
+
+`Scripts/package-dmg.sh` builds the Release configuration, seals the bundle and writes `build/Veyrin-<version>.dmg`:
+
+```bash
+./Scripts/package-dmg.sh
+```
+
+It signs with a Developer ID certificate when one is available, otherwise the local Apple Development certificate, otherwise ad-hoc, and it aborts rather than shipping a bundle that fails signature verification. Notarisation is skipped unless `NOTARY_PROFILE` names a `xcrun notarytool store-credentials` profile, so the script works without a paid Apple Developer Program membership. The SHA-256 of the finished image is printed for the release notes.
+
 ## Status
 
 Veyrin is in active development. The native interface, authentication, conversation features and streamed generation are implemented. The app has been built and tested locally, but it is not yet distributed as a public release.
@@ -143,7 +153,7 @@ Veyrin is in active development. The native interface, authentication, conversat
 - [ ] Further reliability and performance work
 - [ ] Signed and notarised distribution
 
-**DMG status:** A DMG has been built and tested locally, but no public release has been published. The current DMG is **unsigned and not notarised**, so macOS may display a security warning or block it from opening by default. Building from source is the recommended route at this stage.
+**DMG status:** A DMG has been built and tested locally, but no public release has been published. The image is **not signed with a Developer ID certificate and not notarised**, because both require a paid Apple Developer Program membership. macOS therefore treats the app as unidentified and blocks the first launch until you allow it, either from **System Settings → Privacy & Security** or by Control-clicking the app and choosing **Open**. The DMG is arm64 only and requires macOS 27, so it does not run on Intel Macs or earlier releases. Building from source is the recommended route at this stage.
 
 ## Licence
 

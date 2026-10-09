@@ -4,7 +4,7 @@
 //
 //  Search service mirroring DiscoverService's shape.
 //
-//  Two endpoints, very different auth stories (protocol doc §1):
+//  Two endpoints, very different auth stories:
 //  - Autocomplete on `neo.` works today with the app's `Token` auth.
 //  - The results endpoint (`character.ai/api/trpc/search.search`) requires a
 //    browser-only `web-next-auth` cookie. With the app's Token auth it
@@ -142,7 +142,7 @@ struct CharacterSearchService {
         }
     }
 
-    /// Builds the exact captured request URL (protocol doc §2–3): a tRPC batch
+    /// Builds the exact captured request URL: a tRPC batch
     /// GET with the superjson-style `input` envelope. Page 1 only — the
     /// page-2 `cursor` input shape was never captured, so pagination is
     /// deliberately not attempted.

@@ -3,7 +3,7 @@
 //  Character AI swift project
 //
 //  Typed models for character search, decoded strictly from the captured
-//  contract in Docs/CharacterSearchProtocol.md (HAR-verified 2026-10-01).
+//  contract for `character.ai/api/trpc/search.search` (HAR-verified 2026-10-01).
 //
 
 import Foundation
@@ -21,8 +21,8 @@ nonisolated struct SearchAutocompleteResponse: Decodable, Sendable {
 // MARK: - tRPC batch envelope
 //
 // The results endpoint replies `[ { "result": { "data": { "json": … } } } ]`
-// on success, or `[ { "error": { "json": … } } ]` on failure (observed as
-// HTTP 500 wrapping an upstream 401 — see the protocol doc §1 and §4).
+// on success, or `[ { "error": { "json": … } } ]` on failure, observed as an
+// HTTP 500 wrapping an upstream 401.
 
 nonisolated struct TRPCBatchResponse<Payload: Decodable & Sendable>: Decodable, Sendable {
     nonisolated struct Entry: Decodable, Sendable {
@@ -35,7 +35,7 @@ nonisolated struct TRPCBatchResponse<Payload: Decodable & Sendable>: Decodable, 
         }
 
         /// tRPC error entries wrap their body in a `json` key:
-        /// `{"error":{"json":{"message":…,"code":…}}}` (doc §4).
+        /// `{"error":{"json":{"message":…,"code":…}}}`.
         nonisolated struct ErrorBody: Decodable, Sendable {
             nonisolated struct JsonBody: Decodable, Sendable {
                 let message: String?
@@ -84,7 +84,7 @@ nonisolated struct SearchResultsPayload: Decodable, Sendable {
 
         uuid = try container.decodeIfPresent(String.self, forKey: .uuid)
         // Opaque pagination cursor — decoded but deliberately unused: the
-        // page-2 input shape was never captured (protocol doc §6).
+        // page-2 input shape was never captured.
         nextCursor = try container.decodeIfPresent(String.self, forKey: .nextCursor)
 
         // This API family uses both Bool and Int 0/1 for flags across hosts.
@@ -98,7 +98,7 @@ nonisolated struct SearchResultsPayload: Decodable, Sendable {
     }
 }
 
-// MARK: - Character search result (minimal card subset, protocol doc §5)
+// MARK: - Character search result (minimal card subset)
 
 nonisolated struct CharacterSearchResult: Decodable, Sendable {
     let externalID: String?
