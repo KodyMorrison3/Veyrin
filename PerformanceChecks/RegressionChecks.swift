@@ -122,18 +122,18 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
         precondition(defaults.object(forKey: "preferences.personas.list") == nil)
         print("PASS persona cache hit, logout, owner-tagged relaunch, A/B isolation, legacy cleanup, unrelated preferences")
 
-        try await auth.signIn(sessionToken: "synthetic-account-a", userID: "", username: "", validator: SessionValidator(session: transport))
+        try await auth.signIn(sessionToken: "synthetic-account-a", validator: SessionValidator(session: transport))
         CheckProtocol.reset(delay: 0.15)
         let delayed = Task { await auth.personas.fetchRemotePersonas(authenticatedClient: client) }
         try await Task.sleep(for: .milliseconds(25))
         auth.clearSession()
         await delayed.value
         precondition(auth.personas.personas.isEmpty && !auth.personas.isLoadingPersonas)
-        try await auth.signIn(sessionToken: "synthetic-account-a", userID: "", username: "", validator: SessionValidator(session: transport))
+        try await auth.signIn(sessionToken: "synthetic-account-a", validator: SessionValidator(session: transport))
         CheckProtocol.reset(delay: 0.15)
         let switched = Task { await auth.personas.fetchRemotePersonas(authenticatedClient: client) }
         try await Task.sleep(for: .milliseconds(25))
-        try await auth.signIn(sessionToken: "synthetic-account-b", userID: "", username: "", validator: SessionValidator(session: transport))
+        try await auth.signIn(sessionToken: "synthetic-account-b", validator: SessionValidator(session: transport))
         await switched.value
         precondition(auth.personas.personas.isEmpty)
         CheckProtocol.reset()
@@ -142,7 +142,7 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
         print("PASS delayed persona reads cannot repopulate logout or account B")
 
         CheckProtocol.reset(delay: 0.15)
-        let signIn = Task { try await auth.signIn(sessionToken: "synthetic-account-a", userID: "", username: "", validator: SessionValidator(session: transport)) }
+        let signIn = Task { try await auth.signIn(sessionToken: "synthetic-account-a", validator: SessionValidator(session: transport)) }
         try await Task.sleep(for: .milliseconds(25))
         auth.clearSession()
         do { try await signIn.value; preconditionFailure("Obsolete sign-in succeeded") }
@@ -150,7 +150,7 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
         precondition(auth.session == nil)
         print("PASS delayed sign-in cannot undo logout")
 
-        try await auth.signIn(sessionToken: "synthetic-account-a", userID: "", username: "", validator: SessionValidator(session: transport))
+        try await auth.signIn(sessionToken: "synthetic-account-a", validator: SessionValidator(session: transport))
         CheckProtocol.reset()
         let service = ConversationService(authenticatedHTTPClient: client)
         _ = try await service.loadHistory(chatID: "chat", characterID: "character")

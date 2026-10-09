@@ -48,7 +48,7 @@ final class AuthStore: ObservableObject {
     let resources = ResourceCache()
     let conversations = ResourceCache(countLimit: 8, costLimit: 32 * 1024 * 1024)
 
-    static let invalidSessionMessage = "Character.AI rejected this saved session. Sign in with a valid session ID."
+    static let invalidSessionMessage = "Character.AI rejected this saved session. Sign in with a valid session token."
     static let unverifiedSessionMessage = "Couldn't verify your saved session. Check your connection and sign in again."
 
     private let storage: SessionStorage
@@ -77,10 +77,10 @@ final class AuthStore: ObservableObject {
     /// Validates the token with the server, then persists and publishes the
     /// session. Nothing is written or published when validation fails. A newer
     /// sign-in supersedes an older one, so a late outcome never replaces it.
+    /// The token is the only thing the user supplies: the account ID and
+    /// username come from the validated response.
     func signIn(
         sessionToken: String,
-        userID: String,
-        username: String,
         validator: SessionValidator? = nil
     ) async throws {
         signInAttempt += 1
@@ -90,13 +90,13 @@ final class AuthStore: ObservableObject {
             let account = try await (validator ?? SessionValidator()).validate(sessionToken: sessionToken)
             try Task.checkCancellation()
             guard attempt == signInAttempt else { throw CancellationError() }
-            guard let resolvedUserID = account.userID ?? Self.nonEmpty(userID) else {
+            guard let resolvedUserID = account.userID else {
                 throw SessionValidationError.accountIDUnavailable
             }
             try activate(AuthSession(
                 sessionToken: sessionToken,
                 userID: resolvedUserID,
-                username: account.username ?? username
+                username: account.username ?? ""
             ))
         } catch {
             try Task.checkCancellation()
@@ -129,9 +129,9 @@ final class AuthStore: ObservableObject {
             let account = try await (validator ?? SessionValidator()).validate(sessionToken: stored.sessionToken)
             try Task.checkCancellation()
             guard attempt == signInAttempt else { return }
-            guard let resolvedUserID = account.userID ?? Self.nonEmpty(stored.userID) else {
+            guard let resolvedUserID = account.userID else {
                 clearStoredSession()
-                authMessage = "Your Character.AI account ID is unavailable. Sign in again and provide your User ID."
+                authMessage = "Your Character.AI account ID is unavailable. Sign in again with a valid session token."
                 return
             }
             try activate(AuthSession(
@@ -167,11 +167,6 @@ final class AuthStore: ObservableObject {
               let current = session,
               authorization == "Token \(current.sessionToken)" else { return }
         clearSession()
-    }
-
-    private static func nonEmpty(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func activate(_ newSession: AuthSession) throws {

@@ -10,7 +10,7 @@ enum SessionValidationError: Error, Equatable {
     case invalidSession
     /// The session could not be verified (network, server or unexpected response).
     case unavailable
-    /// The token was accepted, but no account ID was available from the API or user input.
+    /// The token was accepted, but the API returned no account ID for it.
     case accountIDUnavailable
 }
 

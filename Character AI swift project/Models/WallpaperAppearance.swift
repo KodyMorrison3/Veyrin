@@ -21,7 +21,7 @@ final class WallpaperAppearanceStore: ObservableObject {
     static let shared = WallpaperAppearanceStore()
 
     @Published private(set) var appearance = WallpaperAppearance(
-        mode: .default,
+        mode: .solidColor,
         image: nil,
         solidColor: .black,
         blur: 0,

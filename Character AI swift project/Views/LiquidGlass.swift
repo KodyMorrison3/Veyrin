@@ -190,17 +190,13 @@ extension View {
 /// Unified global environmental background system.
 ///
 /// Serves as the single source of truth across the entire app:
-/// 1. Default: Soft blur (18pt) on character avatar/artwork as an environmental
-///    color/light source rather than something clearly visible.
-/// 2. Custom Wallpaper: Noticeably lighter/moderate blur (10pt) so the user's
-///    wallpaper remains recognizable and visually present while softened for Liquid Glass.
-/// 3. Solid Colour: No image blur; solid base with atmospheric/vignette treatment.
-/// Default-mode artwork extraction lives in `AppPreferences`
-/// (`updateDefaultEnvironment(forAvatarURL:)`) so that every surface reads a
-/// single shared palette instead of each view deriving its own environment.
+/// 1. Solid Colour: No image blur; solid base with atmospheric/vignette treatment.
+/// 2. Custom Wallpaper: Lighter blur (10pt) so the user's wallpaper remains
+///    recognizable and visually present while softened for Liquid Glass.
+/// The active palette is published by `AppPreferences`, so every surface reads a
+/// single shared environment instead of each view deriving its own.
 struct ShellEnvironmentalBackground: View {
 
-    var avatarURL: URL? = nil
     /// Scales the readability vignette. The default preserves the main
     /// window; secondary surfaces (e.g. Settings) pass a lower value so the
     /// blurred environment contributes visibly rather than reading as a dark slab.
@@ -243,9 +239,6 @@ struct ShellEnvironmentalBackground: View {
                         // We provide a soft atmospheric texture over it.
                         wallpaper.solidColor
                             .opacity((isDark ? 0.55 : 0.75) * wallpaper.visibility)
-
-                    case .default:
-                        defaultArtworkView(geometry: geometry)
                     }
                 }
 
@@ -268,12 +261,6 @@ struct ShellEnvironmentalBackground: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-        .onAppear {
-            AppPreferences.shared.updateDefaultEnvironment(forAvatarURL: avatarURL)
-        }
-        .onChange(of: avatarURL) { _, newURL in
-            AppPreferences.shared.updateDefaultEnvironment(forAvatarURL: newURL)
-        }
     }
 
     /// Global translucency-exempt access point for surfaces that must remain solid
@@ -291,19 +278,6 @@ struct ShellEnvironmentalBackground: View {
         paletteStore.palette
     }
 
-    @ViewBuilder
-    private func defaultArtworkView(geometry: GeometryProxy) -> some View {
-        if let artwork = wallpaper.image {
-            Image(nsImage: artwork)
-                .resizable()
-                .scaledToFill()
-                .frame(width: geometry.size.width, height: geometry.size.height)
-                .clipped()
-                .saturation(0.90)
-                .blur(radius: wallpaper.blur, opaque: true)
-                .opacity((isDark ? 0.80 : 0.55) * wallpaper.visibility)
-        }
-    }
 }
 
 /// A quieter selection lens than regular glass nested inside sidebar glass.

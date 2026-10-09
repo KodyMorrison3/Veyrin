@@ -85,15 +85,11 @@ private struct MainView: View {
 
     var body: some View {
         ZStack {
-            // Atmospheric character artwork background behind the window.
-            // Extends under the title bar so the window toolbar area reads as
-            // translucent glass over the environment, not an opaque slab.
-            ShellEnvironmentalBackground(
-                avatarURL: selectedConversation.flatMap {
-                    CharacterImageURL.makeURL(avatarFileName: $0.characterAvatarURI)
-                }
-            )
-            .ignoresSafeArea()
+            // Atmospheric environment behind the window. Extends under the
+            // title bar so the window toolbar area reads as translucent glass
+            // over the environment, not an opaque slab.
+            ShellEnvironmentalBackground()
+                .ignoresSafeArea()
 
             NavigationSplitView {
                 sidebar

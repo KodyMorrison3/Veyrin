@@ -205,8 +205,8 @@ struct SettingsView: View {
                 settingsSection(
                     title: "Environment & Wallpaper",
                     footer: "Select how the environmental background behind Liquid Glass is derived. " +
-                        "Default blurs the character artwork; Custom Wallpaper blurs your chosen image; " +
-                        "Solid Colour provides an atmospheric base colour underneath the glass."
+                        "Solid Colour provides an atmospheric base colour underneath the glass; " +
+                        "Custom Wallpaper blurs your chosen image."
                 ) {
                     Picker("Background Mode", selection: $preferences.backgroundMode) {
                         ForEach(BackgroundMode.allCases) { mode in
@@ -217,16 +217,6 @@ struct SettingsView: View {
                     .padding(.vertical, 4)
 
                     switch preferences.backgroundMode {
-                    case .default:
-                        HStack(spacing: 8) {
-                            Image(systemName: "sparkles")
-                                .foregroundStyle(Color.caiPrimary)
-                            Text("Deriving environmental colour and wallpaper from character artwork.")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 4)
-
                     case .customWallpaper:
                         VStack(alignment: .leading, spacing: 10) {
                             if let wallpaper = preferences.customWallpaper {
@@ -285,17 +275,6 @@ struct SettingsView: View {
                         }
                     }
 
-                    if preferences.backgroundMode != .default {
-                        Divider()
-                            .padding(.vertical, 2)
-
-                        Button("Revert to Default") {
-                            preferences.backgroundMode = .default
-                        }
-                        .buttonStyle(.plain)
-                        .font(.callout)
-                        .foregroundStyle(Color.caiPrimary)
-                    }
                 }
 
                 settingsSection(
@@ -327,7 +306,7 @@ struct SettingsView: View {
                         Button("Reset to Default") { preferences.resetWallpaperBlur() }
                             .accessibilityLabel("Reset Wallpaper Blur to Default")
                             .disabled(preferences.wallpaperBlurOverride == nil)
-                        Text("Automatic: character artwork 18 pt; custom wallpaper 10 pt. Moving the slider overrides both image modes until reset.")
+                        Text("Automatic: custom wallpaper 10 pt. Moving the slider overrides it until reset.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
 
