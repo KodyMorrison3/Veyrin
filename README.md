@@ -137,6 +137,10 @@ Veyrin is in active development. The native interface, authentication, conversat
 
 **DMG status:** A DMG has been built and tested locally, but no public release has been published. The current DMG is **unsigned and not notarised**, so macOS may display a security warning or block it from opening by default. Building from source is the recommended route at this stage.
 
+## Licence
+
+Veyrin is licensed under the **GNU General Public License v3.0 (GPL-3.0)**. See the [LICENSE](LICENSE) file for the full licence text.
+
 ## Disclaimer
 
 Veyrin is an unofficial, independent project. It is not affiliated with, endorsed by, or sponsored by Character.AI. Character.AI and its associated trademarks belong to their respective owners.
