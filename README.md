@@ -46,7 +46,13 @@ Veyrin is an **unofficial** macOS client for [Character.AI](https://character.ai
 
 ## Screenshots
 
-The current interface includes character discovery and conversation views. Screenshots will be embedded here once the image assets have been added to the repository.
+### Conversations
+
+![Veyrin conversation interface](screenshots/Convo.png)
+
+### Discover
+
+![Veyrin character discovery interface](screenshots/Browsing.png)
 
 ## Features
 
