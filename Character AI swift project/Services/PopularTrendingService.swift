@@ -42,7 +42,18 @@ struct PopularTrendingService {
     }
     #endif
 
-    func loadCuratedLists(popularListID: String = ListID.popular, trendingListID: String = ListID.trending) async throws -> CuratedCharacterListsResponse {
+    func loadCuratedLists(popularListID: String = ListID.popular, trendingListID: String = ListID.trending, forceRefresh: Bool = false) async throws -> CuratedCharacterListsResponse {
+        try await authorizationProvider.cached(key: "popular-trending:\(popularListID):\(trendingListID)", ttl: 300, forceRefresh: forceRefresh,
+                                               cost: { lists in
+            lists.curatedCharacterLists.values.reduce(512) { total, list in
+                total + list.reduce(0) { $0 + 1024 + ($1.description?.utf8.count ?? 0) * 4 }
+            }
+        }) {
+            try await fetchCuratedLists(popularListID: popularListID, trendingListID: trendingListID)
+        }
+    }
+
+    private func fetchCuratedLists(popularListID: String, trendingListID: String) async throws -> CuratedCharacterListsResponse {
         var components = URLComponents(
             string: "https://neo.character.ai/recommendation/v1/curated_character_lists"
         )

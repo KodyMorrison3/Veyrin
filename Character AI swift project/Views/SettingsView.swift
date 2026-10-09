@@ -17,9 +17,13 @@ struct SettingsView: View {
     @ObservedObject private var preferences = AppPreferences.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @AppStorage("preferences.includeBetaReleases") private var includeBetaReleases = false
     @State private var selectedPane: SettingsPane = .account
     @State private var isConfirmingReset = false
     @State private var isShowingCharms = false
+    @State private var latestRelease: GitHubRelease?
+    @State private var releaseCheckMessage: String?
+    @State private var isCheckingForUpdates = false
 
     /// The signed-in username (typed session metadata — never the token),
     /// injected by the app so the Account pane can state who is signed in.
@@ -123,6 +127,8 @@ struct SettingsView: View {
                 reduceTransparency: reduceTransparency
             )
         }
+        .contentShape(Rectangle())
+        .gesture(WindowDragGesture())
     }
 
     // MARK: - Shared presentation
@@ -488,16 +494,104 @@ struct SettingsView: View {
 
     // MARK: Advanced
 
+    private func checkForUpdates() {
+        isCheckingForUpdates = true
+        releaseCheckMessage = nil
+
+        Task {
+            defer { isCheckingForUpdates = false }
+            do {
+                let release = try await GitHubReleaseService()
+                    .latestRelease(includeBeta: includeBetaReleases)
+                latestRelease = release
+                let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+                switch release.isNewerVersion(than: currentVersion ?? "") {
+                case true:
+                    releaseCheckMessage = "A newer version is available."
+                case false:
+                    releaseCheckMessage = "You already have the latest version."
+                case nil:
+                    releaseCheckMessage = "Release found. Current app version could not be compared."
+                }
+            } catch is CancellationError {
+                releaseCheckMessage = nil
+            } catch {
+                latestRelease = nil
+                releaseCheckMessage = error.localizedDescription
+            }
+        }
+    }
+
     private var advancedPane: some View {
         ScrollView {
-            settingsSection(
-                footer: "Restores all local preferences to their defaults. " +
-                    "Your signed-in session is not affected."
-            ) {
-                Button("Reset Preferences", role: .destructive) {
-                    isConfirmingReset = true
+            VStack(alignment: .leading, spacing: 16) {
+                settingsSection(
+                    title: "Updates",
+                    footer: "Checks GitHub for the latest official release. Enable beta releases to include newer releases marked as pre-release. This works when the repository is public."
+                ) {
+                    Toggle("Include beta releases", isOn: $includeBetaReleases)
+                        .padding(.vertical, 4)
+
+                    Button {
+                        checkForUpdates()
+                    } label: {
+                        if isCheckingForUpdates {
+                            ProgressView()
+                                .controlSize(.small)
+                                .padding(.trailing, 4)
+                            Text("Checking for Updates…")
+                        } else {
+                            Label("Check for Updates", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .disabled(isCheckingForUpdates)
+                    .padding(.vertical, 4)
+
+                    if let releaseCheckMessage {
+                        Text(releaseCheckMessage)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let latestRelease {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text(latestRelease.displayVersion)
+                                    .font(.subheadline.weight(.medium))
+                                if latestRelease.isBeta {
+                                    Text("Beta")
+                                        .font(.caption2.weight(.semibold))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.caiPrimary.opacity(0.18), in: Capsule())
+                                }
+                            }
+
+                            if let notes = latestRelease.body, !notes.isEmpty {
+                                Text(notes)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(8)
+                                    .textSelection(.enabled)
+                            }
+
+                            Link(destination: latestRelease.htmlURL) {
+                                Label("View Release on GitHub", systemImage: "arrow.up.right.square")
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
                 }
-                .padding(.vertical, 6)
+
+                settingsSection(
+                    footer: "Restores all local preferences to their defaults. " +
+                        "Your signed-in session is not affected."
+                ) {
+                    Button("Reset Preferences", role: .destructive) {
+                        isConfirmingReset = true
+                    }
+                    .padding(.vertical, 6)
+                }
             }
         }
         .confirmationDialog(

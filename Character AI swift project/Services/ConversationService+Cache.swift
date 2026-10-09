@@ -8,12 +8,14 @@ extension ConversationService {
     }
 
     func loadHistory(chatID: String, characterID: String, forceRefresh: Bool = false) async throws -> CachedConversation {
-        try await cache.value(for: historyKey(chatID), ttl: 45, forceRefresh: forceRefresh, cost: { $0.cost }) {
+        if forceRefresh { invalidateHistory(chatID: chatID) }
+        return try await cache.value(for: historyKey(chatID), ttl: 45, cost: { $0.cost }) {
             let page = try await loadTurnPage(chatID: chatID)
             let pins: Set<String>
             if page.turns.allSatisfy({ $0.isPinned != nil }) { pins = [] }
             else { pins = try await loadPinnedTurnIDs(chatID: chatID) }
-            let turns = page.turns.map {
+            var ids: Set<String> = []
+            let turns = page.turns.filter { ids.insert($0.turnKey.turnID).inserted }.map {
                 makeUITurn(from: $0, characterID: characterID,
                            isPinned: $0.isPinned ?? pins.contains($0.turnKey.turnID))
             }

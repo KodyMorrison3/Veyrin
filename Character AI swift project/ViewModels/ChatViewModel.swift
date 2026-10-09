@@ -114,7 +114,7 @@ final class ChatViewModel: ObservableObject {
         self.webSocketRouter = webSocketRouter ?? WebSocketRouter()
         self.authStore = authStore
         let client = AuthenticatedHTTPClient(authStore: authStore)
-        self.authenticatedHTTPClient = client
+        self.authenticatedHTTPClient = conversationService?.authenticatedHTTPClient ?? client
         self.conversationService = conversationService ?? ConversationService(
             authenticatedHTTPClient: client
         )
@@ -185,6 +185,12 @@ final class ChatViewModel: ObservableObject {
             errorMessage = error.localizedDescription
             return nil
         }
+    }
+
+    func loadConversationHistory(chatID: String, characterID: String) async {
+        await loadCharacter(externalID: characterID)
+        guard !Task.isCancelled, character?.externalID == characterID else { return }
+        await loadRealTurns(chatID: chatID)
     }
 
     func loadCharacter(externalID: String) async {

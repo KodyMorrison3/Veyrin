@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Persona avatar button embedded in the message composer.
 struct ComposerPersonaAvatarButton: View {
-    @ObservedObject var personaStore = PersonaStore.shared
+    @ObservedObject var personaStore: PersonaStore
     let currentCharacterID: String?
     let authenticatedHTTPClient: AuthenticatedHTTPClient?
     let availableModels: [ModelSelectionOption]
@@ -56,6 +56,7 @@ struct ComposerPersonaAvatarButton: View {
         .onHover { isHovering = $0 }
         .popover(isPresented: $isShowingMenu, arrowEdge: .top) {
             ComposerPersonaMenu(
+                personaStore: personaStore,
                 currentCharacterID: currentCharacterID,
                 authenticatedHTTPClient: authenticatedHTTPClient,
                 availableModels: availableModels,

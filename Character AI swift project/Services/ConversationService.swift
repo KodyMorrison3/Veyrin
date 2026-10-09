@@ -94,27 +94,31 @@ struct ConversationService: Sendable {
 
     /// Fetches verified conversation facts (Memory) for the current chat from:
     /// `GET https://neo.character.ai/chat/{chatID}/conversation-facts/`
-    func loadConversationFacts(chatID: String) async throws -> ConversationFactsResponse {
+    func loadConversationFacts(chatID: String, forceRefresh: Bool = false) async throws -> ConversationFactsResponse {
         guard let url = URL(
             string: "https://neo.character.ai/chat/\(chatID)/conversation-facts/"
         ) else {
             throw NetworkError.invalidURL
         }
 
-        return try await authenticatedHTTPClient.get(url)
+        return try await resources.value(for: "facts:\(chatID)", ttl: 120, forceRefresh: forceRefresh, cost: { _ in 2048 }) {
+            try await authenticatedHTTPClient.get(url)
+        }
     }
 
     /// Fetches verified character voted status from:
     /// `GET https://neo.character.ai/character/v1/character_voted/{characterID}/voted`
-    func loadCharacterVoted(characterID: String) async throws -> Bool {
+    func loadCharacterVoted(characterID: String, forceRefresh: Bool = false) async throws -> Bool {
         guard let url = URL(
             string: "https://neo.character.ai/character/v1/character_voted/\(characterID)/voted"
         ) else {
             throw NetworkError.invalidURL
         }
 
-        let response: CharacterVotedResponse = try await authenticatedHTTPClient.get(url)
-        return response.voted
+        return try await resources.value(for: "voted:\(characterID)", ttl: 300, forceRefresh: forceRefresh, cost: { _ in 64 }) {
+            let response: CharacterVotedResponse = try await authenticatedHTTPClient.get(url)
+            return response.voted
+        }
     }
 
     /// Fetches chat history for a character from the HAR-observed list endpoint.

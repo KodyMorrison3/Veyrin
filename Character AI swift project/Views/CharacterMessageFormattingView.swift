@@ -27,6 +27,8 @@ struct CharacterMessageFormattingView: View {
         return cache
     }()
 
+    static func clearCache() { completedFormatting.removeAllObjects() }
+
     func formattedBlocks() -> [FormattedBlock] {
         let key = content as NSString
         if !isStreaming, let cached = Self.completedFormatting.object(forKey: key) { return cached.blocks }

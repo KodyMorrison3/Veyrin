@@ -29,6 +29,8 @@ enum CharacterMessageMarkdown {
         case code(language: String, content: String)
     }
 
+    static func clearCache() { parsedBlocks.removeAllObjects() }
+
     static func parse(_ source: String, cacheCompletedContent: Bool = true) -> [Block] {
         guard cacheCompletedContent else { return parseUncached(source) }
         let key = source as NSString
@@ -129,6 +131,28 @@ enum CharacterMessageMarkdown {
         var result: [Inline] = []
         var plain = ""
         var index = 0
+        var closingBracket = -1
+        var closingParen = -1
+        var closingTag = -1
+        var exhaustedMarkers: Set<String> = []
+        var codeRunEnd = 0
+        var exhaustedEmphasis = false
+
+        // Search positions only move forward. Incomplete links must not scan
+        // the same suffix again for every opening bracket in a streamed reply.
+        func next(_ delimiter: Swift.Character, from start: Int, cursor: inout Int) -> Int? {
+            if cursor < start {
+                cursor = characters[start...].firstIndex(of: delimiter) ?? characters.count
+            }
+            return cursor < characters.count ? cursor : nil
+        }
+
+        func closingMarker(_ marker: String, from start: Int) -> Int? {
+            guard !exhaustedMarkers.contains(marker) else { return nil }
+            if let end = find(marker, in: characters, from: start) { return end }
+            exhaustedMarkers.insert(marker)
+            return nil
+        }
 
         func flush() {
             guard !plain.isEmpty else { return }
@@ -142,9 +166,13 @@ enum CharacterMessageMarkdown {
 
         while index < characters.count {
             if characters[index] == ("`" as Swift.Character) {
-                let markerLength = runLength("`" as Swift.Character, in: characters, at: index)
-                let marker = String(repeating: "`", count: markerLength)
-                if let end = find(marker, in: characters, from: index + markerLength) {
+                if codeRunEnd <= index {
+                    codeRunEnd = index + runLength("`", in: characters, at: index)
+                }
+                let markerLength = codeRunEnd - index
+                let marker = markerLength <= characters.count - codeRunEnd
+                    ? String(repeating: "`", count: markerLength) : ""
+                if !marker.isEmpty, let end = closingMarker(marker, from: codeRunEnd) {
                     flush()
                     let code = String(characters[(index + markerLength)..<end])
                     result.append(.code(code.replacingOccurrences(of: "\n", with: " ")))
@@ -154,7 +182,7 @@ enum CharacterMessageMarkdown {
             }
 
             if has("***", in: characters, at: index),
-               let end = find("***", in: characters, from: index + 3) {
+               let end = closingMarker("***", from: index + 3) {
                 flush()
                 result.append(.strong([.emphasis(parseInline(String(characters[(index + 3)..<end])))]))
                 index = end + 3
@@ -162,7 +190,7 @@ enum CharacterMessageMarkdown {
             }
 
             if has("**", in: characters, at: index),
-               let end = find("**", in: characters, from: index + 2) {
+               let end = closingMarker("**", from: index + 2) {
                 flush()
                 result.append(.strong(parseInline(String(characters[(index + 2)..<end]))))
                 index = end + 2
@@ -170,18 +198,21 @@ enum CharacterMessageMarkdown {
             }
 
             if characters[index] == ("*" as Swift.Character), !has("**", in: characters, at: index),
-               let end = findSingleAsterisk(in: characters, from: index + 1) {
-                flush()
-                result.append(.emphasis(parseInline(String(characters[(index + 1)..<end]))))
-                index = end + 1
-                continue
+               !exhaustedEmphasis {
+                if let end = findSingleAsterisk(in: characters, from: index + 1) {
+                    flush()
+                    result.append(.emphasis(parseInline(String(characters[(index + 1)..<end]))))
+                    index = end + 1
+                    continue
+                }
+                exhaustedEmphasis = true
             }
 
             if characters[index] == ("[" as Swift.Character),
-               let closeBracket = characters[(index + 1)...].firstIndex(of: ("]" as Swift.Character)),
+               let closeBracket = next("]", from: index + 1, cursor: &closingBracket),
                closeBracket + 1 < characters.count,
                characters[closeBracket + 1] == ("(" as Swift.Character),
-               let closeParen = characters[(closeBracket + 2)...].firstIndex(of: ")") {
+               let closeParen = next(")", from: closeBracket + 2, cursor: &closingParen) {
                 flush()
                 let label = String(characters[(index + 1)..<closeBracket])
                 let destination = String(characters[(closeBracket + 2)..<closeParen])
@@ -191,7 +222,8 @@ enum CharacterMessageMarkdown {
             }
 
             if characters[index] == ("<" as Swift.Character),
-               let end = htmlTagEnd(in: characters, from: index) {
+               let end = next(">", from: index + 1, cursor: &closingTag),
+               isHTMLTagName(in: characters, from: index + 1, through: end) {
                 if let contentEnd = rawHTMLContentEnd(
                     in: characters,
                     tagStart: index,
@@ -231,14 +263,13 @@ enum CharacterMessageMarkdown {
 
     private static func containsHTMLTag(_ line: String) -> Bool {
         let characters = Array(line)
-        var index = 0
-        while index < characters.count {
-            if characters[index] == "<",
-               let end = htmlTagEnd(in: characters, from: index),
-               isHTMLTagName(in: characters, from: index + 1, through: end) {
-                return true
+        var closingTag = -1
+        for index in characters.indices where characters[index] == "<" {
+            if closingTag <= index {
+                closingTag = characters[(index + 1)...].firstIndex(of: ">") ?? characters.count
             }
-            index += 1
+            if closingTag < characters.count,
+               isHTMLTagName(in: characters, from: index + 1, through: closingTag) { return true }
         }
         return false
     }
@@ -283,8 +314,8 @@ enum CharacterMessageMarkdown {
     }
 
     private static func has(_ marker: String, in characters: [Swift.Character], at index: Int) -> Bool {
-        let value = Array(marker)
-        return index + value.count <= characters.count && Array(characters[index..<(index + value.count)]) == value
+        guard index + marker.count <= characters.count else { return false }
+        return marker.enumerated().allSatisfy { characters[index + $0.offset] == $0.element }
     }
 
     private static func find(_ marker: String, in characters: [Swift.Character], from start: Int) -> Int? {

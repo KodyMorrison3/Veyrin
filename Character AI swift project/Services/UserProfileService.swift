@@ -38,7 +38,14 @@ struct UserProfileService {
     }
     #endif
 
-    func loadProfile(username: String) async throws -> UserProfile {
+    func loadProfile(username: String, forceRefresh: Bool = false) async throws -> UserProfile {
+        try await authorizationProvider.cached(key: "user-profile:\(username)", ttl: 300, forceRefresh: forceRefresh,
+                                               cost: { _ in 2048 }) {
+            try await fetchProfile(username: username)
+        }
+    }
+
+    private func fetchProfile(username: String) async throws -> UserProfile {
         // Escaping is defensive: the username comes from the user's own
         // stored session.
         let escaped = username

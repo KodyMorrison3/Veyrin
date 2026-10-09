@@ -312,7 +312,23 @@ final class DiscoverViewModel: ObservableObject {
     }
 
     func retryCuratedLists() async {
-        didLoadCuratedLists = false
-        await loadCuratedLists()
+        guard !isLoadingCurated else { return }
+        didLoadCuratedLists = true
+        isLoadingCurated = true
+        curatedError = nil
+        defer { isLoadingCurated = false }
+
+        guard let popularTrendingService else { return }
+        do {
+            let lists = try await popularTrendingService.loadCuratedLists(forceRefresh: true)
+            popularCharacters = lists.characters(
+                forListID: PopularTrendingService.ListID.popular
+            )
+            trendingCharacters = lists.characters(
+                forListID: PopularTrendingService.ListID.trending
+            )
+        } catch {
+            curatedError = error.localizedDescription
+        }
     }
 }

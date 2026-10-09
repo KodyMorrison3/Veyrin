@@ -13,6 +13,7 @@ struct AuthenticatedHTTPClient {
     var resources: ResourceCache { authStore.resources }
     var conversationCache: ResourceCache { authStore.conversations }
     var sessionGeneration: UUID { authStore.sessionGeneration }
+    var accountID: String? { authStore.session?.userID }
 
     init(
         session: URLSession = .shared,
@@ -59,10 +60,9 @@ struct AuthenticatedHTTPClient {
                     httpResponse.statusCode
                 )
             }
-            return try await HTTPResponseDecoder.decode(
-                Response.self,
-                from: data
-            )
+            let decoded = try await HTTPResponseDecoder.decode(Response.self, from: data)
+            guard generation == authStore.sessionGeneration else { throw CancellationError() }
+            return decoded
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as NetworkError {
@@ -115,10 +115,9 @@ struct AuthenticatedHTTPClient {
                     httpResponse.statusCode
                 )
             }
-            return try await HTTPResponseDecoder.decode(
-                Response.self,
-                from: data
-            )
+            let decoded = try await HTTPResponseDecoder.decode(Response.self, from: data)
+            guard generation == authStore.sessionGeneration else { throw CancellationError() }
+            return decoded
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as NetworkError {

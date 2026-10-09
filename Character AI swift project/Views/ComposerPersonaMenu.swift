@@ -3,7 +3,7 @@ import SwiftUI
 /// Compact Liquid Glass popover for conversation memory, recent chats,
 /// copied-chat model selection, and server-backed persona overrides.
 struct ComposerPersonaMenu: View {
-    @ObservedObject var personaStore = PersonaStore.shared
+    @ObservedObject var personaStore: PersonaStore
     let currentCharacterID: String?
     let authenticatedHTTPClient: AuthenticatedHTTPClient?
     let availableModels: [ModelSelectionOption]

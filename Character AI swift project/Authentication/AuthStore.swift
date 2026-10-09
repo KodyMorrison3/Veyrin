@@ -30,6 +30,9 @@ final class AuthStore: ObservableObject {
             sessionGeneration = UUID()
             resources.clear()
             conversations.clear()
+            personas.setAccount(session?.userID)
+            CharacterMessageMarkdown.clearCache()
+            CharacterMessageFormattingView.clearCache()
         }
     }
 
@@ -41,6 +44,7 @@ final class AuthStore: ObservableObject {
 
     /// Non-secret session identity; caches are never keyed by tokens.
     private(set) var sessionGeneration = UUID()
+    let personas: PersonaStore
     let resources = ResourceCache()
     let conversations = ResourceCache(countLimit: 8, costLimit: 32 * 1024 * 1024)
 
@@ -58,10 +62,13 @@ final class AuthStore: ObservableObject {
 
     init(
         storage: SessionStorage? = nil,
-        session: AuthSession? = nil
+        session: AuthSession? = nil,
+        personas: PersonaStore? = nil
     ) {
         self.storage = storage ?? KeychainStore()
         self.session = session
+        self.personas = personas ?? PersonaStore()
+        self.personas.setAccount(session?.userID)
         // Defer the Keychain read until restoreStoredSession so launch performs
         // one protected-item access instead of probing in init and reading again.
         self.isRestoringSession = session == nil
@@ -81,6 +88,7 @@ final class AuthStore: ObservableObject {
 
         do {
             let account = try await (validator ?? SessionValidator()).validate(sessionToken: sessionToken)
+            try Task.checkCancellation()
             guard attempt == signInAttempt else { throw CancellationError() }
             guard let resolvedUserID = account.userID ?? Self.nonEmpty(userID) else {
                 throw SessionValidationError.accountIDUnavailable
@@ -91,6 +99,7 @@ final class AuthStore: ObservableObject {
                 username: account.username ?? username
             ))
         } catch {
+            try Task.checkCancellation()
             guard attempt == signInAttempt else { throw CancellationError() }
             throw error
         }
@@ -102,7 +111,9 @@ final class AuthStore: ObservableObject {
     func restoreStoredSession(validator: SessionValidator? = nil) async {
         guard isRestoringSession, !hasStartedRestore else { return }
         hasStartedRestore = true
-        defer { isRestoringSession = false }
+        signInAttempt += 1
+        let attempt = signInAttempt
+        defer { if attempt == signInAttempt { isRestoringSession = false } }
 
         let stored: AuthSession
         do {
@@ -116,6 +127,8 @@ final class AuthStore: ObservableObject {
 
         do {
             let account = try await (validator ?? SessionValidator()).validate(sessionToken: stored.sessionToken)
+            try Task.checkCancellation()
+            guard attempt == signInAttempt else { return }
             guard let resolvedUserID = account.userID ?? Self.nonEmpty(stored.userID) else {
                 clearStoredSession()
                 authMessage = "Your Character.AI account ID is unavailable. Sign in again and provide your User ID."
@@ -127,17 +140,21 @@ final class AuthStore: ObservableObject {
                 username: account.username ?? stored.username
             ))
         } catch SessionValidationError.invalidSession {
+            guard attempt == signInAttempt, !Task.isCancelled else { return }
             clearStoredSession()
             authMessage = AuthStore.invalidSessionMessage
         } catch is CancellationError {
             return
         } catch {
+            guard attempt == signInAttempt, !Task.isCancelled else { return }
             authLogger.error("Stored session could not be verified: \(error.localizedDescription, privacy: .private)")
             authMessage = AuthStore.unverifiedSessionMessage
         }
     }
 
     func clearSession() {
+        signInAttempt += 1
+        isRestoringSession = false
         session = nil
         clearStoredSession()
     }

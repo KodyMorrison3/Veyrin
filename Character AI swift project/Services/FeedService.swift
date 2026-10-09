@@ -8,6 +8,17 @@ struct FeedService {
         case authStore(AuthStore)
         case fixedToken(String)
 
+        func cached<Value: Sendable>(key: String, ttl: TimeInterval, forceRefresh: Bool = false,
+                                     cost: @escaping (Value) -> Int,
+                                     load: @escaping @MainActor () async throws -> Value) async throws -> Value {
+            switch self {
+            case .authStore(let authStore):
+                return try await authStore.resources.value(for: key, ttl: ttl, forceRefresh: forceRefresh, cost: cost, load: load)
+            case .fixedToken:
+                return try await load()
+            }
+        }
+
         var token: String? {
             get async {
                 switch self {
@@ -32,7 +43,26 @@ struct FeedService {
     }
     #endif
 
-    func loadSocialFeed() async throws -> FeedResponse {
+    func loadSocialFeed(forceRefresh: Bool = false) async throws -> FeedResponse {
+        let computeCost: (FeedResponse) -> Int = { feed in
+            var cost = 512
+            for item in feed.contents {
+                let textLen = (item.post?.content?.utf8.count ?? 0) + (item.post?.caption?.utf8.count ?? 0)
+                cost += 1024 + textLen * 4
+            }
+            return cost
+        }
+        return try await authorizationProvider.cached(
+            key: "feed:social",
+            ttl: 60,
+            forceRefresh: forceRefresh,
+            cost: computeCost
+        ) {
+            try await fetchSocialFeed()
+        }
+    }
+
+    private func fetchSocialFeed() async throws -> FeedResponse {
         guard let url = URL(string: "https://feed.api.character.ai/api/feed/social_feed") else {
             throw NetworkError.invalidURL
         }

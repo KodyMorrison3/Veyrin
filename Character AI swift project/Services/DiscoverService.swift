@@ -9,6 +9,17 @@ struct DiscoverService {
         case authStore(AuthStore)
         case fixedToken(String)
 
+        func cached<Value: Sendable>(key: String, ttl: TimeInterval, forceRefresh: Bool = false,
+                                     cost: @escaping (Value) -> Int,
+                                     load: @escaping @MainActor () async throws -> Value) async throws -> Value {
+            switch self {
+            case .authStore(let authStore):
+                return try await authStore.resources.value(for: key, ttl: ttl, forceRefresh: forceRefresh, cost: cost, load: load)
+            case .fixedToken:
+                return try await load()
+            }
+        }
+
         var token: String? {
             get async {
                 switch self {
@@ -42,7 +53,16 @@ struct DiscoverService {
     }
     #endif
 
-    func loadRecommendedFeed(cursor: String?) async throws -> DiscoverFeedResponse {
+    func loadRecommendedFeed(cursor: String?, forceRefresh: Bool = false) async throws -> DiscoverFeedResponse {
+        // Cache the first page only. Further pages belong to the visible browse session.
+        guard cursor == nil else { return try await fetchRecommendedFeed(cursor: cursor) }
+        return try await authorizationProvider.cached(key: "discover:recommended", ttl: 60, forceRefresh: forceRefresh,
+                                                     cost: { $0.contents.reduce(512) { $0 + 2048 + ($1.characterItem?.description?.utf8.count ?? 0) * 4 } }) {
+            try await fetchRecommendedFeed(cursor: nil)
+        }
+    }
+
+    private func fetchRecommendedFeed(cursor: String?) async throws -> DiscoverFeedResponse {
         guard let url = URL(string: "https://feed.api.character.ai/api/feed/recommended") else {
             throw NetworkError.invalidURL
         }
@@ -59,7 +79,15 @@ struct DiscoverService {
         return try await HTTPResponseDecoder.decode(DiscoverFeedResponse.self, from: data)
     }
 
-    func loadCuratedScenes(cursor: String?) async throws -> CuratedScenesResponse {
+    func loadCuratedScenes(cursor: String?, forceRefresh: Bool = false) async throws -> CuratedScenesResponse {
+        guard cursor == nil else { return try await fetchCuratedScenes(cursor: cursor) }
+        return try await authorizationProvider.cached(key: "discover:scenes", ttl: 300, forceRefresh: forceRefresh,
+                                                     cost: { $0.scenes.reduce(512) { $0 + 1024 + ($1.description?.utf8.count ?? 0) * 4 } }) {
+            try await fetchCuratedScenes(cursor: nil)
+        }
+    }
+
+    private func fetchCuratedScenes(cursor: String?) async throws -> CuratedScenesResponse {
         var components = URLComponents(
             string: "https://neo.character.ai/scene/v1/scenes/curated"
         )

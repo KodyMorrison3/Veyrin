@@ -29,8 +29,17 @@ final class FeedViewModel: ObservableObject {
     }
 
     func retry() async {
-        didLoad = false
-        await load()
+        guard !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        do {
+            response = try await service.loadSocialFeed(forceRefresh: true)
+            didLoad = true
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     var shouldLoad: Bool { !didLoad && !isLoading }

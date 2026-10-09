@@ -183,17 +183,13 @@ struct ChatView: View {
         .task {
             isLoadingPersonaControls = true
             defer { isLoadingPersonaControls = false }
-            await viewModel.loadCharacter(
-                externalID: characterID
-            )
-
-            // Only the history needs the character loaded above; the rest is independent.
+            // Start independent metadata reads without waiting for the character.
+            // Only history needs its identity to distinguish human and AI turns.
+            async let historyLoad: Void = viewModel.loadConversationHistory(chatID: chatID, characterID: characterID)
             async let chatLoad: Void = viewModel.loadChat(chatID: chatID)
-            async let historyLoad: Void = viewModel.loadRealTurns(chatID: chatID)
-            async let votedLoad: Void = viewModel.loadCharacterVotedStatus(characterID: characterID)
             async let recentLoad: Void = viewModel.loadRecentCharacterChats(characterID: characterID)
             async let modelsLoad: Void = viewModel.loadAvailableModels()
-            async let personasLoad: Void = PersonaStore.shared.fetchRemotePersonas(
+            async let personasLoad: Void = viewModel.authStore.personas.fetchRemotePersonas(
                 authenticatedClient: viewModel.authenticatedHTTPClient,
                 currentCharacterID: characterID
             )
@@ -201,7 +197,7 @@ struct ChatView: View {
             await chatLoad
             activeChatModelType = viewModel.chat?.preferredModelType
 
-            _ = await (historyLoad, votedLoad, recentLoad, modelsLoad, personasLoad)
+            _ = await (historyLoad, recentLoad, modelsLoad, personasLoad)
         }
         .onChange(of: viewModel.chat?.preferredModelType) {
             activeChatModelType = viewModel.chat?.preferredModelType
@@ -348,6 +344,7 @@ struct ChatView: View {
         HStack(alignment: .center, spacing: 8) {
             // Persona avatar entry point on the left
             ComposerPersonaAvatarButton(
+                personaStore: viewModel.authStore.personas,
                 currentCharacterID: viewModel.character?.externalID,
                 authenticatedHTTPClient: viewModel.authenticatedHTTPClient,
                 availableModels: viewModel.availableModels,
@@ -361,8 +358,8 @@ struct ChatView: View {
                 isLoadingHistory: viewModel.isLoadingCharacterHistory,
                 historyErrorMessage: viewModel.characterHistoryErrorMessage,
                 isCreatingConversation: viewModel.isCreatingConversationFromTurn,
-                isPersonaSelectionInProgress: PersonaStore.shared.isSelectingPersona,
-                isLoadingPersonas: isLoadingPersonaControls || PersonaStore.shared.isLoadingPersonas,
+                isPersonaSelectionInProgress: viewModel.authStore.personas.isSelectingPersona,
+                isLoadingPersonas: isLoadingPersonaControls || viewModel.authStore.personas.isLoadingPersonas,
                 onSelectModel: { modelType in
                     guard let turn = viewModel.lastTurn else { return }
                     Task {
@@ -373,13 +370,13 @@ struct ChatView: View {
                     }
                 },
                 onSelectPersona: { persona in
-                    let didSelect = await PersonaStore.shared.selectPersona(
+                    let didSelect = await viewModel.authStore.personas.selectPersona(
                         persona,
                         forCharacterID: viewModel.character?.externalID,
                         authenticatedClient: viewModel.authenticatedHTTPClient
                     )
                     if !didSelect {
-                        personaSelectionErrorMessage = PersonaStore.shared.personaSelectionErrorMessage
+                        personaSelectionErrorMessage = viewModel.authStore.personas.personaSelectionErrorMessage
                     }
                     return didSelect
                 },

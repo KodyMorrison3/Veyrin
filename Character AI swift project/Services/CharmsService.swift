@@ -31,20 +31,26 @@ struct CharmsService {
     }
     #endif
 
-    func loadTransactions(userID: String) async throws -> [CharmTransaction] {
-        let response: CharmTransactionsResponse = try await get(
-            userID: userID,
-            resource: "transactions"
-        )
-        return response.transactions
+    func loadTransactions(userID: String, forceRefresh: Bool = false) async throws -> [CharmTransaction] {
+        try await authorizationProvider.cached(key: "charms:transactions:\(userID)", ttl: 120, forceRefresh: forceRefresh,
+                                               cost: { $0.count * 512 + 256 }) {
+            let response: CharmTransactionsResponse = try await get(
+                userID: userID,
+                resource: "transactions"
+            )
+            return response.transactions
+        }
     }
 
-    func loadQuests(userID: String) async throws -> [CharmQuest] {
-        let response: CharmQuestsResponse = try await get(
-            userID: userID,
-            resource: "quests"
-        )
-        return response.quests
+    func loadQuests(userID: String, forceRefresh: Bool = false) async throws -> [CharmQuest] {
+        try await authorizationProvider.cached(key: "charms:quests:\(userID)", ttl: 300, forceRefresh: forceRefresh,
+                                               cost: { $0.count * 512 + 256 }) {
+            let response: CharmQuestsResponse = try await get(
+                userID: userID,
+                resource: "quests"
+            )
+            return response.quests
+        }
     }
 
     private func get<Response: Decodable & Sendable>(
