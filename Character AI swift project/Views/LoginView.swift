@@ -175,6 +175,8 @@ struct LoginView: View {
                 keychainError = "Character.AI rejected this session ID. Check that you copied the complete session token and try again."
             } catch SessionValidationError.unavailable {
                 keychainError = "Couldn't verify the session with Character.AI. Check your connection and try again."
+            } catch SessionValidationError.accountIDUnavailable {
+                keychainError = "Character.AI couldn't provide your account ID. Enter your User ID above and sign in again."
             } catch {
                 keychainError = "Couldn't save the session to Keychain. Please try again."
             }

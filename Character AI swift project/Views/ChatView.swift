@@ -322,6 +322,14 @@ struct ChatView: View {
 
             Spacer(minLength: 16)
 
+            if viewModel.isLoading {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle())
+                    .controlSize(.small)
+                    .frame(width: 16, height: 16)
+                    .accessibilityLabel("Loading conversation")
+                    .transition(.opacity)
+            }
         }
         .padding(.leading, 8)
         .padding(.trailing, 10)

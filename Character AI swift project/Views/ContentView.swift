@@ -215,9 +215,18 @@ private struct MainView: View {
                     )
                 }
             } label: {
-                Label("New Conversation", systemImage: "square.and.pencil")
+                HStack(spacing: 6) {
+                    Label("New Conversation", systemImage: "square.and.pencil")
+                    if isCreatingFreshConversation {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                            .controlSize(.small)
+                            .frame(width: 14, height: 14)
+                            .accessibilityLabel("Starting conversation")
+                    }
+                }
             }
-            .disabled(viewModel.isLoading || isCreatingFreshConversation || selectedConversation == nil)
+            .disabled(isCreatingFreshConversation || selectedConversation == nil)
             .help("New Conversation")
         }
 
@@ -244,25 +253,15 @@ private struct MainView: View {
         guard !isCreatingFreshConversation else { return false }
         isCreatingFreshConversation = true
         freshConversationError = nil
-        defer { isCreatingFreshConversation = false }
-
-        await viewModel.loadAvailableModels()
-        guard !viewModel.availableModels.isEmpty,
-              let modelType = viewModel.defaultModelType else {
-            freshConversationError = viewModel.availableModelsErrorMessage
-                ?? "No AI models are currently available."
-            return false
-        }
-
         guard let newChatID = await viewModel.createRealChat(
-            characterID: characterID,
-            preferredModelFallback: modelType
+            characterID: characterID
         ) else {
+            isCreatingFreshConversation = false
             freshConversationError = viewModel.errorMessage
                 ?? "Unable to start a conversation. Please try again."
             return false
         }
-
+        isCreatingFreshConversation = false
         let summary = ConversationSummary(
             id: newChatID,
             chatID: newChatID,
@@ -277,9 +276,14 @@ private struct MainView: View {
         selectedChatID = newChatID
         isShowingDiscover = false
         isShowingFeed = false
-        await viewModel.loadRecentChats()
-        if viewModel.recentChats.contains(where: { $0.chatID == newChatID }) {
-            pendingCreatedChat = nil
+        // Show the chat as soon as the server acknowledges creation. Refresh
+        // navigation metadata in the background so it cannot prolong the
+        // creation/loading state over the conversation.
+        Task { @MainActor in
+            await viewModel.loadRecentChats()
+            if viewModel.recentChats.contains(where: { $0.chatID == newChatID }) {
+                pendingCreatedChat = nil
+            }
         }
         return true
     }
@@ -385,8 +389,15 @@ private struct MainView: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 13, weight: .semibold))
+                        if isCreatingFreshConversation {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 14, height: 14)
+                                .accessibilityLabel("Starting conversation")
+                        } else {
+                            Image(systemName: "plus")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
                         Text("New chat")
                             .font(.system(size: 13, weight: .medium))
                     }
@@ -396,7 +407,7 @@ private struct MainView: View {
                     .glassSurface(.characterHeader, cornerRadius: 10)
                 }
                 .buttonStyle(QuietHoverButtonStyle())
-                .disabled(viewModel.isLoading || isCreatingFreshConversation || selectedConversation == nil)
+                .disabled(isCreatingFreshConversation || selectedConversation == nil)
                 .padding(.horizontal, 10)
 
                 userProfileControl

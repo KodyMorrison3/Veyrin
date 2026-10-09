@@ -128,18 +128,23 @@ final class ChatViewModel: ObservableObject {
             errorMessage = "Not authenticated."
             return nil
         }
+        guard !characterID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            errorMessage = "This character is missing its Character.AI ID. Please reopen the character and try again."
+            return nil
+        }
+        guard !authSession.userID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            errorMessage = "Your Character.AI account ID is unavailable. Sign out and sign in again, then retry."
+            return nil
+        }
 
         isLoading = true
         errorMessage = nil
-
-        defer {
-            isLoading = false
-        }
 
         let chatID = UUID().uuidString
         let sessionGeneration = authStore.sessionGeneration
 
         do {
+            defer { isLoading = false }
             var createdChat: Chat?
             let command = conversationService.makeCreateChatCommand(
                 characterID: characterID,
@@ -163,6 +168,7 @@ final class ChatViewModel: ObservableObject {
                 break
             }
             guard acknowledged else { throw NetworkError.invalidResponse }
+            isLoading = false
 
             chat = Chat(
                 chatID: createdChat?.chatID ?? chatID,
@@ -172,9 +178,7 @@ final class ChatViewModel: ObservableObject {
                 type: createdChat?.type ?? "TYPE_ONE_ON_ONE",
                 preferredModelType: createdChat?.preferredModelType ?? preferredModelFallback
             )
-
             return createdChat?.chatID ?? chatID
-
         } catch {
             chatLogger.error("Chat creation failed: \(error.localizedDescription, privacy: .private)")
 

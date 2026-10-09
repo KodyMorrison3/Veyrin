@@ -3,7 +3,7 @@
 //  Character AI swift project
 //
 //  Feature-local state for the User Profile section. Deliberately separate
-//  from ChatViewModel; holds only public profile data — never the session
+//  from ChatViewModel; holds only public profile data - never the session
 //  token.
 //
 
@@ -22,7 +22,7 @@ final class UserProfileViewModel: ObservableObject {
     @Published private(set) var state: LoadState = .idle
 
     private let service: UserProfileService
-    /// The signed-in username (typed session metadata — never the token).
+    /// The signed-in username (typed session metadata - never the token).
     let username: String
 
     init(service: UserProfileService, username: String) {

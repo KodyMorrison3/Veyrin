@@ -57,13 +57,14 @@ final class AuthStore: ObservableObject {
     }
 
     init(
-        storage: SessionStorage = KeychainStore(),
+        storage: SessionStorage? = nil,
         session: AuthSession? = nil
     ) {
-        self.storage = storage
+        self.storage = storage ?? KeychainStore()
         self.session = session
+        // Defer the Keychain read until restoreStoredSession so launch performs
+        // one protected-item access instead of probing in init and reading again.
         self.isRestoringSession = session == nil
-            && (try? storage.loadData(forKey: AuthStore.sessionKey)) != nil
     }
 
     /// Validates the token with the server, then persists and publishes the
@@ -73,17 +74,20 @@ final class AuthStore: ObservableObject {
         sessionToken: String,
         userID: String,
         username: String,
-        validator: SessionValidator = SessionValidator()
+        validator: SessionValidator? = nil
     ) async throws {
         signInAttempt += 1
         let attempt = signInAttempt
 
         do {
-            let account = try await validator.validate(sessionToken: sessionToken)
+            let account = try await (validator ?? SessionValidator()).validate(sessionToken: sessionToken)
             guard attempt == signInAttempt else { throw CancellationError() }
+            guard let resolvedUserID = account.userID ?? Self.nonEmpty(userID) else {
+                throw SessionValidationError.accountIDUnavailable
+            }
             try activate(AuthSession(
                 sessionToken: sessionToken,
-                userID: userID,
+                userID: resolvedUserID,
                 username: account.username ?? username
             ))
         } catch {
@@ -95,7 +99,7 @@ final class AuthStore: ObservableObject {
     /// Validates a session saved by an earlier launch before it can authenticate.
     /// A rejected session is removed; a session that could not be checked stays
     /// stored so the next launch can retry. Neither case authenticates.
-    func restoreStoredSession(validator: SessionValidator = SessionValidator()) async {
+    func restoreStoredSession(validator: SessionValidator? = nil) async {
         guard isRestoringSession, !hasStartedRestore else { return }
         hasStartedRestore = true
         defer { isRestoringSession = false }
@@ -111,10 +115,15 @@ final class AuthStore: ObservableObject {
         }
 
         do {
-            let account = try await validator.validate(sessionToken: stored.sessionToken)
+            let account = try await (validator ?? SessionValidator()).validate(sessionToken: stored.sessionToken)
+            guard let resolvedUserID = account.userID ?? Self.nonEmpty(stored.userID) else {
+                clearStoredSession()
+                authMessage = "Your Character.AI account ID is unavailable. Sign in again and provide your User ID."
+                return
+            }
             try activate(AuthSession(
                 sessionToken: stored.sessionToken,
-                userID: stored.userID,
+                userID: resolvedUserID,
                 username: account.username ?? stored.username
             ))
         } catch SessionValidationError.invalidSession {
@@ -141,6 +150,11 @@ final class AuthStore: ObservableObject {
               let current = session,
               authorization == "Token \(current.sessionToken)" else { return }
         clearSession()
+    }
+
+    private static func nonEmpty(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func activate(_ newSession: AuthSession) throws {

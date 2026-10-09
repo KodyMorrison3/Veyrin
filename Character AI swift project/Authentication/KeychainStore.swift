@@ -28,29 +28,35 @@ struct KeychainStore {
             kSecValueData as String: data
         ]
 
-        let status = SecItemAdd(
+        // Updating an existing item first avoids a failed SecItemAdd followed
+        // by SecItemUpdate. Both calls can trigger a Keychain authorization
+        // prompt on macOS, so the common save path should perform just one.
+        let updateStatus = SecItemUpdate(
+            query as CFDictionary,
+            attributes as CFDictionary
+        )
+        if updateStatus == errSecSuccess { return }
+        guard updateStatus == errSecItemNotFound else {
+            throw KeychainError.operationFailed(updateStatus)
+        }
+
+        let addStatus = SecItemAdd(
             query.merging(
                 attributes,
                 uniquingKeysWith: { _, new in new }
             ) as CFDictionary,
             nil
         )
-
-        if status == errSecDuplicateItem {
-            let updateStatus = SecItemUpdate(
-                query as CFDictionary,
-                attributes as CFDictionary
-            )
-
-            guard updateStatus == errSecSuccess else {
-                throw KeychainError.operationFailed(updateStatus)
+        if addStatus == errSecDuplicateItem {
+            // A concurrent save may have created the item after our update.
+            let retryStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+            guard retryStatus == errSecSuccess else {
+                throw KeychainError.operationFailed(retryStatus)
             }
-
             return
         }
-
-        guard status == errSecSuccess else {
-            throw KeychainError.operationFailed(status)
+        guard addStatus == errSecSuccess else {
+            throw KeychainError.operationFailed(addStatus)
         }
     }
     

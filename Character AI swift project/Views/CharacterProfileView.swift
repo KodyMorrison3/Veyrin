@@ -51,19 +51,21 @@ struct CharacterProfileView: View {
         .frame(minWidth: 460, minHeight: 520)
         .background { ShellEnvironmentalBackground() }
         .presentationBackground(.regularMaterial)
-        .safeAreaInset(edge: .top) {
+        .overlay(alignment: .topLeading) {
             if let onBack {
-                HStack {
-                    Button(action: onBack) {
-                        Label("Back", systemImage: "chevron.backward")
-                    }
-                    .buttonStyle(.borderless)
-                    Spacer()
+                Button(action: onBack) {
+                    Label("Back", systemImage: "chevron.backward")
+                        .font(.callout.weight(.medium))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .glassSurface(.floatingControl, cornerRadius: 16)
+                        .contentShape(Capsule())
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 10)
-                .background(.bar)
-                .onAppear { ProfileNavigationTrace.log("backBar appear id=\(characterID) tag=\(traceTag)") }
+                .buttonStyle(.plain)
+                .padding(.leading, 20)
+                .padding(.top, 12)
+                .accessibilityLabel("Back to previous character")
+                .onAppear { ProfileNavigationTrace.log("backButton appear id=\(characterID) tag=\(traceTag)") }
             }
         }
         .onAppear { ProfileNavigationTrace.log("view appear id=\(characterID) tag=\(traceTag)") }
@@ -166,8 +168,15 @@ struct CharacterProfileView: View {
                     }
                 } label: {
                     if isStartingConversation {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                                .controlSize(.small)
+                                .frame(width: 16, height: 16)
+                                .accessibilityLabel("Starting conversation")
+                            Text("Starting conversation…")
+                        }
+                        .frame(maxWidth: .infinity)
                     } else {
                         Label("Start Conversation", systemImage: "bubble.left.and.bubble.right")
                             .frame(maxWidth: .infinity)
