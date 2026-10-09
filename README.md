@@ -7,7 +7,7 @@
 **A native macOS client for Character.AI, built with Swift and SwiftUI.**
 
 ![macOS 27+](https://img.shields.io/badge/macOS-27%2B-111111?style=flat-square&logo=apple&logoColor=white)
-![Swift](https://img.shields.io/badge/Swift-6.4-F05138?style=flat-square&logo=swift&logoColor=white)
+![Swift](https://img.shields.io/badge/Swift-5-F05138?style=flat-square&logo=swift&logoColor=white)
 ![SwiftUI](https://img.shields.io/badge/SwiftUI-Native-007AFF?style=flat-square)
 ![Status](https://img.shields.io/badge/status-experimental-8A63D2?style=flat-square)
 
