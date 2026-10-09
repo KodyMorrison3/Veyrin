@@ -7,13 +7,10 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # GitHub's Xcode 27 runner image (public preview, arm64 only).
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
-
-      # The project targets macOS 27, so the runner needs an Xcode that ships the
-      # macOS 27 SDK. If the default Xcode is too old, select a newer one here, e.g.:
-      # - run: sudo xcode-select -s /Applications/Xcode_<version>.app
 
       - name: Build
         run: |
