@@ -1,21 +1,17 @@
 <div align="center">
 
-<img src="Assets/icon.png" width="128" height="128" alt="Veyrin logo">
+<img src="Assets/icon.png" width="112" height="112" alt="Veyrin app icon">
 
 # Veyrin
 
-**A native Character.AI client for macOS, built with Swift and SwiftUI.**
+**A native macOS client for Character.AI, built with Swift and SwiftUI.**
 
 ![macOS 27+](https://img.shields.io/badge/macOS-27%2B-111111?style=flat-square&logo=apple&logoColor=white)
-![Swift 6](https://img.shields.io/badge/Swift-6.4-F05138?style=flat-square&logo=swift&logoColor=white)
+![Swift](https://img.shields.io/badge/Swift-6.4-F05138?style=flat-square&logo=swift&logoColor=white)
 ![SwiftUI](https://img.shields.io/badge/SwiftUI-Native-007AFF?style=flat-square)
-![Status](https://img.shields.io/badge/status-in%20development-8A63D2?style=flat-square)
+![Status](https://img.shields.io/badge/status-experimental-8A63D2?style=flat-square)
 
-[Features](#features) · [Architecture](#architecture) · [Getting started](#getting-started) · [Roadmap](#roadmap)
-
-<br>
-
-<img src="https://placehold.co/1100x650/111111/777777?text=Veyrin+%E2%80%94+Screenshot+coming+soon" width="90%" alt="Veyrin screenshot (placeholder)">
+[Features](#features) · [Screenshots](#screenshots) · [Build from source](#build-from-source) · [Limitations](#limitations)
 
 </div>
 
@@ -23,135 +19,73 @@
 
 ## About
 
-Veyrin is an **unofficial** macOS client for [Character.AI](https://character.ai). It is not a web wrapper or an Electron app, and it doesn't embed a browser. It has its own native interface, authentication layer, networking layer, data models and realtime WebSocket implementation.
-
-| | |
-|---|---|
-| **Native** | SwiftUI from the ground up |
-| **Realtime** | WebSocket-based, streamed generation |
-| **Secure** | Keychain-backed sessions, App Sandbox |
-| **Lightweight** | No bundled browser engine |
+Veyrin is an **unofficial** macOS client for [Character.AI](https://character.ai). It uses a native SwiftUI interface rather than embedding a website in a browser view or shipping an Electron runtime. The app has separate authentication, networking, service and UI layers, including REST requests and WebSocket-based message streaming.
 
 > [!WARNING]
-> Veyrin is experimental. Character.AI has no public API for third-party clients, so backend changes can break functionality without warning.
-
-## Features
-
-**Conversations**
-
-- [x] Conversation history, recent conversations and chat previews
-- [x] Realtime, streamed message generation
-- [x] Candidate generation and selection
-- [x] Message editing and pinning
-- [x] Conversation creation and hiding
-
-**Native macOS**
-
-- [x] SwiftUI interface with native navigation
-- [x] Lazy conversation rendering
-- [x] Native image loading and macOS visual effects
-- [x] App Sandbox
-- [x] Keychain authentication
-
-**Networking**
-
-- [x] Authenticated REST requests
-- [x] WebSocket communication with streaming
-- [x] Per-request identifiers for matching async responses
-- [x] Paginated conversation loading
-- [x] Networking and data layer separate from the UI
-
-See the [roadmap](#roadmap) for what's planned.
+> Veyrin is an independent, experimental project. Character.AI does not provide a public API for third-party clients, so this app relies on undocumented endpoints. Changes on Character.AI's side can break features or sign-in without notice. Use it at your own discretion.
 
 ## Screenshots
 
-<div align="center">
+Screenshots of the conversation and character discovery interfaces will be added here.
 
-| Conversation | Character browsing |
-|:---:|:---:|
-| <img src="https://placehold.co/900x560/111111/666666?text=Conversation+View" width="100%" alt="Conversation view"> | <img src="https://placehold.co/900x560/111111/666666?text=Character+View" width="100%" alt="Character view"> |
+## Features
 
-*Placeholders. Real screenshots will be added once the UI and branding are finalised.*
+### Conversations
+- Conversation history, recent conversations and chat previews
+- Streamed message generation over WebSockets
+- Generate and select alternate message candidates
+- Edit and pin messages
+- Create and hide conversations
 
-</div>
+### Native macOS
+- SwiftUI interface with native navigation
+- Lazy conversation rendering
+- Native image loading and macOS visual effects
+- App Sandbox and Keychain-backed authentication
+
+### Networking
+- Authenticated REST requests
+- WebSocket communication for realtime generation
+- Request identifiers for matching asynchronous responses
+- Paginated conversation loading
+- Networking and data services separated from the UI
 
 ## Architecture
 
-The UI is kept separate from the networking implementation, so the SwiftUI layer never needs to know about protocol details. That makes it possible to change how data is fetched, cached or synchronised without reworking the interface.
+The UI is separated from the networking implementation. SwiftUI views and view models handle presentation and interaction, while service code manages API requests, conversations and streaming.
 
 ```mermaid
 flowchart TD
-    A["SwiftUI<br/>Views · Navigation · Conversation UI"] --> B["View Models<br/>UI state · streaming state · actions"]
+    A["SwiftUI Views<br/>Navigation · Conversation UI"] --> B["View Models<br/>UI state · Actions"]
     B --> C["Data / Service Layer<br/>Conversations · Turns · Characters"]
-    C --> D["REST<br/>History · Recent chats · Previews · Models"]
-    C --> E["WebSocket<br/>Generation · Candidates · Editing · Pins"]
+    C --> D["REST<br/>History · Recent chats · Previews"]
+    C --> E["WebSocket<br/>Generation · Candidates · Editing"]
     D --> F[("Character.AI backend")]
     E --> F
 ```
 
-### Protocol
+The protocol implementation is based on observing the existing Character.AI client because no public third-party API is available.
 
-The protocol layer is based on observing how the existing Character.AI client behaves, since no public API exists.
+## Security and privacy
 
-**REST** covers authentication, conversation history, recent conversations, chat previews, available models, conversation creation and management, pinned turns and hidden conversations.
-
-**WebSocket** covers realtime operations:
-
-`create_chat` · `create_and_generate_turn` · `generate_turn_candidate` · `edit_turn_candidate` · `update_primary_candidate` · `set_turn_pin`
-
-Each request carries its own identifier so asynchronous responses can be matched to the operation that started them.
-
-### Performance
-
-Current approach:
-
-- `URLSession` and `URLSessionWebSocketTask` for networking
-- `LazyVStack` with stable turn identities for conversation rendering
-- Lightweight data models and no polling loops
-
-Next optimisation work, guided by profiling in Instruments rather than assumptions: conversation caching → incremental sync → batched streaming updates → Markdown rendering → image caching → memory and GPU usage.
-
-### Local-first direction
-
-A longer-term goal is to make conversations open instantly: load local state, render immediately, then sync with the server and apply changes. Local conversation data will be kept separate from authentication credentials.
-
-## Security
-
-| Data | Stored in |
-|---|---|
-| Authentication secrets | macOS Keychain |
-| Conversation data | Local cache/database (planned) |
-| Temporary network state | Memory |
-
-- The app is sandboxed with only the network permissions it needs.
-- Protocol captures, credentials, HAR files and request dumps are excluded from version control.
+- Authentication secrets are stored in the macOS Keychain.
+- The app uses the macOS App Sandbox and requests outgoing network access.
 - Veyrin does not attempt to bypass authentication, CAPTCHA, rate limits, paywalls or other access controls.
+- Do not share session credentials, protocol captures or request dumps.
 
-## Project structure
+Conversation persistence is still evolving; do not assume all conversation data is stored in a durable local database.
 
-```text
-Character AI swift project/
-├── Authentication/   AuthStore, KeychainStore
-├── Networking/       ConversationService, WebSocket handling, API models
-├── Models/           Character, Conversation, Turn
-├── ViewModels/       ChatViewModel
-├── Views/            Chat, Characters, Conversations
-└── Resources/
-```
+## Build from source
 
-The structure is still evolving as the client moves toward persistent local state and a fuller data layer.
+### Requirements
 
-## Getting started
-
-Veyrin is a development project with no packaged release yet, so you'll build it from source.
-
-**Requirements**
-
-- A Mac running macOS 27 or later
-- Xcode with the macOS 27 SDK (Swift 6.4)
+- A Mac running **macOS 27 or later**
+- Xcode with the macOS 27 SDK
 - A Character.AI account
 
-**Build and run**
+The current deployment target is macOS 27. Earlier macOS versions are not supported by this build configuration.
+
+### Build and run
 
 ```bash
 git clone https://github.com/KodyMorrison3/Character-AI-native-swift-client-project.git
@@ -159,22 +93,21 @@ cd Character-AI-native-swift-client-project
 open "Character AI swift project.xcodeproj"
 ```
 
-Then select the app scheme in Xcode and press **Run** (⌘R).
+In Xcode, select the **Character AI swift project** scheme and press **Run** (⌘R).
 
-## Roadmap
+## Distribution status
 
-| Phase | Focus | Status |
-|---|---|---|
-| **1. Foundation** | REST, WebSockets, authentication, conversations, streaming, SwiftUI | ✅ Done |
-| **2. Experience** | Branding, navigation, keyboard shortcuts, error and loading states, session lifecycle | ✅ Done |
-| **3. Performance** | Streaming, caching, image processing, request optimisation | ✅ Done |
-| **4. Reliability** | WebSocket routing, cancellation, timeouts, session handling | ✅ Done |
-| **5. Local state** | Persistence, conversation cache, incremental sync, background refresh, image cache | 🚧 In progress |
-| **6. Release** | Production config, signing, app icon, documentation, distribution | ⬜ Planned |
+A locally tested DMG has been built, but a public release has not been published in this repository yet.
+
+The current DMG is **unsigned and not notarised**. macOS may display a security warning and block the app from opening by default. This build does not have Developer ID signing or Apple notarisation, so it should not be presented as a signed or notarised release.
+
+## Current status
+
+The core native interface, authentication flow, conversation features and streaming implementation are in place. Persistent local conversation state and further reliability work remain ongoing. Because the app depends on undocumented Character.AI behaviour, compatibility may change at any time.
 
 ## Disclaimer
 
-Veyrin is an unofficial, independent project. It is not affiliated with, endorsed by, or sponsored by Character.AI. Character.AI and its associated trademarks belong to their respective owners. Veyrin is intended for personal, educational and software-development purposes.
+Veyrin is an unofficial, independent project. It is not affiliated with, endorsed by, or sponsored by Character.AI. Character.AI and its associated trademarks belong to their respective owners.
 
 ---
 
