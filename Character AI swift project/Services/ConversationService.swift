@@ -416,8 +416,8 @@ struct ConversationService: Sendable {
         )
     }
 
-    func loadRecentChats() async throws -> [ConversationSummary] {
-        try await resources.value(for: "recent-chats", ttl: 30, cost: { $0.count * 2048 }) {
+    func loadRecentChats(forceRefresh: Bool = false) async throws -> [ConversationSummary] {
+        try await resources.value(for: "recent-chats", ttl: 30, forceRefresh: forceRefresh, cost: { $0.count * 2048 }) {
             try await fetchRecentChats()
         }
     }
@@ -432,7 +432,7 @@ struct ConversationService: Sendable {
         let response: RecentChatsResponse =
             try await authenticatedHTTPClient.get(url)
 
-        var summaries = response.chats.map { chat in
+        return response.chats.map { chat in
             ConversationSummary(
                 id: chat.chatID,
                 chatID: chat.chatID,
@@ -445,24 +445,6 @@ struct ConversationService: Sendable {
             )
         }
 
-        var seen: Set<String> = []
-        let characterIDs = response.chats.map(\.characterID).filter { seen.insert($0).inserted }
-        let previewGroups = try await previewGroups(characterIDs: characterIDs, tolerateFailures: true)
-        let indices = Dictionary(summaries.enumerated().map { ($0.element.chatID, $0.offset) },
-                                 uniquingKeysWith: { first, _ in first })
-        for preview in previewGroups.flatMap({ $0 }) {
-            guard let lastMessage = preview.lastMessage, let index = indices[preview.chatID] else { continue }
-            let conversation = summaries[index]
-            summaries[index] = ConversationSummary(
-                id: conversation.id, chatID: conversation.chatID,
-                characterID: conversation.characterID, characterName: conversation.characterName,
-                characterAvatarURI: conversation.characterAvatarURI,
-                lastUpdated: conversation.lastUpdated, state: conversation.state,
-                lastMessage: lastMessage
-            )
-        }
-
-        return summaries
     }
     
     func loadChatPreviews(
@@ -510,6 +492,11 @@ struct ConversationService: Sendable {
     }
 
     private func fetchPreview(characterID: String) async throws -> [ChatPreview] {
+        let generation = authenticatedHTTPClient.sessionGeneration
+        let slot = try await authenticatedHTTPClient.requestState.acquirePreview()
+        defer { authenticatedHTTPClient.requestState.releasePreview(slot) }
+        try Task.checkCancellation()
+        guard generation == authenticatedHTTPClient.sessionGeneration else { throw CancellationError() }
         var components = URLComponents(
             string: "https://neo.character.ai/chats/"
         )

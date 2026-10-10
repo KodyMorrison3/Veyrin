@@ -27,12 +27,22 @@ final class ChatViewModel: ObservableObject {
         turnsByKey[TurnKey(turnId: turnID, chatId: chatID)]
     }
     private func replaceTurns(_ states: [TurnState]) {
+        let keys = Set(states.map { TurnKey(turnId: $0.id, chatId: $0.turn.chatID) })
+        for key in turnsByKey.keys where !keys.contains(key) {
+            turnsByKey.removeValue(forKey: key)
+        }
+        for state in states {
+            let key = TurnKey(turnId: state.id, chatId: state.turn.chatID)
+            if turnsByKey[key] !== state { turnsByKey[key] = state }
+        }
+        guard states.count != turnStates.count || zip(states, turnStates).contains(where: { $0 !== $1 }) else { return }
         turnStates = states
-        turnsByKey = Dictionary(states.map { (TurnKey(turnId: $0.id, chatId: $0.turn.chatID), $0) },
-                                uniquingKeysWith: { _, latest in latest })
     }
     var lastTurnID: String? { turnStates.last?.id }
     @Published var recentChats: [ConversationSummary] = []
+    @Published private(set) var recentPreviewGeneration = UUID()
+    private var recentChatsLoadID: UUID?
+    private var recentChatsSession: UUID?
     @Published var isLoading = false
     @Published var isGenerating = false
     @Published var errorMessage: String?
@@ -71,8 +81,11 @@ final class ChatViewModel: ObservableObject {
     private var chatsAwaitingFilteredHistory: Set<String> = []
 
     private func mergeTurns(_ turns: [Turn], removeMissing: Bool, isServerConfirmed: Bool) {
-        let states = turns.map { turn -> TurnState in
-            if let state = turnState(turnID: turn.turnID, chatID: turn.chatID) {
+        var seen: Set<TurnKey> = []
+        let states = turns.compactMap { turn -> TurnState? in
+            let key = TurnKey(turnId: turn.turnID, chatId: turn.chatID)
+            guard seen.insert(key).inserted else { return nil }
+            if let state = turnsByKey[key] {
                 state.update(turn)
                 return state
             }
@@ -89,10 +102,58 @@ final class ChatViewModel: ObservableObject {
             replaceTurns(states)
         }
         else {
-            let incoming = Set(states.map(\.id))
-            replaceTurns(states + turnStates.filter { !incoming.contains($0.id) })
+            replaceTurns(states + turnStates.filter {
+                !seen.contains(TurnKey(turnId: $0.id, chatId: $0.turn.chatID))
+            })
         }
     }
+
+    /// The prefix is already in server order. Unconfirmed warm turns stay after
+    /// it until the last page, so a failed refresh cannot erase usable content.
+    private func mergeHistoryPage(_ page: [Turn], verifiedCount: inout Int) {
+        var additions: [TurnState] = []
+        for turn in page {
+            let key = TurnKey(turnId: turn.turnID, chatId: turn.chatID)
+            if let state = turnsByKey[key] {
+                state.update(turn)
+                additions.append(state)
+            } else {
+                let state = TurnState(turn)
+                turnsByKey[key] = state
+                additions.append(state)
+            }
+        }
+        guard !additions.isEmpty else { return }
+        if verifiedCount == turnStates.count {
+            turnStates.append(contentsOf: additions)
+        } else if verifiedCount + additions.count <= turnStates.count,
+                  zip(additions, turnStates[verifiedCount..<verifiedCount + additions.count]).allSatisfy({ $0 === $1 }) {
+            // A warm refresh whose ordering has not changed only updates rows.
+        } else {
+            // Only warm refreshes need to move previously visible rows. Cold
+            // pagination never filters or reconstructs the accumulated prefix.
+            let keys = Set(page.map { TurnKey(turnId: $0.turnID, chatId: $0.chatID) })
+            let tail = turnStates.dropFirst(verifiedCount).filter {
+                !keys.contains(TurnKey(turnId: $0.id, chatId: $0.turn.chatID))
+            }
+            turnStates.replaceSubrange(verifiedCount..., with: additions + tail)
+        }
+        verifiedCount += additions.count
+    }
+
+    private func finishHistory(verifiedCount: Int, chatID: String) {
+        if verifiedCount == 0, !turnStates.isEmpty, chatsAwaitingFilteredHistory.contains(chatID) { return }
+        if verifiedCount > 0 { chatsAwaitingFilteredHistory.remove(chatID) }
+        guard verifiedCount < turnStates.count else { return }
+        for state in turnStates.dropFirst(verifiedCount) {
+            turnsByKey.removeValue(forKey: TurnKey(turnId: state.id, chatId: state.turn.chatID))
+        }
+        turnStates.removeSubrange(verifiedCount...)
+    }
+
+    #if DEBUG
+    func checkFilteredHistory(chatID: String) { chatsAwaitingFilteredHistory.insert(chatID) }
+    #endif
 
     private func beginMutation(chatID: String) {
         historyLoadID = nil
@@ -170,6 +231,8 @@ final class ChatViewModel: ObservableObject {
             guard acknowledged else { throw NetworkError.invalidResponse }
             isLoading = false
 
+            conversationService.resources.invalidate("recent-chats")
+            conversationService.resources.invalidate("previews:\(characterID)")
             chat = Chat(
                 chatID: createdChat?.chatID ?? chatID,
                 creatorID: createdChat?.creatorID ?? authSession.userID,
@@ -310,17 +373,22 @@ final class ChatViewModel: ObservableObject {
         turnUpdateTasks.removeAll()
         pendingTurnUpdates.removeAll()
         do {
-            var snapshot = try await conversationService.loadHistory(
+            var verifiedCount = 0
+            try await conversationService.loadHistoryPages(
                 chatID: chatID, characterID: character.externalID, forceRefresh: forceRefresh
-            )
-            guard historyLoadID == loadID, activeChatID == chatID,
-                  authStore.sessionGeneration == session, !Task.isCancelled else { return }
-            mergeTurns(snapshot.turns, removeMissing: snapshot.isComplete, isServerConfirmed: true)
-            while snapshot.nextToken != nil {
-                snapshot = try await conversationService.loadNextHistoryPage(chatID: chatID, snapshot: snapshot)
-                guard historyLoadID == loadID, activeChatID == chatID,
-                      authStore.sessionGeneration == session, !Task.isCancelled else { return }
-                mergeTurns(snapshot.turns, removeMissing: snapshot.isComplete, isServerConfirmed: true)
+            ) { page, isFirst, isComplete in
+                guard self.historyLoadID == loadID, self.activeChatID == chatID,
+                      self.authStore.sessionGeneration == session, !Task.isCancelled else { throw CancellationError() }
+                if !isComplete { self.isLoading = true }
+                if isFirst {
+                    self.mergeTurns(page, removeMissing: isComplete, isServerConfirmed: true)
+                    verifiedCount = page.count
+                } else {
+                    self.mergeHistoryPage(page, verifiedCount: &verifiedCount)
+                    if isComplete {
+                        self.finishHistory(verifiedCount: verifiedCount, chatID: chatID)
+                    }
+                }
             }
         } catch is CancellationError { return }
         catch {
@@ -995,22 +1063,51 @@ final class ChatViewModel: ObservableObject {
         )
     }
 
-    func loadRecentChats() async {
+    func loadRecentChats(forceRefresh: Bool = false) async {
+        let loadID = UUID()
+        let session = authStore.sessionGeneration
+        recentChatsLoadID = loadID
         isLoading = true
         errorMessage = nil
-
+        defer { if recentChatsLoadID == loadID { isLoading = false; recentChatsLoadID = nil } }
         do {
-            recentChats =
-                try await conversationService.loadRecentChats()
-
-        } catch {
+            let loaded = try await conversationService.loadRecentChats(forceRefresh: forceRefresh)
+            guard recentChatsLoadID == loadID, authStore.sessionGeneration == session, !Task.isCancelled else { return }
+            recentChats = loaded
+            recentChatsSession = session
+            recentPreviewGeneration = UUID()
+        } catch is CancellationError { return }
+        catch {
+            guard recentChatsLoadID == loadID, authStore.sessionGeneration == session, !Task.isCancelled else { return }
+            errorMessage = error.localizedDescription
             chatLogger.error("Recent conversations request failed: \(error.localizedDescription, privacy: .private)")
-
-            errorMessage =
-                error.localizedDescription
         }
+    }
 
-        isLoading = false
+    func loadRecentPreview(characterID: String, generation: UUID) async {
+        let session = authStore.sessionGeneration
+        guard generation == recentPreviewGeneration, recentChatsSession == session,
+              recentChats.contains(where: { $0.characterID == characterID }) else { return }
+        do {
+            let previews = try await conversationService.loadChatPreviews(characterIDs: [characterID])
+            guard generation == recentPreviewGeneration, session == authStore.sessionGeneration, !Task.isCancelled else { return }
+            let messages = Dictionary(previews.filter { $0.characterID == characterID }.compactMap { preview in
+                preview.lastMessage.map { (preview.chatID, $0) }
+            }, uniquingKeysWith: { first, _ in first })
+            for index in recentChats.indices where recentChats[index].characterID == characterID {
+                let conversation = recentChats[index]
+                guard let message = messages[conversation.chatID], message != conversation.lastMessage else { continue }
+                recentChats[index] = ConversationSummary(
+                    id: conversation.id, chatID: conversation.chatID,
+                    characterID: conversation.characterID, characterName: conversation.characterName,
+                    characterAvatarURI: conversation.characterAvatarURI,
+                    lastUpdated: conversation.lastUpdated, state: conversation.state, lastMessage: message
+                )
+            }
+        } catch {
+            // Base rows stay usable when previews are unavailable. A row task
+            // retries only on its next lifetime or an explicit list refresh.
+        }
     }
 
     func disconnect() {

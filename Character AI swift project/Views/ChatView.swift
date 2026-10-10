@@ -67,12 +67,8 @@ struct ChatView: View {
                         .padding(.bottom, 16)
                         .frame(maxWidth: GlassMetrics.contentWidth)
                         .frame(maxWidth: .infinity)
-                        .animation(reduceMotion ? nil : GlassMetrics.interaction, value: viewModel.turnStates.count)
                     }
                     .scrollEdgeEffectHidden()
-                    .onChange(of: viewModel.turnStates.count) {
-                        scrollToBottom(using: proxy)
-                    }
                     .onChange(of: viewModel.lastTurnID) {
                         scrollToBottom(using: proxy)
                     }
@@ -738,7 +734,7 @@ struct ChatView: View {
     ) {
         guard let lastTurnID = viewModel.lastTurnID else { return }
 
-        withAnimation(reduceMotion ? nil : GlassMetrics.interaction) {
+        withAnimation(reduceMotion || viewModel.isLoading ? nil : GlassMetrics.interaction) {
             proxy.scrollTo(lastTurnID, anchor: .bottom)
         }
     }

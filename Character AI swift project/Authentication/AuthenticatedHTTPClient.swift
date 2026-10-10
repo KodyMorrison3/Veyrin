@@ -12,6 +12,7 @@ struct AuthenticatedHTTPClient {
     private let authStore: AuthStore
     var resources: ResourceCache { authStore.resources }
     var conversationCache: ResourceCache { authStore.conversations }
+    var requestState: ConversationRequestState { authStore.conversationRequests }
     var sessionGeneration: UUID { authStore.sessionGeneration }
     var accountID: String? { authStore.session?.userID }
 

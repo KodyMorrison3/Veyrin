@@ -7,6 +7,7 @@ struct ContentView: View {
         Group {
             if authStore.isAuthenticated {
                 MainView(authStore: authStore)
+                    .id(authStore.sessionGeneration)
             } else if authStore.isRestoringSession {
                 ProgressView("Checking saved session…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -276,7 +277,7 @@ private struct MainView: View {
         // navigation metadata in the background so it cannot prolong the
         // creation/loading state over the conversation.
         Task { @MainActor in
-            await viewModel.loadRecentChats()
+            await viewModel.loadRecentChats(forceRefresh: true)
             if viewModel.recentChats.contains(where: { $0.chatID == newChatID }) {
                 pendingCreatedChat = nil
             }
@@ -303,6 +304,14 @@ private struct MainView: View {
                 avatarCornerRadius: preferences.listAvatarCornerRadius,
                 isSelected: selectedChatID == conversation.chatID
             )
+            // List may prefetch rows. Tie demand to the row lifetime rather
+            // than assuming these callbacks describe exact viewport pixels.
+            .task(id: viewModel.recentPreviewGeneration) {
+                await viewModel.loadRecentPreview(
+                    characterID: conversation.characterID,
+                    generation: viewModel.recentPreviewGeneration
+                )
+            }
             .tag(conversation.chatID)
             .listItemTint(.monochrome)
             .foregroundStyle(.primary)
@@ -722,7 +731,7 @@ private struct MainView: View {
                     )
                     selectedChatID = newChatID
                     Task {
-                        await viewModel.loadRecentChats()
+                        await viewModel.loadRecentChats(forceRefresh: true)
                         if viewModel.recentChats.contains(where: { $0.chatID == newChatID }) {
                             pendingCopiedConversation = nil
                         }

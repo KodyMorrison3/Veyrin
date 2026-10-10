@@ -36,27 +36,36 @@ struct CachedAvatarView<Placeholder: View>: View {
 struct CachedRemoteImage<Content: View, Placeholder: View, Failure: View>: View {
     let url: URL
     let maxPixelSize: Int
+    private let cacheService: ImageCacheService
     let content: (Image) -> Content
     let placeholder: () -> Placeholder
     let failure: () -> Failure
 
     @State private var state: LoadState = .loading
 
+    private struct Request: Hashable {
+        let url: URL
+        let maxPixelSize: Int
+    }
+    private var request: Request { Request(url: url, maxPixelSize: maxPixelSize) }
+
     private enum LoadState {
         case loading
-        case loaded(URL, NSImage)
-        case failed(URL)
+        case loaded(Request, NSImage)
+        case failed(Request)
     }
 
     init(
         url: URL,
         maxPixelSize: Int,
+        cacheService: ImageCacheService = .shared,
         @ViewBuilder content: @escaping (Image) -> Content,
         @ViewBuilder placeholder: @escaping () -> Placeholder,
         @ViewBuilder failure: @escaping () -> Failure
     ) {
         self.url = url
         self.maxPixelSize = maxPixelSize
+        self.cacheService = cacheService
         self.content = content
         self.placeholder = placeholder
         self.failure = failure
@@ -65,19 +74,22 @@ struct CachedRemoteImage<Content: View, Placeholder: View, Failure: View>: View 
     var body: some View {
         Group {
             switch state {
-            case .loaded(let loadedURL, let image) where loadedURL == url:
+            case .loaded(let loadedRequest, let image) where loadedRequest == request:
                 content(Image(nsImage: image).resizable())
-            case .failed(let failedURL) where failedURL == url:
+            case .failed(let failedRequest) where failedRequest == request:
                 failure()
             default:
                 placeholder()
             }
         }
-        .task(id: url) {
+        .task(id: request) {
+            let requested = request
             state = .loading
-            let image = await ImageCacheService.shared.fetchImage(for: url, maxPixelSize: maxPixelSize)
+            let image = await cacheService.fetchImage(
+                for: requested.url, maxPixelSize: requested.maxPixelSize, pool: .media
+            )
             guard !Task.isCancelled else { return }
-            state = image.map { .loaded(url, $0) } ?? .failed(url)
+            state = image.map { .loaded(requested, $0) } ?? .failed(requested)
         }
     }
 }

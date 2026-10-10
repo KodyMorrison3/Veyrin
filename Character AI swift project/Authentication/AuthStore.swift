@@ -30,6 +30,7 @@ final class AuthStore: ObservableObject {
             sessionGeneration = UUID()
             resources.clear()
             conversations.clear()
+            conversationRequests.clear()
             personas.setAccount(session?.userID)
             CharacterMessageMarkdown.clearCache()
             CharacterMessageFormattingView.clearCache()
@@ -47,6 +48,7 @@ final class AuthStore: ObservableObject {
     let personas: PersonaStore
     let resources = ResourceCache()
     let conversations = ResourceCache(countLimit: 8, costLimit: 32 * 1024 * 1024)
+    let conversationRequests = ConversationRequestState()
 
     static let invalidSessionMessage = "Character.AI rejected this saved session. Sign in with a valid session token."
     static let unverifiedSessionMessage = "Couldn't verify your saved session. Check your connection and sign in again."
