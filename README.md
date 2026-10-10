@@ -141,19 +141,31 @@ It signs with a Developer ID certificate when one is available, otherwise the lo
 
 ## Status
 
-Veyrin is in active development. The native interface, authentication, conversation features and streamed generation are implemented. The app has been built and tested locally, but it is not yet distributed as a public release.
+Veyrin is at **v0.1.0**, an early experimental release. The versioned Release build and arm64 DMG have been built and checked locally. This is a first milestone, not a stable release: the app still relies on undocumented Character.AI endpoints and has known feature limitations.
 
-- [x] Native macOS interface and navigation
-- [x] Authentication and Keychain-backed credential storage
-- [x] Conversation history and chat management
-- [x] Streamed message generation and candidate handling
-- [ ] Local conversation persistence and caching
-- [ ] Offline-first loading
+- **App version:** 0.1.0 (build 1)
+- **Platform:** Apple Silicon, macOS 27 or later
+- **Package:** [`build/Veyrin-0.1.0.dmg`](build/Veyrin-0.1.0.dmg)
+- **Package signature:** ad-hoc; not notarised
+- **Validation:** offline regression checks and Debug/Release builds pass; the packaged DMG was mounted and verified locally
+- **Distribution:** local testing only; no public release or update channel
+
+You may need to approve the app under **System Settings → Privacy & Security** the first time you open it. Avoid using an account you cannot afford to lose access to; third-party clients carry account risk under Character.AI's rules.
+
+### Project stage
+
+- [x] Experimental v0.1.0 Release build and local DMG
+- [x] Core conversation, authentication, and streamed generation features
+- [ ] Stable release readiness and broader user testing
+- [ ] Developer ID signing and notarisation
+- [ ] Public distribution and update channel
+- [ ] Local conversation persistence and offline-first loading
 - [ ] Expanded keyboard shortcuts
-- [ ] Further reliability and performance work
-- [ ] Signed and notarised distribution
+- [ ] Further performance and reliability work
 
-**DMG status:** A DMG has been built and tested locally, but no public release has been published. The image is **not signed with a Developer ID certificate and not notarised**, because both require a paid Apple Developer Program membership. macOS therefore treats the app as unidentified and blocks the first launch until you allow it, either from **System Settings → Privacy & Security** or by Control-clicking the app and choosing **Open**. The DMG is arm64 only and requires macOS 27, so it does not run on Intel Macs or earlier releases. Building from source is the recommended route at this stage.
+The offline regression suite uses synthetic fixtures. It does not establish live authenticated behaviour, battery use, GPU performance, or a measured real-world performance gain. Those still need testing and Instruments profiling before making such claims.
+
+Previous local DMG files may be kept in `build/` for comparison; the current README package link points to v0.1.0.
 
 ## Licence
 
