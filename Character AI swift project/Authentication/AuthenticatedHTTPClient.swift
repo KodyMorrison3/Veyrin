@@ -17,7 +17,7 @@ struct AuthenticatedHTTPClient {
     var accountID: String? { authStore.session?.userID }
 
     init(
-        session: URLSession = .shared,
+        session: URLSession = CharacterAISession.shared,
         authStore: AuthStore
     ) {
         self.session = session
@@ -194,6 +194,9 @@ struct AuthenticatedHTTPClient {
     private func addAuthentication(
         to request: inout URLRequest
     ) throws -> UUID {
+        guard CharacterAISession.allowsAuthentication(to: request.url) else {
+            throw NetworkError.invalidURL
+        }
         guard let session = authStore.session else {
             throw NetworkError.unauthenticated
         }

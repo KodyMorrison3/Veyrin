@@ -28,7 +28,7 @@ struct ValidatedAccount: Equatable, Sendable {
 struct SessionValidator {
     private let session: URLSession
 
-    nonisolated init(session: URLSession = .shared) {
+    nonisolated init(session: URLSession = CharacterAISession.shared) {
         self.session = session
     }
 

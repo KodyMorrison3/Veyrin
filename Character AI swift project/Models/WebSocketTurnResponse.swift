@@ -25,7 +25,8 @@ nonisolated struct WebSocketTurnResponse: Decodable, Sendable {
         WebSocketErrorResponse(
             command: command,
             requestID: requestID ?? "",
-            comment: errorComment ?? "Character.AI rejected the request.",
+            // Server comments can echo submitted content; don't put them in UI errors or logs.
+            comment: "Character.AI rejected the request (code \(errorCode ?? 0)).",
             errorCode: errorCode ?? 0,
             subCode: subCode,
             retryAfterSeconds: retryAfterSeconds

@@ -37,7 +37,7 @@ struct DiscoverService {
     private let authorizationProvider: AuthorizationProvider
 
     init(
-        session: URLSession = .shared,
+        session: URLSession = CharacterAISession.shared,
         authStore: AuthStore
     ) {
         self.session = session
@@ -47,7 +47,7 @@ struct DiscoverService {
     #if DEBUG
     /// Test-only fixed-token provider. Production code should use the
     /// `authStore` initializer; contract tests must not touch the Keychain.
-    init(session: URLSession = .shared, fixedToken: String) {
+    init(session: URLSession = CharacterAISession.shared, fixedToken: String) {
         self.session = session
         self.authorizationProvider = .fixedToken(fixedToken)
     }

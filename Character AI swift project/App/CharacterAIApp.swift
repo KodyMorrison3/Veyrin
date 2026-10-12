@@ -12,7 +12,8 @@ struct CharacterAIApp: App {
     @StateObject private var authStore: AuthStore
 
     init() {
-        let authStore = AuthStore()
+        // Release smoke tests can show the signed-out UI without reading saved credentials.
+        let authStore = AuthStore(restoreSession: !CommandLine.arguments.contains("--no-session-restore"))
 
         _authStore = StateObject(wrappedValue: authStore)
     }

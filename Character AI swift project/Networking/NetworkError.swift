@@ -24,10 +24,10 @@ extension NetworkError: LocalizedError {
             return "The server returned HTTP \(statusCode)."
 
         case .decodingError(let error):
-            return "Failed to decode the server response: \(error.localizedDescription)\(Self.decodingPathDetail(error))"
+            return "Failed to decode the server response.\(Self.decodingPathDetail(error))"
 
-        case .requestFailed(let error):
-            return "The network request failed: \(error.localizedDescription)"
+        case .requestFailed:
+            return "The network request failed. Check your connection and try again."
 
         case .unauthenticated:
             return "Your Character.AI session has expired."

@@ -35,7 +35,7 @@ struct CharacterSearchService {
     private let authorizationProvider: DiscoverService.AuthorizationProvider
 
     init(
-        session: URLSession = .shared,
+        session: URLSession = CharacterAISession.shared,
         authStore: AuthStore
     ) {
         self.session = session
@@ -46,7 +46,7 @@ struct CharacterSearchService {
     /// Test-only fixed-token provider. Production code should use the
     /// `authStore` initializer; contract tests must not touch the Keychain.
     init(
-        session: URLSession = .shared,
+        session: URLSession = CharacterAISession.shared,
         fixedToken: String
     ) {
         self.session = session
@@ -121,9 +121,9 @@ struct CharacterSearchService {
             guard let entry = batch.entries.first else {
                 throw NetworkError.invalidResponse
             }
-            if let errorBody = entry.error {
+            if entry.error != nil {
                 throw NetworkError.serverMessage(
-                    errorBody.json?.message ?? "Search request failed."
+                    "Character.AI rejected the search request."
                 )
             }
             guard let result = entry.result else {

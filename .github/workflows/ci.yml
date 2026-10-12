@@ -4,18 +4,59 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    # GitHub's Xcode 27 runner image (public preview, arm64 only).
+    # Xcode 27 / macOS 27 public-preview image; arm64 only.
     runs-on: xcode-27
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build
+      - name: Verify toolchain
+        shell: bash
         run: |
-          xcodebuild build \
-            -project "Character AI swift project.xcodeproj" \
-            -scheme "Character AI swift project" \
-            -destination "platform=macOS" \
-            CODE_SIGNING_ALLOWED=NO
+          set -euo pipefail
+          xcodebuild -version
+          xcrun swift --version
+          sdk=$(xcrun --sdk macosx --show-sdk-version)
+          test "${sdk%%.*}" -ge 27
+          test "$(uname -m)" = arm64
+
+      - name: Build Debug and Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          for configuration in Debug Release; do
+            xcodebuild build \
+              -project "Character AI swift project.xcodeproj" \
+              -scheme "Character AI swift project" \
+              -configuration "$configuration" \
+              -destination 'platform=macOS,arch=arm64' \
+              -derivedDataPath "$RUNNER_TEMP/VeyrinDerivedData" \
+              ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+              SWIFT_STRICT_CONCURRENCY=complete CODE_SIGNING_ALLOWED=NO
+          done
+
+      - name: Offline regression checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash PerformanceChecks/run-checks.sh
+          bash Verification/run-checks.sh
+          bash Verification/auth/run-auth-checks.sh
+          bash Verification/decode-diagnostics/run-decode-diagnostics-checks.sh
+          bash Verification/model-default/run-model-default-checks.sh
+          bash Verification/run-profile-navigation-checks.sh
+
+      - name: Script syntax and whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n Scripts/package-dmg.sh
+          python3 -m py_compile Scripts/audit-history.py
+          git diff --check

@@ -65,7 +65,8 @@ final class AuthStore: ObservableObject {
     init(
         storage: SessionStorage? = nil,
         session: AuthSession? = nil,
-        personas: PersonaStore? = nil
+        personas: PersonaStore? = nil,
+        restoreSession: Bool = true
     ) {
         self.storage = storage ?? KeychainStore()
         self.session = session
@@ -73,7 +74,7 @@ final class AuthStore: ObservableObject {
         self.personas.setAccount(session?.userID)
         // Defer the Keychain read until restoreStoredSession so launch performs
         // one protected-item access instead of probing in init and reading again.
-        self.isRestoringSession = session == nil
+        self.isRestoringSession = session == nil && restoreSession
     }
 
     /// Validates the token with the server, then persists and publishes the

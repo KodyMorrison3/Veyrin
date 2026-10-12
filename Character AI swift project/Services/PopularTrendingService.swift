@@ -23,7 +23,7 @@ struct PopularTrendingService {
     private let authorizationProvider: DiscoverService.AuthorizationProvider
 
     init(
-        session: URLSession = .shared,
+        session: URLSession = CharacterAISession.shared,
         authStore: AuthStore
     ) {
         self.session = session
@@ -34,7 +34,7 @@ struct PopularTrendingService {
     /// Test-only fixed-token provider. Production code should use the
     /// `authStore` initializer; contract tests must not touch the Keychain.
     init(
-        session: URLSession = .shared,
+        session: URLSession = CharacterAISession.shared,
         fixedToken: String
     ) {
         self.session = session

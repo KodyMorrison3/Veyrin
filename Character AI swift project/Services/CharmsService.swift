@@ -13,7 +13,7 @@ struct CharmsService {
     private let authorizationProvider: DiscoverService.AuthorizationProvider
 
     init(
-        session: URLSession = .shared,
+        session: URLSession = CharacterAISession.shared,
         authStore: AuthStore
     ) {
         self.session = session
@@ -23,7 +23,7 @@ struct CharmsService {
     #if DEBUG
     /// Test-only fixed-token provider. Production uses the stored app session.
     init(
-        session: URLSession = .shared,
+        session: URLSession = CharacterAISession.shared,
         fixedToken: String
     ) {
         self.session = session

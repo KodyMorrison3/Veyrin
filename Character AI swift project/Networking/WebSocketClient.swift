@@ -2,6 +2,13 @@ import Foundation
 import OSLog
 
 nonisolated private final class WebSocketDelegate: NSObject, URLSessionWebSocketDelegate, Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+
     let event: @Sendable (URLSessionWebSocketTask, Bool, Error?) -> Void
 
     init(event: @escaping @Sendable (URLSessionWebSocketTask, Bool, Error?) -> Void) {
@@ -44,7 +51,7 @@ actor WebSocketClient: WebSocketTransport {
     private var connectionWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     private(set) var state: State = .disconnected
 
-    init(session: URLSession = .shared) {
+    init(session: URLSession = CharacterAISession.shared) {
         self.session = session
     }
 
@@ -132,7 +139,7 @@ actor WebSocketClient: WebSocketTransport {
             }
         } catch {
             fail(task, error: error)
-            Self.logger.error("WebSocket receive failed: \(error.localizedDescription, privacy: .private)")
+            Self.logger.error("WebSocket receive failed")
             throw error
         }
     }

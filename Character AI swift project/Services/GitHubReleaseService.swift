@@ -53,7 +53,7 @@ nonisolated struct GitHubRelease: Decodable, Sendable, Identifiable {
 
 nonisolated struct GitHubReleaseService {
     private let session: URLSession
-    private let repository = "KodyMorrison3/Character-AI-native-swift-client-project"
+    private let repository = "KodyMorrison3/Veyrin"
 
     nonisolated init(session: URLSession = .shared) {
         self.session = session

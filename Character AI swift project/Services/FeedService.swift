@@ -31,13 +31,13 @@ struct FeedService {
         }
     }
 
-    init(session: URLSession = .shared, authStore: AuthStore) {
+    init(session: URLSession = CharacterAISession.shared, authStore: AuthStore) {
         self.session = session
         authorizationProvider = .authStore(authStore)
     }
 
     #if DEBUG
-    init(session: URLSession = .shared, fixedToken: String) {
+    init(session: URLSession = CharacterAISession.shared, fixedToken: String) {
         self.session = session
         authorizationProvider = .fixedToken(fixedToken)
     }

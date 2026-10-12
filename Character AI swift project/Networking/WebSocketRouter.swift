@@ -43,7 +43,7 @@ final class WebSocketRouter {
                         // operations awaiting responses — surfaced as an error,
                         // never as a valid turn — but it must not tear down the
                         // socket and routing for every other pending operation.
-                        Self.logger.error("Undecodable WebSocket frame: \(error.localizedDescription, privacy: .private)")
+                        Self.logger.error("Undecodable WebSocket frame")
                         self?.failPendingOperations(NetworkError.decodingError(error), generation: generation)
                         continue
                     }
