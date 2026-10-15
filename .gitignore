@@ -25,7 +25,6 @@ xcuserdata/
 /Docs/
 /Tests/
 /CacheChecks/
-/PerformanceChecks/
 
 # Swift Package Manager
 .build/

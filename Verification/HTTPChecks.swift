@@ -97,9 +97,13 @@ func runHTTPChecks() async throws {
     // assertions are absolute, so start from a clean slate.
     StubHTTP.state.withLock { state in
         state.counts = [:]
+        state.active = 0
+        state.maximumActive = 0
+        state.cancellations = 0
         state.status = 200
         state.directChat = false
         state.missingPins = false
+        state.emptyTurns = false
         state.copyRequestBody = nil
     }
     let auth = AuthStore(session: AuthSession(sessionToken: "synthetic", userID: "user", username: "name"))
@@ -144,9 +148,19 @@ func runHTTPChecks() async throws {
 
     let search = DiscoverViewModel(service: DiscoverService(session: session, fixedToken: "synthetic"), searchService: CharacterSearchService(session: session, fixedToken: "synthetic"))
     search.searchQuery = "first"
-    try await Task.sleep(for: .milliseconds(350))
+    for _ in 0..<400 {
+        if StubHTTP.state.withLock({ $0.counts.contains(where: { $0.key.contains("autocomplete") && $0.value >= 1 }) }) {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
     search.searchQuery = "second"
-    try await Task.sleep(for: .milliseconds(650))
+    for _ in 0..<500 {
+        if search.suggestions == ["second"] && StubHTTP.state.withLock({ $0.cancellations }) >= 1 {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
     precondition(search.suggestions == ["second"])
     precondition(StubHTTP.state.withLock { $0.cancellations } >= 1)
     search.searchQuery = "x"
