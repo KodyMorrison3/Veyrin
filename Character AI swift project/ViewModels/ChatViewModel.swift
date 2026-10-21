@@ -71,6 +71,8 @@ final class ChatViewModel: ObservableObject {
     private var pendingTurnUpdates: [String: Turn] = [:]
     private var turnUpdateTasks: [String: Task<Void, Never>] = [:]
     private var characterHistoryLoadID: UUID?
+    private var factsLoadID: UUID?
+    private var votedStatusLoadID: UUID?
     private var activeChatID: String?
     private var historyLoadID: UUID?
     private var characterLoadID: UUID?
@@ -287,19 +289,33 @@ final class ChatViewModel: ObservableObject {
 
     /// Loads conversation facts from GET https://neo.character.ai/chat/{chatID}/conversation-facts/
     func loadFacts(chatID: String) async {
+        let loadID = UUID()
+        let session = authStore.sessionGeneration
+        factsLoadID = loadID
+        conversationFacts = [:]
         isLoadingFacts = true
         conversationFactsErrorMessage = nil
-        defer { isLoadingFacts = false }
+        defer {
+            if factsLoadID == loadID {
+                factsLoadID = nil
+                isLoadingFacts = false
+            }
+        }
         do {
             let response = try await conversationService.loadConversationFacts(chatID: chatID)
+            guard factsLoadID == loadID, authStore.sessionGeneration == session, !Task.isCancelled else { return }
+            conversationFacts = [:]
             var mapped: [String: [ConversationFact]] = [:]
             if let factsDict = response.conversationFacts {
                 for (entity, container) in factsDict {
                     mapped[entity] = container.facts
                 }
             }
-            self.conversationFacts = mapped
+            conversationFacts = mapped
+        } catch is CancellationError {
+            return
         } catch {
+            guard factsLoadID == loadID, authStore.sessionGeneration == session, !Task.isCancelled else { return }
             conversationFactsErrorMessage = error.localizedDescription
             chatLogger.error("Conversation facts request failed: \(error.localizedDescription, privacy: .private)")
         }
@@ -307,10 +323,19 @@ final class ChatViewModel: ObservableObject {
 
     /// Loads character voted state from GET https://neo.character.ai/character/v1/character_voted/{characterID}/voted
     func loadCharacterVotedStatus(characterID: String) async {
+        let loadID = UUID()
+        let session = authStore.sessionGeneration
+        votedStatusLoadID = loadID
+        isCharacterVoted = false
+        defer { if votedStatusLoadID == loadID { votedStatusLoadID = nil } }
         do {
             let voted = try await conversationService.loadCharacterVoted(characterID: characterID)
-            self.isCharacterVoted = voted
+            guard votedStatusLoadID == loadID, authStore.sessionGeneration == session, !Task.isCancelled else { return }
+            isCharacterVoted = voted
+        } catch is CancellationError {
+            return
         } catch {
+            guard votedStatusLoadID == loadID, authStore.sessionGeneration == session, !Task.isCancelled else { return }
             chatLogger.error("Character vote-status request failed: \(error.localizedDescription, privacy: .private)")
         }
     }
@@ -332,14 +357,17 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
+        let session = authStore.sessionGeneration
         do {
             let chats = try await conversationService.loadCharacterRecentChats(
                 characterID: characterID
             )
-            guard characterHistoryLoadID == loadID else { return }
+            guard characterHistoryLoadID == loadID, authStore.sessionGeneration == session, !Task.isCancelled else { return }
             recentCharacterChats = chats
+        } catch is CancellationError {
+            return
         } catch {
-            guard characterHistoryLoadID == loadID else { return }
+            guard characterHistoryLoadID == loadID, authStore.sessionGeneration == session, !Task.isCancelled else { return }
             characterHistoryErrorMessage = error.localizedDescription
             chatLogger.error("Character history request failed: \(error.localizedDescription, privacy: .private)")
         }
@@ -765,23 +793,30 @@ final class ChatViewModel: ObservableObject {
     }
 
     func loadAvailableModels() async {
+        guard !isLoadingAvailableModels else { return }
+        let session = authStore.sessionGeneration
         isLoadingAvailableModels = true
         availableModelsErrorMessage = nil
         startConversationErrorMessage = nil
-        defer {
-            isLoadingAvailableModels = false
-        }
+        defer { isLoadingAvailableModels = false }
 
         // Loaded before the models are published, so the default is ready
         // whenever the model list changes.
-        subscriptionTier = await loadSubscriptionTier()
+        let tier = await loadSubscriptionTier()
+        guard authStore.sessionGeneration == session, !Task.isCancelled else { return }
+        subscriptionTier = tier
 
         do {
-            availableModels = try await conversationService.loadAvailableModels()
+            let models = try await conversationService.loadAvailableModels()
+            guard authStore.sessionGeneration == session, !Task.isCancelled else { return }
+            availableModels = models
             if availableModels.isEmpty {
                 availableModelsErrorMessage = "No AI models are currently available."
             }
+        } catch is CancellationError {
+            return
         } catch {
+            guard authStore.sessionGeneration == session, !Task.isCancelled else { return }
             availableModelsErrorMessage = error.localizedDescription
         }
     }

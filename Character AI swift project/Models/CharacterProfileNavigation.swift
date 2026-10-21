@@ -7,12 +7,10 @@ struct CharacterProfileNavigation: Equatable {
     var canGoBack: Bool { !backStack.isEmpty }
 
     mutating func show(_ characterID: String) {
-        ProfileNavigationTrace.beginOperation("show", characterID: characterID, stack: backStack)
         currentCharacterID = characterID
     }
 
     mutating func openSimilar(_ characterID: String) {
-        ProfileNavigationTrace.beginOperation("openSimilar", characterID: characterID, stack: backStack)
         if let currentCharacterID {
             backStack.append(currentCharacterID)
         }
@@ -21,12 +19,10 @@ struct CharacterProfileNavigation: Equatable {
 
     mutating func back() {
         guard let previous = backStack.popLast() else { return }
-        ProfileNavigationTrace.beginOperation("back", characterID: previous, stack: backStack)
         currentCharacterID = previous
     }
 
     mutating func dismiss() {
-        ProfileNavigationTrace.beginOperation("dismiss", characterID: currentCharacterID, stack: backStack)
         self = CharacterProfileNavigation()
     }
 }

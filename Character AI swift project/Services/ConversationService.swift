@@ -74,6 +74,7 @@ struct ConversationService: Sendable {
     let authenticatedHTTPClient: AuthenticatedHTTPClient
     var cache: ResourceCache { authenticatedHTTPClient.conversationCache }
     var resources: ResourceCache { authenticatedHTTPClient.resources }
+    var sessionGeneration: UUID { authenticatedHTTPClient.sessionGeneration }
 
     init(authenticatedHTTPClient: AuthenticatedHTTPClient) {
         self.authenticatedHTTPClient = authenticatedHTTPClient
@@ -95,13 +96,14 @@ struct ConversationService: Sendable {
     /// Fetches verified conversation facts (Memory) for the current chat from:
     /// `GET https://neo.character.ai/chat/{chatID}/conversation-facts/`
     func loadConversationFacts(chatID: String, forceRefresh: Bool = false) async throws -> ConversationFactsResponse {
+        let encodedChatID = Self.encodedPathComponent(chatID)
         guard let url = URL(
-            string: "https://neo.character.ai/chat/\(chatID)/conversation-facts/"
+            string: "https://neo.character.ai/chat/\(encodedChatID)/conversation-facts/"
         ) else {
             throw NetworkError.invalidURL
         }
 
-        return try await resources.value(for: "facts:\(chatID)", ttl: 120, forceRefresh: forceRefresh, cost: { _ in 2048 }) {
+        return try await resources.value(for: "facts:\(encodedChatID)", ttl: 120, forceRefresh: forceRefresh, cost: { _ in 2048 }) {
             try await authenticatedHTTPClient.get(url)
         }
     }
@@ -109,13 +111,14 @@ struct ConversationService: Sendable {
     /// Fetches verified character voted status from:
     /// `GET https://neo.character.ai/character/v1/character_voted/{characterID}/voted`
     func loadCharacterVoted(characterID: String, forceRefresh: Bool = false) async throws -> Bool {
+        let encodedCharacterID = Self.encodedPathComponent(characterID)
         guard let url = URL(
-            string: "https://neo.character.ai/character/v1/character_voted/\(characterID)/voted"
+            string: "https://neo.character.ai/character/v1/character_voted/\(encodedCharacterID)/voted"
         ) else {
             throw NetworkError.invalidURL
         }
 
-        return try await resources.value(for: "voted:\(characterID)", ttl: 300, forceRefresh: forceRefresh, cost: { _ in 64 }) {
+        return try await resources.value(for: "voted:\(encodedCharacterID)", ttl: 300, forceRefresh: forceRefresh, cost: { _ in 64 }) {
             let response: CharacterVotedResponse = try await authenticatedHTTPClient.get(url)
             return response.voted
         }
@@ -123,6 +126,11 @@ struct ConversationService: Sendable {
 
     /// Fetches chat history for a character from the HAR-observed list endpoint.
     /// This `GET /chats/` response contains `{ "chats": [...] }` without pagination metadata.
+    private static func encodedPathComponent(_ value: String) -> String {
+        let allowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/?#"))
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+    }
+
     func loadCharacterRecentChats(characterID: String) async throws -> [ChatPreview] {
         try await loadChatPreviews(characterIDs: [characterID])
     }
@@ -133,10 +141,8 @@ struct ConversationService: Sendable {
         characterID: String
     ) async throws -> ConversationCopySource? {
         let previews = try await loadChatPreviews(characterIDs: [characterID])
-        ProfileNavigationTrace.logCopySource("copy-source previews=\(previews.count) matching=\(previews.filter { $0.characterID == characterID }.count)")
 
         for preview in previews where preview.characterID == characterID {
-            ProfileNavigationTrace.logCopySource("copy-source chat=\(preview.chatID) previewTurns=\(preview.previewTurns?.count ?? -1) withCandidates=\(preview.previewTurns?.filter { !$0.candidates.isEmpty }.count ?? -1)")
             let previewSource = preview.previewTurns?.last(where: {
                 !$0.candidates.isEmpty
             }).map { turn in
@@ -154,7 +160,6 @@ struct ConversationService: Sendable {
             }
 
             let turns = try await loadAllTurns(chatID: preview.chatID)
-            ProfileNavigationTrace.logCopySource("copy-source chat=\(preview.chatID) fullTurns=\(turns.count) withCandidates=\(turns.filter { !$0.candidates.isEmpty }.count)")
             if let latestTurn = turns.last(where: { !$0.candidates.isEmpty }) {
                 return ConversationCopySource(
                     chatID: preview.chatID,

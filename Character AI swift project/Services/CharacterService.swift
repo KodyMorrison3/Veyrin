@@ -3,6 +3,8 @@ import Foundation
 struct CharacterService {
     private let httpClient: AuthenticatedHTTPClient
 
+    var sessionGeneration: UUID { httpClient.sessionGeneration }
+
     init(httpClient: AuthenticatedHTTPClient) {
         self.httpClient = httpClient
     }

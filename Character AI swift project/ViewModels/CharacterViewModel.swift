@@ -10,12 +10,12 @@ final class CharacterViewModel: ObservableObject {
         case failed(String)
     }
 
-    @Published private(set) var profileState: LoadState<CharacterProfile> = .idle {
-        didSet { ProfileNavigationTrace.log("profile state=\(Self.describe(profileState))") }
-    }
+    @Published private(set) var profileState: LoadState<CharacterProfile> = .idle
     @Published private(set) var similarState: LoadState<[SimilarCharacter]> = .idle
 
     private let service: CharacterService
+    private var loadID: UUID?
+    private var sessionGeneration: UUID?
 
     init(service: CharacterService) {
         self.service = service
@@ -27,41 +27,38 @@ final class CharacterViewModel: ObservableObject {
         ))
     }
 
-    private static func describe(_ state: LoadState<CharacterProfile>) -> String {
-        switch state {
-        case .idle: "idle"
-        case .loading: "loading"
-        case .loaded(let profile): "loaded:\(profile.externalID)"
-        case .failed: "failed"
-        }
-    }
-
     func load(externalID: String) async {
-        ProfileNavigationTrace.log("load start requested=\(externalID)")
-        defer { ProfileNavigationTrace.log("load end requested=\(externalID) cancelled=\(Task.isCancelled)") }
+        let id = UUID()
+        let session = service.sessionGeneration
+        loadID = id
+        sessionGeneration = session
         profileState = .loading
         similarState = .loading
 
         async let profile = service.loadProfile(externalID: externalID)
         async let similar = service.loadSimilarCharacters(externalID: externalID)
 
-        // Navigating to another character cancels this load; a cancelled load must
-        // not overwrite the state of the character that replaced it.
+        // Task cancellation is best-effort; the generation guard also prevents
+        // a late response from replacing state for a newer navigation target.
         do {
             let loaded = try await profile
-            guard !Task.isCancelled else { return }
+            guard loadID == id, sessionGeneration == session, !Task.isCancelled else { return }
             profileState = .loaded(loaded)
+        } catch is CancellationError {
+            return
         } catch {
-            guard !Task.isCancelled else { return }
+            guard loadID == id, sessionGeneration == session, !Task.isCancelled else { return }
             profileState = .failed(error.localizedDescription)
         }
 
         do {
             let loaded = try await similar
-            guard !Task.isCancelled else { return }
+            guard loadID == id, sessionGeneration == session, !Task.isCancelled else { return }
             similarState = .loaded(loaded)
+        } catch is CancellationError {
+            return
         } catch {
-            guard !Task.isCancelled else { return }
+            guard loadID == id, sessionGeneration == session, !Task.isCancelled else { return }
             similarState = .failed(error.localizedDescription)
         }
     }

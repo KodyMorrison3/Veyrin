@@ -14,6 +14,7 @@ nonisolated final class StubHTTP: URLProtocol, @unchecked Sendable {
         var missingPins = false
         var emptyTurns = false
         var copyRequestBody: String?
+        var slowFactsChatID: String?
     }
     static let state = Mutex(State())
     private let stopped = Mutex(false)
@@ -41,7 +42,7 @@ nonisolated final class StubHTTP: URLProtocol, @unchecked Sendable {
             state.counts[url.path, default: 0] += 1
             state.active += 1
             state.maximumActive = max(state.maximumActive, state.active)
-            return (state.status, state.directChat, state.missingPins)
+            return (state.status, state.directChat, state.missingPins, state.slowFactsChatID)
         }
         let chat = "{\"chat_id\":\"chat\",\"creator_id\":\"user\",\"visibility\":\"VISIBILITY_PRIVATE\",\"character_id\":\"character\",\"type\":\"TYPE_ONE_ON_ONE\"}"
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
@@ -55,6 +56,11 @@ nonisolated final class StubHTTP: URLProtocol, @unchecked Sendable {
             body = "{\"new_chat_id\":\"copied-chat\"}"
         } else if url.path == "/character/v1/get_character_info" {
             body = "{\"character\":{\"external_id\":\"character\",\"title\":\"\",\"name\":\"Character\",\"visibility\":\"PUBLIC\",\"copyable\":true,\"greeting\":\"Hi\",\"description\":\"\",\"avatar_file_name\":\"avatar\"}}"
+        } else if url.path.hasSuffix("/conversation-facts") || url.path.hasSuffix("/conversation-facts/") {
+            let pathParts = url.path.split(separator: "/")
+            let chatID = pathParts.count > 1 ? String(pathParts[1]) : "unknown"
+            let value = chatID == "old-facts" ? "old" : "new"
+            body = "{\"conversation_facts\":{\"character\":{\"facts\":[{\"category\":\"test\",\"value\":\"\(value)\"}]}}}"
         } else if url.path.hasPrefix("/turns/") && Self.state.withLock({ $0.emptyTurns }) {
             body = "{\"turns\":[],\"meta\":{}}"
         } else if url.path.hasPrefix("/turns/") {
@@ -66,7 +72,10 @@ nonisolated final class StubHTTP: URLProtocol, @unchecked Sendable {
         } else if url.path.contains("autocomplete") {
             body = "{\"search_autocomplete\":[\"\(query["query_prefix"]!)\"]}"
         } else { body = snapshot.1 ? chat : "{\"chat\":\(chat)}" }
-        DispatchQueue.global().asyncAfter(deadline: .now() + (url.path.contains("autocomplete") ? 0.25 : 0.02)) { [self] in
+        let delay = snapshot.3.map { slowChatID in
+            url.path.contains("/\(slowChatID)/") ? 0.25 : 0.02
+        } ?? (url.path.contains("autocomplete") ? 0.25 : 0.02)
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [self] in
             let deliver = stopped.withLock { value in
                 guard !value else { return false }
                 value = true
@@ -105,6 +114,7 @@ func runHTTPChecks() async throws {
         state.missingPins = false
         state.emptyTurns = false
         state.copyRequestBody = nil
+        state.slowFactsChatID = nil
     }
     let auth = AuthStore(session: AuthSession(sessionToken: "synthetic", userID: "user", username: "name"))
     let service = ConversationService(authenticatedHTTPClient: AuthenticatedHTTPClient(session: session, authStore: auth))
@@ -130,6 +140,24 @@ func runHTTPChecks() async throws {
 
     let vm = ChatViewModel(authStore: auth, conversationService: service)
     vm.character = Character(externalID: "character", title: "", name: "Character", visibility: "PUBLIC", copyable: true, greeting: "Hi", description: "", avatarFileName: "avatar")
+
+    StubHTTP.state.withLock { $0.slowFactsChatID = "old-facts" }
+    let oldFactsLoad = Task { await vm.loadFacts(chatID: "old-facts") }
+    for _ in 0..<100 {
+        if StubHTTP.state.withLock({ $0.counts["/chat/old-facts/conversation-facts"] != nil }) { break }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    precondition(StubHTTP.state.withLock { $0.counts["/chat/old-facts/conversation-facts"] != nil },
+                 "The previous chat's facts request reached the fixture")
+    let newFactsLoad = Task { await vm.loadFacts(chatID: "new-facts") }
+    await newFactsLoad.value
+    precondition(vm.conversationFacts["character"]?.first?.value == "new",
+                 "The currently selected chat's facts are shown")
+    await oldFactsLoad.value
+    precondition(vm.conversationFacts["character"]?.first?.value == "new",
+                 "A late facts response from the previous chat cannot overwrite the current chat")
+    StubHTTP.state.withLock { $0.slowFactsChatID = nil }
+
     await vm.loadRealTurns(chatID: "chat")
     precondition(vm.hasTurns && vm.lastTurn?.turnID == "turn")
     precondition(StubHTTP.state.withLock { $0.counts["/turns/chat"] } == 1)

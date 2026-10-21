@@ -10,7 +10,6 @@ struct CharacterProfileView: View {
     let onSelectSimilarCharacter: (String) -> Void
     let onBack: (() -> Void)?
 
-    @State private var traceTag = String(UUID().uuidString.prefix(6))
     @State private var isStartingConversation = false
     @State private var startConversationError: String?
 
@@ -65,27 +64,10 @@ struct CharacterProfileView: View {
                 .padding(.leading, 20)
                 .padding(.top, 12)
                 .accessibilityLabel("Back to previous character")
-                .onAppear { ProfileNavigationTrace.log("backButton appear id=\(characterID) tag=\(traceTag)") }
             }
         }
-        .onAppear { ProfileNavigationTrace.log("view appear id=\(characterID) tag=\(traceTag)") }
-        .onDisappear { ProfileNavigationTrace.log("view disappear id=\(characterID) tag=\(traceTag)") }
-        .onChange(of: traceBranch) { _, branch in
-            ProfileNavigationTrace.log("branch=\(branch) id=\(characterID) tag=\(traceTag)")
-        }
         .task(id: characterID) {
-            ProfileNavigationTrace.log("task start id=\(characterID) tag=\(traceTag)")
             await viewModel.load(externalID: characterID)
-            ProfileNavigationTrace.log("task end id=\(characterID) tag=\(traceTag) cancelled=\(Task.isCancelled)")
-        }
-    }
-
-    private var traceBranch: String {
-        switch viewModel.profileState {
-        case .idle: "idle"
-        case .loading: "loading"
-        case .failed: "failed"
-        case .loaded(let profile): "loaded:\(profile.externalID)"
         }
     }
 
@@ -195,7 +177,6 @@ struct CharacterProfileView: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .onAppear { ProfileNavigationTrace.log("content appear id=\(profile.externalID) tag=\(traceTag)") }
     }
 
     private func header(_ profile: CharacterProfile) -> some View {

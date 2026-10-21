@@ -176,7 +176,7 @@ struct ChatView: View {
         } message: {
             Text(viewModel.pinErrorMessage ?? "Please try again.")
         }
-        .task {
+        .task(id: "\(chatID):\(viewModel.authStore.sessionGeneration)") {
             isLoadingPersonaControls = true
             defer { isLoadingPersonaControls = false }
             // Start independent metadata reads without waiting for the character.

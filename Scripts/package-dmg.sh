@@ -37,7 +37,7 @@ sdk=$(xcrun --sdk macosx --show-sdk-version)
 [ "${sdk%%.*}" -ge 27 ] || fail "macOS 27 SDK required"
 mkdir -p "$output"
 output=$(cd "$output" && pwd)
-[ ! -e "$output/Veyrin-0.1.0.dmg" ] && [ ! -e "$output/Veyrin-0.1.0.dmg.sha256" ] || fail "output already exists; choose a new --output-dir"
+[ ! -e "$output/Veyrin-0.1.1.dmg" ] && [ ! -e "$output/Veyrin-0.1.1.dmg.sha256" ] || fail "output already exists; choose a new --output-dir"
 work=$(mktemp -d "$output/.package.XXXXXX")
 mount="$work/mounted"
 mounted=""
@@ -60,8 +60,8 @@ xcodebuild -quiet build \
 app="$work/DerivedData/Build/Products/Release/Veyrin.app"
 [ -s "$app/Contents/MacOS/Veyrin" ] || fail "missing app executable"
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
-[ "$version" = 0.1.0 ] || fail "expected version 0.1.0, got $version"
-[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" = 1 ] || fail "expected build 1"
+[ "$version" = 0.1.1 ] || fail "expected version 0.1.1, got $version"
+[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" = 2 ] || fail "expected build 2"
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = com.kodymorrison.veyrin ] || fail "wrong bundle identifier"
 [ "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")" = 27.0 ] || fail "wrong deployment target"
 [ "$(xcrun lipo -archs "$app/Contents/MacOS/Veyrin")" = arm64 ] || fail "wrong architecture"
@@ -101,7 +101,7 @@ ditto --norsrc --noextattr "$app" "$stage/Veyrin.app"
 ln -s /Applications "$stage/Applications"
 cp LICENSE "$stage/LICENSE.txt"
 cat > "$stage/Install.txt" <<'EOF'
-Veyrin v0.1.0 — experimental, unofficial Character.AI client
+Veyrin v0.1.1 — experimental, unofficial Character.AI client
 Requires macOS 27 or later and Apple Silicon.
 Drag Veyrin.app to Applications, eject this image, then open Veyrin from Applications.
 Verify the published SHA-256 checksum before installation.
