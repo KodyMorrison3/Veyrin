@@ -37,6 +37,8 @@ private struct MainView: View {
     @State private var profileNavigation = CharacterProfileNavigation()
     @State private var isShowingDiscover = false
     @State private var isShowingFeed = false
+    @State private var isShowingLocalLibrary = false
+    @State private var localConversationCharacter: LocalCharacter?
     @State private var feedProfileUsername: String?
     @State private var isShowingFeedCreatorProfile = false
 
@@ -181,7 +183,9 @@ private struct MainView: View {
         ToolbarItem(placement: .navigation) {
             Button {
                 selectedChatID = nil
+                localConversationCharacter = nil
                 isShowingFeed = false
+                isShowingLocalLibrary = false
                 isShowingDiscover = true
             } label: {
                 Label("Discover", systemImage: "sparkles")
@@ -192,12 +196,26 @@ private struct MainView: View {
         ToolbarItem(placement: .navigation) {
             Button {
                 selectedChatID = nil
+                localConversationCharacter = nil
                 isShowingDiscover = false
                 isShowingFeed = true
             } label: {
                 Label("Feed", systemImage: "text.bubble")
             }
             .help("Feed")
+        }
+
+        ToolbarItem(placement: .navigation) {
+            Button {
+                selectedChatID = nil
+                isShowingDiscover = false
+                isShowingFeed = false
+                localConversationCharacter = nil
+                isShowingLocalLibrary = true
+            } label: {
+                Label("My Library", systemImage: "books.vertical")
+            }
+            .help("Local character library")
         }
 
         ToolbarItem(placement: .primaryAction) {
@@ -293,6 +311,8 @@ private struct MainView: View {
                 set: { chatID in
                     selectedChatID = chatID
                     if chatID != nil {
+                        localConversationCharacter = nil
+                        isShowingLocalLibrary = false
                         isShowingDiscover = false
                         isShowingFeed = false
                     }
@@ -694,7 +714,17 @@ private struct MainView: View {
 
     @ViewBuilder
     private var detailView: some View {
-        if isShowingDiscover {
+        if let localConversationCharacter {
+            LocalCharacterChatView(character: localConversationCharacter)
+                .id(localConversationCharacter.id)
+        } else if isShowingLocalLibrary {
+            LocalCharacterLibraryView { character in
+                localConversationCharacter = character
+                isShowingLocalLibrary = false
+                isShowingDiscover = false
+                isShowingFeed = false
+            }
+        } else if isShowingDiscover {
             DiscoverView(
                 authStore: authStore,
                 onSelectCharacter: { characterID in

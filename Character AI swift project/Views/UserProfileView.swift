@@ -107,6 +107,7 @@ struct UserProfileDetailView: View {
     @ObservedObject var viewModel: UserProfileViewModel
     @ObservedObject private var preferences = AppPreferences.shared
     @Environment(\.openSettings) private var openSettings
+    @State private var libraryNotice: String?
     let onSelectCharacter: (String) -> Void
 
     var body: some View {
@@ -187,8 +188,31 @@ struct UserProfileDetailView: View {
 
                 if !profile.publicCharacters.isEmpty {
                     Divider()
-                    Text("Public characters")
-                        .font(.headline)
+                    HStack {
+                        Text("Public characters")
+                            .font(.headline)
+                        Spacer()
+                        Button("Save all", systemImage: "bookmark") {
+                            do {
+                                let count = try viewModel.savePublicCharactersToLibrary()
+                                libraryNotice = "Saved \(count) of your public characters to My Library."
+                            } catch {
+                                libraryNotice = error.localizedDescription
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    if let libraryNotice {
+                        if libraryNotice.hasPrefix("Saved ") {
+                            Text(libraryNotice)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Label(libraryNotice, systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                    }
                     LazyVGrid(
                         columns: [GridItem(.adaptive(minimum: 150), spacing: 10)],
                         spacing: 10

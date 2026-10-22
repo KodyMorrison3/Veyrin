@@ -2,6 +2,48 @@ import AppKit
 import Combine
 import Foundation
 import SwiftUI
+import ZipArchive
+
+nonisolated final class OllamaCheckProtocol: URLProtocol, @unchecked Sendable {
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var unavailableRequests = 0
+        var requests = 0
+    }
+    private static let state = State()
+
+    static func reset(unavailableRequests: Int = 0) {
+        state.lock.lock(); defer { state.lock.unlock() }
+        state.unavailableRequests = unavailableRequests
+        state.requests = 0
+    }
+
+    static var requestCount: Int {
+        state.lock.lock(); defer { state.lock.unlock() }
+        return state.requests
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.port == 11434 }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.state.lock.lock()
+        Self.state.requests += 1
+        let unavailable = Self.state.unavailableRequests > 0
+        if unavailable { Self.state.unavailableRequests -= 1 }
+        Self.state.lock.unlock()
+        if unavailable {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
+            return
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"] )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(#"{"models":[{"name":"test-model"}]}"#.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
 
 nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
     // URLProtocol callbacks run on Foundation queues; every state access uses this lock.
@@ -41,7 +83,10 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
             body = "{\"personaSettings\":{\"defaultPersonaId\":\"persona-\(account)\",\"characterOverrides\":{\"character\":\"persona-\(account)\"}}}"
         case "chat/user": body = "{\"id\":\"account-\(account)\"}"
         case "api/trpc/social.publicProfile":
-            body = "[{\"result\":{\"data\":{\"json\":{\"username\":\"user-\(account)\",\"subscription_type\":\"PLUS\",\"characters\":[]}}}}]"
+            let profileCharacters = account == "a"
+                ? "[{\"external_id\":\"own-character\",\"name\":\"My Character\",\"title\":\"My title\",\"description\":\"Owned profile character\",\"greeting\":\"Welcome back\",\"visibility\":\"PUBLIC\",\"avatar_file_name\":\"my/avatar.webp\",\"user__username\":\"user-a\"}]"
+                : "[]"
+            body = "[{\"result\":{\"data\":{\"json\":{\"username\":\"user-\(account)\",\"subscription_type\":\"PLUS\",\"characters\":\(profileCharacters)}}}}]"
         case "character/v1/get_character_info":
             body = "{\"character\":{\"external_id\":\"character\",\"name\":\"Character\",\"title\":\"Title\",\"visibility\":\"VISIBILITY_PUBLIC\",\"copyable\":true,\"greeting\":\"Hi\",\"description\":\"Description\",\"avatar_file_name\":\"avatar\"}}"
         case "chat/chat":
@@ -87,6 +132,14 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
 @MainActor final class CheckCounter { var value = 0 }
 
 @MainActor enum RegressionChecks {
+    private static func zipFile(_ entries: [(String, String)], at url: URL) throws {
+        let writer = ZipArchiveWriter<ZipMemoryStorage<[UInt8]>>()
+        for (name, contents) in entries {
+            try writer.writeFile(filename: name, contents: Array(contents.utf8))
+        }
+        try Data(writer.finalizeBuffer()).write(to: url)
+    }
+
     static func session() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CheckProtocol.self]
@@ -207,10 +260,88 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
         precondition(CheckProtocol.count("recommendation/v1/curated_character_lists") == 1)
 
         let userProfileService = UserProfileService(session: transport, authStore: auth)
-        _ = try await userProfileService.loadProfile(username: "user-a")
+        let profile = try await userProfileService.loadProfile(username: "user-a")
+        precondition(profile.publicCharacters.map(\.externalID) == ["own-character"])
         precondition(CheckProtocol.count("api/trpc/social.publicProfile") == 1)
         _ = try await userProfileService.loadProfile(username: "user-a")
         precondition(CheckProtocol.count("api/trpc/social.publicProfile") == 1)
+        let ownCharactersRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Veyrin-own-characters-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: ownCharactersRoot) }
+        let ownCharacterLibrary = LocalCharacterLibrary(supportDirectory: ownCharactersRoot)
+        let ownCharacterViewModel = UserProfileViewModel(service: userProfileService, username: "user-a", library: ownCharacterLibrary)
+        await ownCharacterViewModel.load()
+        let savedOwnCharacterCount = try ownCharacterViewModel.savePublicCharactersToLibrary()
+        precondition(savedOwnCharacterCount == 1)
+        precondition(ownCharacterLibrary.characters.map(\.id) == ["own-character"])
+        precondition(ownCharacterLibrary.characters.first?.sourceName == "Character.AI Discover")
+
+        let accountExportRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Veyrin-account-export-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: accountExportRoot) }
+        let exportFolder = accountExportRoot.appendingPathComponent("account/data", isDirectory: true)
+        try FileManager.default.createDirectory(at: exportFolder, withIntermediateDirectories: true)
+        let exportFile = exportFolder.appendingPathComponent("character.json")
+        let exportedCharacters: [[String: Any]] = [
+            ["id": "owned-export-id", "name": "Exported Character", "title": "An export title",
+             "description": "Exported account description", "greeting": "Hello from export",
+             "creator_name": "user-a", "tags": ["personal", "export"]],
+            ["id": "metadata-only-id", "title": "Metadata only"]
+        ]
+        try JSONSerialization.data(withJSONObject: exportedCharacters).write(to: exportFile)
+        let accountExportLibrary = LocalCharacterLibrary(supportDirectory: accountExportRoot.appendingPathComponent("library", isDirectory: true))
+        let exportResult = try accountExportLibrary.importCharacterAIAccountExport(from: accountExportRoot)
+        precondition(exportResult.importedCount == 2 && exportResult.skippedCount == 0)
+        precondition(exportResult.missingDefinitionCount == 2)
+        let importedOwnCharacter = accountExportLibrary.characters.first { $0.id == "owned-export-id" }
+        precondition(importedOwnCharacter?.sourceName == "Character.AI account export")
+        precondition(importedOwnCharacter?.definition.isEmpty == true)
+        precondition(importedOwnCharacter?.greeting == "Hello from export")
+        precondition(importedOwnCharacter?.licence == "Account export; rights not specified")
+        let invalidExport = accountExportRoot.appendingPathComponent("not-an-export.json")
+        try Data("{bad json".utf8).write(to: invalidExport)
+        do {
+            _ = try accountExportLibrary.importCharacterAIAccountExport(from: invalidExport)
+            preconditionFailure("Malformed account export unexpectedly imported")
+        } catch {}
+        precondition(accountExportLibrary.characters.count == 2)
+
+        let accountZip = accountExportRoot.appendingPathComponent("character-ai-export.zip")
+        try zipFile([
+            ("data/user.json", "{}"),
+            ("data/character.json", String(data: try Data(contentsOf: exportFile), encoding: .utf8)!)
+        ], at: accountZip)
+        let zipResult = try accountExportLibrary.importCharacterAIAccountExport(from: accountZip)
+        precondition(zipResult.importedCount == 2)
+        precondition(accountExportLibrary.characters.count == 2)
+
+        let missingCharacterZip = accountExportRoot.appendingPathComponent("missing-character.zip")
+        try zipFile([("data/message.json", "[]")], at: missingCharacterZip)
+        do {
+            _ = try accountExportLibrary.importCharacterAIAccountExport(from: missingCharacterZip)
+            preconditionFailure("An export without a character JSON file unexpectedly imported")
+        } catch CharacterAIAccountExportError.characterFileNotFound {}
+        precondition(accountExportLibrary.characters.count == 2)
+
+        let ambiguousCharacterZip = accountExportRoot.appendingPathComponent("ambiguous-characters.zip")
+        try zipFile([
+            ("data/character.json", "[]"),
+            ("data/characters.json", "[]")
+        ], at: ambiguousCharacterZip)
+        do {
+            _ = try accountExportLibrary.importCharacterAIAccountExport(from: ambiguousCharacterZip)
+            preconditionFailure("An export with multiple character JSON files unexpectedly imported")
+        } catch CharacterAIAccountExportError.ambiguousCharacterFiles {}
+        precondition(accountExportLibrary.characters.count == 2)
+
+        let invalidZip = accountExportRoot.appendingPathComponent("invalid.zip")
+        try Data("not a zip".utf8).write(to: invalidZip)
+        do {
+            _ = try accountExportLibrary.importCharacterAIAccountExport(from: invalidZip)
+            preconditionFailure("A malformed ZIP unexpectedly imported")
+        } catch CharacterAIAccountExportError.invalidZip {}
+        precondition(accountExportLibrary.characters.count == 2)
+        print("PASS account export imports JSON and ZIP inputs, rejects missing, ambiguous, and malformed ZIPs without changing the library")
 
         _ = try await service.loadConversationFacts(chatID: "chat")
         precondition(CheckProtocol.count("chat/chat/conversation-facts") == 1)
@@ -219,6 +350,134 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
         _ = try await service.loadConversationFacts(chatID: "chat", forceRefresh: true)
         precondition(CheckProtocol.count("chat/chat/conversation-facts") == 2)
 
+        let ollamaConfiguration = URLSessionConfiguration.ephemeral
+        ollamaConfiguration.protocolClasses = [OllamaCheckProtocol.self]
+        let ollamaSession = URLSession(configuration: ollamaConfiguration)
+        var didLaunchOllama = false
+        OllamaCheckProtocol.reset(unavailableRequests: 2)
+        let ollamaService = try LocalOllamaService(session: ollamaSession) { didLaunchOllama = true }
+        let availableModels = try await ollamaService.models()
+        precondition(didLaunchOllama && availableModels == ["test-model"])
+        precondition(OllamaCheckProtocol.requestCount == 3)
+        OllamaCheckProtocol.reset()
+        didLaunchOllama = false
+        let runningOllamaService = try LocalOllamaService(session: ollamaSession) { didLaunchOllama = true }
+        _ = try await runningOllamaService.models()
+        precondition(!didLaunchOllama && OllamaCheckProtocol.requestCount == 1)
+        OllamaCheckProtocol.reset(unavailableRequests: 1)
+        let disabledOllamaService = try LocalOllamaService(
+            session: ollamaSession,
+            startsApplicationWhenUnavailable: false
+        ) { didLaunchOllama = true }
+        do {
+            _ = try await disabledOllamaService.models()
+            preconditionFailure("Disabled automatic startup unexpectedly succeeded")
+        } catch LocalOllamaError.unavailable {}
+        precondition(!didLaunchOllama && OllamaCheckProtocol.requestCount == 1)
+        let lifecycle = LocalOllamaLifecycle.shared
+        var didStopOllama = false
+        lifecycle.recordLaunch { didStopOllama = true }
+        lifecycle.applicationWillTerminate()
+        precondition(didStopOllama)
+        didStopOllama = false
+        lifecycle.applicationWillTerminate()
+        precondition(!didStopOllama)
+        lifecycle.recordLaunch { didStopOllama = true }
+        lifecycle.applicationWillTerminate()
+        precondition(didStopOllama)
+        ollamaSession.invalidateAndCancel()
+        print("PASS Ollama launch preference, existing-instance preservation, and Veyrin quit cleanup")
+
+        let savedCharacter = try LocalCharacter(discoverCharacter: DiscoverFeedCharacter(
+            externalID: "character-id", name: "Mara Ellison", participantName: nil,
+            interactionCount: 321, title: "Harbour keeper", description: "Keeps the old lighthouse running.",
+            greeting: "The lamp is back on.", visibility: "PUBLIC", avatarFileName: "uploaded/avatar.webp",
+            username: "mara", shortHash: nil
+        ))
+        precondition(savedCharacter.id == "character-id")
+        precondition(savedCharacter.avatarFileName == "uploaded/avatar.webp")
+        precondition(savedCharacter.interactionCount == 321 && savedCharacter.visibility == "PUBLIC")
+        precondition(savedCharacter.greeting == "The lamp is back on.")
+        let updatedCharacter = try LocalCharacter(discoverCharacter: DiscoverFeedCharacter(
+            externalID: "character-id", name: "Mara Ellison", participantName: nil,
+            interactionCount: nil, title: nil, description: nil, greeting: nil,
+            visibility: nil, avatarFileName: nil, username: nil, shortHash: nil
+        ), existing: savedCharacter)
+        precondition(updatedCharacter.avatarFileName == savedCharacter.avatarFileName)
+        precondition(updatedCharacter.description == savedCharacter.description)
+        precondition(updatedCharacter.greeting == savedCharacter.greeting)
+        precondition(LocalCharacterConversation(character: savedCharacter).characterID == "character-id")
+
+        let libraryRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Veyrin-library-check-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: libraryRoot) }
+
+        let brokenCatalogueRoot = libraryRoot.appendingPathComponent("broken-catalogue", isDirectory: true)
+        try FileManager.default.createDirectory(at: brokenCatalogueRoot, withIntermediateDirectories: true)
+        let catalogueURL = brokenCatalogueRoot.appendingPathComponent("characters.json")
+        let brokenCatalogue = Data("{not valid JSON".utf8)
+        try brokenCatalogue.write(to: catalogueURL)
+        let brokenCatalogueLibrary = LocalCharacterLibrary(supportDirectory: brokenCatalogueRoot)
+        precondition(brokenCatalogueLibrary.characters.isEmpty)
+        precondition(brokenCatalogueLibrary.errorMessage != nil)
+        do {
+            try brokenCatalogueLibrary.saveFromDiscover(DiscoverFeedCharacter(
+                externalID: "another-character", name: "Another Character", participantName: nil,
+                interactionCount: nil, title: nil, description: nil, greeting: nil,
+                visibility: nil, avatarFileName: nil, username: nil, shortHash: nil
+            ))
+            preconditionFailure("A broken catalogue unexpectedly accepted a save")
+        } catch LocalCharacterLibraryError.catalogueUnavailable {}
+        let catalogueAfterFailedSave = try Data(contentsOf: catalogueURL)
+        precondition(catalogueAfterFailedSave == brokenCatalogue)
+
+        let conversationRoot = libraryRoot.appendingPathComponent("broken-conversation", isDirectory: true)
+        let conversationLibrary = LocalCharacterLibrary(supportDirectory: conversationRoot)
+        let conversationID = UUID().uuidString
+        let conversationCharacter = try LocalCharacter(discoverCharacter: DiscoverFeedCharacter(
+            externalID: conversationID, name: "Conversation Check", participantName: nil,
+            interactionCount: nil, title: nil, description: nil, greeting: "Hello",
+            visibility: nil, avatarFileName: nil, username: nil, shortHash: nil
+        ))
+        try conversationLibrary.saveFromDiscover(DiscoverFeedCharacter(
+            externalID: conversationID, name: "Conversation Check", participantName: nil,
+            interactionCount: nil, title: nil, description: nil, greeting: "Hello",
+            visibility: nil, avatarFileName: nil, username: nil, shortHash: nil
+        ))
+        let conversationDirectory = conversationRoot.appendingPathComponent("conversations", isDirectory: true)
+        try FileManager.default.createDirectory(at: conversationDirectory, withIntermediateDirectories: true)
+        let conversationURL = conversationDirectory.appendingPathComponent("\(conversationID).json")
+        let brokenConversation = Data("{not valid JSON".utf8)
+        try brokenConversation.write(to: conversationURL)
+        do {
+            _ = try conversationLibrary.conversation(for: conversationCharacter)
+            preconditionFailure("A broken conversation unexpectedly loaded")
+        } catch LocalCharacterLibraryError.conversationUnavailable {}
+        let conversationAfterFailedLoad = try Data(contentsOf: conversationURL)
+        precondition(conversationAfterFailedLoad == brokenConversation)
+
+        let freshID = UUID().uuidString
+        let freshCharacter = try LocalCharacter(discoverCharacter: DiscoverFeedCharacter(
+            externalID: freshID, name: "Fresh Conversation", participantName: nil,
+            interactionCount: nil, title: nil, description: nil, greeting: "First greeting",
+            visibility: nil, avatarFileName: nil, username: nil, shortHash: nil
+        ))
+        let freshConversation = try conversationLibrary.conversation(for: freshCharacter)
+        precondition(freshConversation.messages.map(\.content) == ["First greeting"])
+        let mismatchedConversation = LocalCharacterConversation(character: freshCharacter)
+        let mismatchedData = try JSONEncoder().encode(mismatchedConversation)
+        let mismatchedURL = conversationDirectory.appendingPathComponent("\(conversationID).json")
+        try mismatchedData.write(to: mismatchedURL)
+        do {
+            _ = try conversationLibrary.conversation(for: conversationCharacter)
+            preconditionFailure("A conversation saved for another character unexpectedly loaded")
+        } catch LocalCharacterLibraryError.conversationUnavailable {}
+        let mismatchedFileAfterLoad = try Data(contentsOf: mismatchedURL)
+        precondition(mismatchedFileAfterLoad == mismatchedData)
+        precondition(FileManager.default.fileExists(atPath: conversationDirectory.appendingPathComponent("\(freshID).json").path))
+        print("PASS malformed local catalogue and conversations remain untouched and block replacement")
+        print("PASS missing local conversation still creates a greeting conversation")
+        print("PASS Discover character details and avatar carry into local-library records")
         print("PASS discover, feed, curated lists, profile, and conversation facts cached reuse & refresh")
     }
 }

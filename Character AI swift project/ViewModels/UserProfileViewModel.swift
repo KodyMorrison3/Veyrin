@@ -22,12 +22,14 @@ final class UserProfileViewModel: ObservableObject {
     @Published private(set) var state: LoadState = .idle
 
     private let service: UserProfileService
+    private let library: LocalCharacterLibrary
     /// The signed-in username (typed session metadata - never the token).
     let username: String
 
-    init(service: UserProfileService, username: String) {
+    init(service: UserProfileService, username: String, library: LocalCharacterLibrary = .shared) {
         self.service = service
         self.username = username
+        self.library = library
     }
 
     func load() async {
@@ -41,5 +43,16 @@ final class UserProfileViewModel: ObservableObject {
         } catch {
             state = .failed(error.localizedDescription)
         }
+    }
+
+    func savePublicCharactersToLibrary() throws -> Int {
+        guard case .loaded(let profile) = state else {
+            throw LocalCharacterLibraryError.profileUnavailable
+        }
+        let characters = profile.publicCharacters.filter { character in
+            guard let id = character.externalID else { return false }
+            return !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return try library.saveFromDiscover(characters)
     }
 }

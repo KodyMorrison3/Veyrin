@@ -6,6 +6,10 @@
 	objectVersion = 90;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		000000000000000000000151 /* ZipArchive in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000171 /* ZipArchive */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* Veyrin.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Veyrin.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -22,6 +26,7 @@
 		000000000000000130000000 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				000000000000000000000151 /* ZipArchive in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -63,8 +68,30 @@
 			productName = MyApp;
 			productReference = 000000000000000000000120 /* Veyrin.app */;
 			productType = "com.apple.product-type.application";
+			packageProductDependencies = (
+				000000000000000000000171 /* ZipArchive */,
+			);
 		};
 /* End PBXNativeTarget section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		000000000000000000000171 /* ZipArchive */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000181 /* XCRemoteSwiftPackageReference "swift-zip-archive" */;
+			productName = ZipArchive;
+		};
+/* End XCSwiftPackageProductDependency section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		000000000000000000000181 /* XCRemoteSwiftPackageReference "swift-zip-archive" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/adam-fowler/swift-zip-archive";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.8.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 
 /* Begin PBXProject section */
 		000000000000000000000000 /* Project object */ = {
@@ -80,6 +107,9 @@
 				};
 			};
 			buildConfigurationList = 000000000000000010000000 /* Build configuration list for PBXProject "Character AI swift project" */;
+			packageReferences = (
+				000000000000000000000181 /* XCRemoteSwiftPackageReference "swift-zip-archive" */,
+			);
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -253,10 +283,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = "";
 				"ASSETCATALOG_COMPILER_APPICON_NAME[arch=*]" = AppIcon;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CODE_SIGN_ENTITLEMENTS = "Character AI swift project/Veyrin.entitlements";
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 4KQYB95J7T;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
@@ -269,6 +302,10 @@
 				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				EXCLUDED_SOURCE_FILE_NAMES = (
+					"project-id",
+					.DS_Store,
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Veyrin;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -290,12 +327,10 @@
 				SDKROOT = macosx27.0;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = macosx;
-				ARCHS = arm64;
-				EXCLUDED_SOURCE_FILE_NAMES = "project-id .DS_Store";
-				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
@@ -305,16 +340,16 @@
 		000000000000000112000000 /* Release configuration for PBXNativeTarget "Character AI swift project" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = "Character AI swift project/Veyrin.entitlements";
-				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
-				ENABLE_HARDENED_RUNTIME = YES;
 				ASSETCATALOG_COMPILER_APPICON_NAME = "";
 				"ASSETCATALOG_COMPILER_APPICON_NAME[arch=*]" = AppIcon;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CODE_SIGN_ENTITLEMENTS = "Character AI swift project/Veyrin.entitlements";
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 4KQYB95J7T;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
@@ -327,6 +362,10 @@
 				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				EXCLUDED_SOURCE_FILE_NAMES = (
+					"project-id",
+					.DS_Store,
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Veyrin;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -348,12 +387,10 @@
 				SDKROOT = macosx27.0;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = macosx;
-				ARCHS = arm64;
-				EXCLUDED_SOURCE_FILE_NAMES = "project-id .DS_Store";
-				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";

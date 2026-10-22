@@ -505,6 +505,14 @@ struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 settingsSection(
+                    title: "Local Models",
+                    footer: "When enabled, Veyrin opens Ollama when you enter a local character chat if it isn't already responding. Ollama is only quit when you quit Veyrin and Veyrin was the app that opened it."
+                ) {
+                    Toggle("Start Ollama automatically", isOn: $preferences.startOllamaAutomatically)
+                        .padding(.vertical, 4)
+                }
+
+                settingsSection(
                     title: "Updates",
                     footer: "Checks GitHub for the latest official release. Enable beta releases to include newer releases marked as pre-release. This works when the repository is public."
                 ) {

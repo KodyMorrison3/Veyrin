@@ -19,13 +19,16 @@ struct FeedService {
             }
         }
 
-        var token: String? {
+        var authorization: (token: String, generation: UUID?)? {
             get async {
                 switch self {
                 case .authStore(let authStore):
-                    await MainActor.run { authStore.session?.sessionToken }
+                    await MainActor.run {
+                        guard let session = authStore.session else { return nil }
+                        return (session.sessionToken, authStore.sessionGeneration)
+                    }
                 case .fixedToken(let token):
-                    token
+                    (token, nil)
                 }
             }
         }
@@ -66,7 +69,7 @@ struct FeedService {
         guard let url = URL(string: "https://feed.api.character.ai/api/feed/social_feed") else {
             throw NetworkError.invalidURL
         }
-        guard let token = await authorizationProvider.token else {
+        guard let authorization = await authorizationProvider.authorization else {
             throw NetworkError.unauthenticated
         }
 
@@ -76,13 +79,23 @@ struct FeedService {
         request.setValue("https://character.ai/", forHTTPHeaderField: "Referer")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Token \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("Token \(authorization.token)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(FeedRequest())
 
         do {
             let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw NetworkError.invalidResponse
+            }
+            if httpResponse.statusCode == 401 {
+                if case .authStore(let authStore) = authorizationProvider,
+                   let generation = authorization.generation {
+                    authStore.invalidateSession(
+                        ifGeneration: generation,
+                        authorization: request.value(forHTTPHeaderField: "Authorization")
+                    )
+                }
+                throw NetworkError.unauthenticated
             }
             guard 200..<300 ~= httpResponse.statusCode else {
                 throw NetworkError.httpError(httpResponse.statusCode)

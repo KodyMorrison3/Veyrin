@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DiscoverView: View {
     @StateObject private var viewModel: DiscoverViewModel
+    @StateObject private var library = LocalCharacterLibrary.shared
     @ObservedObject private var preferences = AppPreferences.shared
     let onSelectCharacter: (String) -> Void
 
@@ -148,12 +149,11 @@ struct DiscoverView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 14)], spacing: 14) {
                     ForEach(Array(characters.enumerated()), id: \.offset) { _, character in
                         if let externalID = character.externalID, !externalID.isEmpty {
-                            Button {
-                                onSelectCharacter(externalID)
-                            } label: {
-                                characterCard(character)
+                            HStack(alignment: .top, spacing: 8) {
+                                Button { onSelectCharacter(externalID) } label: { characterCard(character) }
+                                    .buttonStyle(QuietHoverButtonStyle())
+                                saveButton(character)
                             }
-                            .buttonStyle(QuietHoverButtonStyle())
                         }
                     }
                 }
@@ -224,12 +224,11 @@ struct DiscoverView: View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 14)], spacing: 14) {
             ForEach(Array(viewModel.searchResults.enumerated()), id: \.offset) { _, result in
                 if let externalID = result.externalID, !externalID.isEmpty {
-                    Button {
-                        onSelectCharacter(externalID)
-                    } label: {
-                        searchResultCard(result)
+                    HStack(alignment: .top, spacing: 8) {
+                        Button { onSelectCharacter(externalID) } label: { searchResultCard(result) }
+                            .buttonStyle(QuietHoverButtonStyle())
+                        saveButton(result)
                     }
-                    .buttonStyle(QuietHoverButtonStyle())
                 }
             }
         }
@@ -291,12 +290,11 @@ struct DiscoverView: View {
                         if let character = item.characterItem,
                            let externalID = character.externalID,
                            !externalID.isEmpty {
-                            Button {
-                                onSelectCharacter(externalID)
-                            } label: {
-                                characterCard(character)
+                            HStack(alignment: .top, spacing: 8) {
+                                Button { onSelectCharacter(externalID) } label: { characterCard(character) }
+                                    .buttonStyle(QuietHoverButtonStyle())
+                                saveButton(character)
                             }
-                            .buttonStyle(QuietHoverButtonStyle())
                         }
                     }
                 }
@@ -357,6 +355,40 @@ struct DiscoverView: View {
                 }
             }
         }
+    }
+
+    private func saveButton(_ character: DiscoverFeedCharacter) -> some View {
+        let isSaved = library.containsCharacter(character.externalID)
+        return Button {
+            do { try library.saveFromDiscover(character) }
+            catch { library.errorMessage = error.localizedDescription }
+        } label: {
+            Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
+                .font(.callout.weight(.semibold))
+                .frame(width: 36, height: 36)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.bordered)
+        .clipShape(Circle())
+        .help(isSaved ? "Update saved character in My Library" : "Save character to My Library")
+        .accessibilityLabel(isSaved ? "Update saved character in My Library" : "Save character to My Library")
+    }
+
+    private func saveButton(_ result: CharacterSearchResult) -> some View {
+        let isSaved = library.containsCharacter(result.externalID)
+        return Button {
+            do { try library.saveFromDiscover(result) }
+            catch { library.errorMessage = error.localizedDescription }
+        } label: {
+            Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
+                .font(.callout.weight(.semibold))
+                .frame(width: 36, height: 36)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.bordered)
+        .clipShape(Circle())
+        .help(isSaved ? "Update saved character in My Library" : "Save character to My Library")
+        .accessibilityLabel(isSaved ? "Update saved character in My Library" : "Save character to My Library")
     }
 
     private func characterCard(_ character: DiscoverFeedCharacter) -> some View {

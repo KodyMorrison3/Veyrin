@@ -9,6 +9,7 @@ import SwiftUI
 
 @main
 struct CharacterAIApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var authStore: AuthStore
 
     init() {
@@ -35,5 +36,12 @@ struct CharacterAIApp: App {
             )
         }
         .windowBackgroundDragBehavior(.enabled)
+    }
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) {
+        LocalOllamaLifecycle.shared.applicationWillTerminate()
     }
 }

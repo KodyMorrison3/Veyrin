@@ -86,6 +86,7 @@ final class AppPreferences: ObservableObject {
         static let glassOpacity = "preferences.glassOpacity"
         static let windowTransparency = "preferences.windowTransparency"
         static let favoriteCharacterIDs = "preferences.favoriteCharacterIDs"
+        static let startOllamaAutomatically = "preferences.startOllamaAutomatically"
     }
 
     /// Set of locally favorited / liked character IDs (UI affordance without fake server sync).
@@ -120,6 +121,9 @@ final class AppPreferences: ObservableObject {
         }
     }
 
+    @Published var startOllamaAutomatically: Bool {
+        didSet { defaults.set(startOllamaAutomatically, forKey: Keys.startOllamaAutomatically) }
+    }
 
     /// Whether Discover shows the curated Popular characters / Trending
     /// characters sections. Purely a local display toggle — the underlying
@@ -302,6 +306,7 @@ final class AppPreferences: ObservableObject {
         avatarShape = stored.flatMap(AvatarShape.init(rawValue:)) ?? .circle
         let storedShow = defaults.object(forKey: Keys.showPopularTrending) as? Bool
         showPopularTrending = storedShow ?? true
+        startOllamaAutomatically = defaults.object(forKey: Keys.startOllamaAutomatically) as? Bool ?? true
 
         let storedMode = defaults.string(forKey: Keys.backgroundMode)
         backgroundMode = storedMode.flatMap(BackgroundMode.init(rawValue:)) ?? .solidColor
@@ -476,6 +481,7 @@ final class AppPreferences: ObservableObject {
         favoriteCharacterIDs = []
         avatarShape = .circle
         showPopularTrending = true
+        startOllamaAutomatically = true
         resetWallpaperBlur()
         resetGlassOpacity()
         resetWindowTransparency()
@@ -484,6 +490,7 @@ final class AppPreferences: ObservableObject {
         clearCustomWallpaper()
         defaults.removeObject(forKey: Keys.avatarShape)
         defaults.removeObject(forKey: Keys.showPopularTrending)
+        defaults.removeObject(forKey: Keys.startOllamaAutomatically)
         defaults.removeObject(forKey: Keys.backgroundMode)
         defaults.removeObject(forKey: Keys.solidColorHex)
         defaults.removeObject(forKey: Keys.wallpaperBlurOverride)
