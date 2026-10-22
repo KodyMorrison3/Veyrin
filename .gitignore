@@ -48,6 +48,15 @@ fastlane/test_output/
 *.dSYM
 *.dSYM.zip
 
+# Private catalogue archive data
+archive/*.sqlite3
+archive/*.sqlite3-*
+archive/.env
+archive/.env.*
+!archive/.env.example
+__pycache__/
+*.py[cod]
+
 # Temporary / local files
 *.tmp
 *.temp
