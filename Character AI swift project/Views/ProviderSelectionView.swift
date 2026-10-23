@@ -151,6 +151,7 @@ final class ProviderConnection: ObservableObject {
 struct LocalProviderSetupView: View {
     @ObservedObject var store: ProviderStore
     var onStart: ((any ChatProvider, ProviderSelection) -> Void)?
+    var embedded = false
     @StateObject private var connection = ProviderConnection()
     @State private var endpoint = ""
     @State private var model = ""
@@ -158,59 +159,79 @@ struct LocalProviderSetupView: View {
     @State private var localOnlyConfirmed = false
 
     var body: some View {
-        Form {
-            Section {
-                Text("Ollama").font(.title2.weight(.semibold))
-                Text("Connect to the Ollama server on this Mac. No Character.AI sign-in is needed.")
-                    .foregroundStyle(.secondary)
-                TextField("Endpoint", text: $endpoint)
+        ProviderSetupChrome(
+            embedded: embedded,
+            symbol: "desktopcomputer",
+            title: "Ollama",
+            subtitle: "Connect to the Ollama server on this Mac. No Character.AI sign-in is needed."
+        ) {
+            ProviderCard {
+                ProviderFieldLabel("Endpoint")
+                TextField("http://127.0.0.1:11434", text: $endpoint)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.body.monospaced())
+                    .accessibilityLabel("Endpoint")
                     .onChange(of: endpoint) { connection.reset(); model = ""; localOnlyConfirmed = false }
-                HStack {
-                    Button("Test Connection / Refresh Models") { test() }.disabled(connection.isLoading)
+                HStack(spacing: 10) {
+                    Button("Test Connection / Refresh Models") { test() }
+                        .disabled(connection.isLoading)
                     if connection.isLoading {
                         ProgressView().controlSize(.small)
                         Button("Cancel") { connection.cancel() }
                     }
                 }
-                if let status = connection.status { Label(status, systemImage: "checkmark.circle").foregroundStyle(.secondary) }
+                if let status = connection.status {
+                    Label(status, systemImage: "checkmark.circle")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
                 if !connection.models.isEmpty {
-                    Picker("Installed model", selection: $model) {
-                        Text("Choose a model").tag("")
-                        ForEach(connection.models) { Text($0.name).tag($0.id) }
+                    VStack(alignment: .leading, spacing: 6) {
+                        ProviderFieldLabel("Installed model")
+                        Picker("Installed model", selection: $model) {
+                            Text("Choose a model").tag("")
+                            ForEach(connection.models) { Text($0.name).tag($0.id) }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 320, alignment: .leading)
                     }
                 }
                 if let error = error ?? connection.error {
-                    Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Section("Setup") {
+
+            ProviderCard(title: "Setup") {
                 Text("Install Ollama, open it (or run ‘ollama serve’), then install a model using Ollama. Refresh here once it is ready. Veyrin does not download models.")
+                    .fixedSize(horizontal: false, vertical: true)
                 if let guide = URL(string: "https://docs.ollama.com/quickstart") {
                     Link("Ollama installation and model guide", destination: guide)
                 }
+                Divider()
                 Text("Only loopback endpoints are allowed. Testing connects to the address above; it does not automatically launch or install anything.")
                     .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text("Ollama can also route requests to cloud models, even through a local address. For local-only chat, disable cloud features in Ollama (OLLAMA_NO_CLOUD=1, then restart Ollama) and use a downloaded model. Veyrin cannot verify the server’s cloud setting.")
                     .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 if onStart != nil {
+                    Divider()
                     Toggle("I’m using a downloaded model with Ollama cloud features disabled.", isOn: $localOnlyConfirmed)
+                        .toggleStyle(.switch)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            HStack {
-                Button(onStart == nil ? "Save Settings" : "Start Local Chat") {
-                    do {
-                        guard connection.models.contains(where: { $0.id == model }) else { throw ProviderError.missingModel }
-                        let provider = try TextChatProvider(localEndpoint: endpoint)
-                        try store.saveLocal(endpoint: endpoint, model: model)
-                        onStart?(provider, ProviderSelection(kind: .ollama, model: model))
-                        error = nil
-                    } catch { self.error = error.localizedDescription }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(connection.isLoading || model.isEmpty || (onStart != nil && !localOnlyConfirmed))
+
+            ProviderPrimaryButton(
+                title: onStart == nil ? "Save Settings" : "Start Local Chat",
+                isEnabled: !connection.isLoading && !model.isEmpty && (onStart == nil || localOnlyConfirmed)
+            ) {
+                start()
             }
         }
-        .formStyle(.grouped)
         .navigationTitle("Local Models")
         .onAppear { endpoint = store.localEndpoint; model = store.localModel }
         .onChange(of: connection.models) {
@@ -226,11 +247,22 @@ struct LocalProviderSetupView: View {
         error = nil
         connection.test { try TextChatProvider(localEndpoint: endpoint) }
     }
+
+    private func start() {
+        do {
+            guard connection.models.contains(where: { $0.id == model }) else { throw ProviderError.missingModel }
+            let provider = try TextChatProvider(localEndpoint: endpoint)
+            try store.saveLocal(endpoint: endpoint, model: model)
+            onStart?(provider, ProviderSelection(kind: .ollama, model: model))
+            error = nil
+        } catch { self.error = error.localizedDescription }
+    }
 }
 
 struct CloudProviderSetupView: View {
     @ObservedObject var store: ProviderStore
     var onStart: ((any ChatProvider, ProviderSelection) -> Void)?
+    var embedded = false
     @State private var editing: ProviderConfiguration?
     @State private var removing: ProviderConfiguration?
     @State private var selectedID: UUID?
@@ -239,75 +271,96 @@ struct CloudProviderSetupView: View {
     @StateObject private var connection = ProviderConnection()
 
     var body: some View {
-        Form {
-            Section {
-                Text("Cloud Providers").font(.title2.weight(.semibold))
-                Text("Your prompts are sent to the selected provider. Use your own API key; API usage may be billed separately from a chat subscription.")
-                    .foregroundStyle(.secondary)
-                Button("Add Provider…", systemImage: "plus") {
-                    editing = ProviderConfiguration(name: "OpenAI", kind: .openAI, endpoint: ProviderEndpoint.defaultOpenAI)
+        ProviderSetupChrome(
+            embedded: embedded,
+            symbol: "cloud",
+            title: "Cloud Providers",
+            subtitle: "Your prompts are sent to the selected provider. Use your own API key; API usage may be billed separately from a chat subscription."
+        ) {
+            ProviderCard {
+                HStack {
+                    Text("Configured providers").font(.headline)
+                    Spacer()
+                    Button("Add Provider…", systemImage: "plus") {
+                        editing = ProviderConfiguration(name: "OpenAI", kind: .openAI, endpoint: ProviderEndpoint.defaultOpenAI)
+                    }
                 }
-                if let error = store.errorMessage { Text(error).foregroundStyle(.red) }
+                if let error = store.errorMessage {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if store.configurations.isEmpty {
                     Text("No cloud providers configured. Add OpenAI or a service that explicitly documents Chat Completions compatibility.")
+                        .font(.callout)
                         .foregroundStyle(.secondary)
-                }
-                ForEach(store.configurations) { configuration in
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(configuration.name).font(.headline)
-                            Text(configuration.kind.title).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(store.configurations) { configuration in
+                            providerRow(configuration)
+                            if configuration.id != store.configurations.last?.id {
+                                Divider()
+                            }
                         }
-                        Spacer()
-                        Button("Select") {
-                            connection.reset()
-                            selectedID = configuration.id
-                            model = configuration.model
-                            error = nil
-                        }
-                        Button("Edit") { editing = configuration }
-                        Button("Remove", role: .destructive) { removing = configuration }
                     }
                 }
             }
+
             if let configuration = store.configurations.first(where: { $0.id == selectedID }) {
-                Section(configuration.name) {
-                    Text(configuration.endpoint).font(.caption).textSelection(.enabled)
-                    Button("Test Connection / Refresh Models") {
-                        connection.test { try TextChatProvider(configuration: configuration, apiKey: store.key(for: configuration.id)) }
-                    }
-                    .disabled(connection.isLoading)
-                    if connection.isLoading {
-                        HStack { ProgressView().controlSize(.small); Button("Cancel") { connection.cancel() } }
-                    }
-                    if let status = connection.status { Text(status).foregroundStyle(.secondary) }
-                    if !connection.models.isEmpty {
-                        Picker("Available models", selection: $model) {
-                            Text("Choose a model").tag("")
-                            ForEach(connection.models) { Text($0.name).tag($0.id) }
+                ProviderCard(title: configuration.name) {
+                    Text(configuration.endpoint)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    HStack(spacing: 10) {
+                        Button("Test Connection / Refresh Models") {
+                            connection.test { try TextChatProvider(configuration: configuration, apiKey: store.key(for: configuration.id)) }
+                        }
+                        .disabled(connection.isLoading)
+                        if connection.isLoading {
+                            ProgressView().controlSize(.small)
+                            Button("Cancel") { connection.cancel() }
                         }
                     }
+                    if let status = connection.status {
+                        Text(status).font(.callout).foregroundStyle(.secondary)
+                    }
+                    if !connection.models.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ProviderFieldLabel("Available models")
+                            Picker("Available models", selection: $model) {
+                                Text("Choose a model").tag("")
+                                ForEach(connection.models) { Text($0.name).tag($0.id) }
+                            }
+                            .labelsHidden()
+                            .frame(maxWidth: 320, alignment: .leading)
+                        }
+                    }
+                    ProviderFieldLabel("Model ID")
                     TextField("Model ID", text: $model)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Model ID")
                     Text("A successful model-list request tests the connection and key, not chat access. Some listed models do not support Chat Completions. You can enter a documented text-chat model ID if discovery is unsupported.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Button(onStart == nil ? "Save Model" : "Start Cloud Chat") {
-                        do {
-                            guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProviderError.missingModel }
-                            var updated = configuration
-                            updated.model = model
-                            try store.save(updated, newKey: nil)
-                            let provider = try TextChatProvider(configuration: updated, apiKey: store.key(for: updated.id))
-                            onStart?(provider, ProviderSelection(kind: updated.kind, configurationID: updated.id, model: model))
-                            error = nil
-                        } catch { self.error = error.localizedDescription }
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let error = error ?? connection.error {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.isEmpty || connection.isLoading)
+                }
+
+                ProviderPrimaryButton(
+                    title: onStart == nil ? "Save Model" : "Start Cloud Chat",
+                    isEnabled: !model.isEmpty && !connection.isLoading
+                ) {
+                    start(configuration)
                 }
             }
-            if let error = error ?? connection.error { Text(error).foregroundStyle(.red) }
         }
-        .formStyle(.grouped)
         .navigationTitle("Cloud Providers")
         .sheet(item: $editing) { configuration in
             CloudProviderEditor(store: store, configuration: configuration) {
@@ -331,6 +384,49 @@ struct CloudProviderSetupView: View {
         .onDisappear { connection.cancel() }
         .onChange(of: store.configurations) { connection.reset() }
     }
+
+    private func providerRow(_ configuration: ProviderConfiguration) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(configuration.name).font(.headline)
+                Text(configuration.kind.title).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            if selectedID == configuration.id {
+                Text("Selected").font(.caption).foregroundStyle(.secondary)
+            }
+            Button("Select") {
+                connection.reset()
+                selectedID = configuration.id
+                model = configuration.model
+                error = nil
+            }
+            .buttonStyle(.borderless)
+            Button("Edit") { editing = configuration }
+                .buttonStyle(.borderless)
+            Button("Remove", role: .destructive) { removing = configuration }
+                .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background {
+            if selectedID == configuration.id {
+                EnvironmentalSelectionBackground(cornerRadius: 9)
+            }
+        }
+    }
+
+    private func start(_ configuration: ProviderConfiguration) {
+        do {
+            guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ProviderError.missingModel }
+            var updated = configuration
+            updated.model = model
+            try store.save(updated, newKey: nil)
+            let provider = try TextChatProvider(configuration: updated, apiKey: store.key(for: updated.id))
+            onStart?(provider, ProviderSelection(kind: updated.kind, configurationID: updated.id, model: model))
+            error = nil
+        } catch { self.error = error.localizedDescription }
+    }
 }
 
 private struct CloudProviderEditor: View {
@@ -343,23 +439,54 @@ private struct CloudProviderEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Configure Cloud Provider").font(.title2.weight(.semibold))
-            Form {
+            HStack(spacing: 11) {
+                Image(systemName: "cloud.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.caiPrimary)
+                    .frame(width: 34, height: 34)
+                    .background(Color.caiPrimary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                    .accessibilityHidden(true)
+                Text("Configure Cloud Provider").font(.title2.weight(.semibold))
+            }
+            ProviderCard {
+                ProviderFieldLabel("Name")
                 TextField("Name", text: $configuration.name)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Name")
+                ProviderFieldLabel("API type")
                 Picker("API type", selection: $configuration.kind) {
                     Text("OpenAI").tag(ProviderKind.openAI)
                     Text("OpenAI-compatible Chat Completions").tag(ProviderKind.openAICompatible)
                 }
+                .labelsHidden()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                ProviderFieldLabel("API base URL")
                 TextField("API base URL", text: $configuration.endpoint)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("API base URL")
                     .disabled(configuration.kind == .openAI)
-                SecureField("API key (leave blank to keep existing)", text: $apiKey)
-                TextField("Model ID (optional until starting chat)", text: $configuration.model)
+                ProviderFieldLabel("API key", hint: "Leave blank to keep existing")
+                SecureField("Leave blank to keep existing", text: $apiKey)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("API key")
+                ProviderFieldLabel("Model ID", hint: "Optional until starting chat")
+                TextField("Optional until starting chat", text: $configuration.model)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Model ID")
             }
             Text("Keys are stored in macOS Keychain, not preferences. Changing the endpoint requires re-entering the key. Compatibility is limited to text Chat Completions and model listing, not tools, images or every provider API.")
                 .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Toggle("I trust this endpoint to receive my API key and messages.", isOn: $consent)
-            if let error { Text(error).foregroundStyle(.red) }
-            HStack {
+                .toggleStyle(.switch)
+                .fixedSize(horizontal: false, vertical: true)
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 10) {
                 Button("Cancel", action: onDismiss).keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Save") {
@@ -370,12 +497,14 @@ private struct CloudProviderEditor: View {
                     } catch { self.error = error.localizedDescription }
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(Color.caiPrimary)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!consent)
             }
         }
-        .padding(24)
-        .frame(width: 540)
+        .padding(28)
+        .frame(width: 560)
+        .background { ShellEnvironmentalBackground(vignetteStrength: 0.7) }
         .onChange(of: configuration.kind) {
             if configuration.kind == .openAI { configuration.endpoint = ProviderEndpoint.defaultOpenAI }
             consent = false
@@ -395,9 +524,150 @@ struct ProviderSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(20)
             TabView {
-                LocalProviderSetupView(store: store).tabItem { Label("Local Models", systemImage: "desktopcomputer") }
-                CloudProviderSetupView(store: store).tabItem { Label("Cloud Providers", systemImage: "cloud") }
+                LocalProviderSetupView(store: store, embedded: true).tabItem { Label("Local Models", systemImage: "desktopcomputer") }
+                CloudProviderSetupView(store: store, embedded: true).tabItem { Label("Cloud Providers", systemImage: "cloud") }
             }
         }
+    }
+}
+
+// MARK: - Shared provider setup presentation
+
+/// Mirrors the shell used by the main window, Character.AI sign-in and
+/// Settings: environmental background, clear window backing and the shared
+/// window-transparency preference. Embedded in Settings it contributes only
+/// its content so the Settings shell remains the single background owner.
+private struct ProviderSetupChrome<Content: View>: View {
+    let embedded: Bool
+    let symbol: String
+    let title: String
+    let subtitle: String
+    let content: () -> Content
+
+    @ObservedObject private var preferences = AppPreferences.shared
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    init(
+        embedded: Bool = false,
+        symbol: String,
+        title: String,
+        subtitle: String,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.embedded = embedded
+        self.symbol = symbol
+        self.title = title
+        self.subtitle = subtitle
+        self.content = content
+    }
+
+    var body: some View {
+        if embedded {
+            scroll
+        } else {
+            scroll
+                .background {
+                    ShellEnvironmentalBackground(vignetteStrength: 0.6)
+                        .ignoresSafeArea()
+                }
+                .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+                .containerBackground(.clear, for: .window)
+                .background {
+                    WindowTransparencyBridge(
+                        transparency: preferences.windowTransparency,
+                        reduceTransparency: reduceTransparency
+                    )
+                }
+        }
+    }
+
+    private var scroll: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 11) {
+                        Image(systemName: symbol)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Color.caiPrimary)
+                            .frame(width: 34, height: 34)
+                            .background(Color.caiPrimary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                            .accessibilityHidden(true)
+                        Text(title).font(.title2.weight(.semibold))
+                    }
+                    .accessibilityElement(children: .combine)
+
+                    Text(subtitle)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                content()
+            }
+            .frame(maxWidth: 640, alignment: .leading)
+            .padding(28)
+            .frame(maxWidth: .infinity)
+        }
+        .scrollIndicators(.hidden)
+    }
+}
+
+private struct ProviderCard<Content: View>: View {
+    let title: String?
+    let content: () -> Content
+
+    init(title: String? = nil, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let title {
+                Text(title).font(.headline)
+            }
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .glassSurface(.sheet, cornerRadius: 16)
+    }
+}
+
+private struct ProviderFieldLabel: View {
+    let text: String
+    let hint: String?
+
+    init(_ text: String, hint: String? = nil) {
+        self.text = text
+        self.hint = hint
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(text).font(.subheadline.weight(.semibold))
+            if let hint {
+                Text(hint).font(.caption).foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct ProviderPrimaryButton: View {
+    let title: String
+    let isEnabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .fontWeight(.semibold)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(Color.caiPrimary)
+        .controlSize(.large)
+        .disabled(!isEnabled)
     }
 }
