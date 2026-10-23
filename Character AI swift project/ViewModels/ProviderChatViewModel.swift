@@ -8,6 +8,9 @@ final class ProviderChatViewModel: ObservableObject {
     @Published private(set) var isGenerating = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var wasInterrupted = false
+    /// Persona attached to subsequent requests. Changing it does not rewrite
+    /// the visible transcript.
+    @Published private(set) var persona: Persona?
     let provider: any ChatProvider
     let model: String
     private var generation: Task<Void, Never>?
@@ -16,9 +19,14 @@ final class ProviderChatViewModel: ObservableObject {
     private var publication: Task<Void, Never>?
     private var retryMessage: String?
 
-    init(provider: any ChatProvider, model: String) {
+    init(provider: any ChatProvider, model: String, persona: Persona? = nil) {
         self.provider = provider
         self.model = model
+        self.persona = persona
+    }
+
+    func setPersona(_ persona: Persona?) {
+        self.persona = persona
     }
 
     func send(_ text: String) {
@@ -43,7 +51,9 @@ final class ProviderChatViewModel: ObservableObject {
         streamingText = ""
         pendingText = ""
         isGenerating = true
-        let history = messages
+        let history = persona.map {
+            [ProviderChatMessage(role: .system, content: $0.portableSystemPrompt)] + messages
+        } ?? messages
         let provider = provider
         let model = model
         generation = Task { [weak self] in

@@ -397,7 +397,7 @@ private struct LocalCharacterDetailView: View {
             }
             Spacer(minLength: 0)
             Button("Start chat", systemImage: "bubble.left.and.bubble.right", action: onStartChat)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(GlassProminentButtonStyle())
         }
     }
 

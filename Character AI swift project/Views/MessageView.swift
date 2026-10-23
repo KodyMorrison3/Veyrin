@@ -113,7 +113,7 @@ struct MessageView: View {
                                 onEdit?(candidate.candidateId, newText)
                                 isEditing = false
                             }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(GlassProminentButtonStyle())
                         }
                     }
                     .frame(maxWidth: 480)

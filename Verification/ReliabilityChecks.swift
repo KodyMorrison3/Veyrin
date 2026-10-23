@@ -95,5 +95,6 @@ struct ReliabilityChecks {
         try await runImageChecks()
         try runRenderingChecks()
         try await runProviderChecks()
+        try await runPersonaChecks()
     }
 }

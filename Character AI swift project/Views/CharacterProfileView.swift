@@ -164,7 +164,7 @@ struct CharacterProfileView: View {
                             .frame(maxWidth: .infinity)
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(GlassProminentButtonStyle())
                 .disabled(isStartingConversation)
 
                 if let startConversationError {

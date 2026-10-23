@@ -30,7 +30,7 @@ struct ContentView: View {
                 .toolbar { backToProviders }
             case .textChat:
                 if let chat = coordinator.chat {
-                    ProviderChatView(viewModel: chat) { coordinator.show(.selector) }
+                    ProviderChatView(viewModel: chat, accountPersonas: authStore.personas) { coordinator.show(.selector) }
                 }
             }
         }

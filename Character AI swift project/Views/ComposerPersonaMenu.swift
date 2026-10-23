@@ -385,7 +385,7 @@ struct MemoryFactsSheet: View {
                     .foregroundStyle(Color.caiText)
                 Spacer()
                 Button("Done", action: dismiss)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(GlassProminentButtonStyle(cornerRadius: 8))
                     .controlSize(.small)
             }
             .padding(.bottom, 4)

@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ProviderChatView: View {
     @ObservedObject var viewModel: ProviderChatViewModel
+    @ObservedObject var accountPersonas: PersonaStore
+    @StateObject private var localPersonas = LocalPersonaStore.shared
     let onSwitch: () -> Void
     @State private var draft = ""
     @FocusState private var focused: Bool
@@ -73,10 +75,55 @@ struct ProviderChatView: View {
             ToolbarItem {
                 Button("New Chat", systemImage: "square.and.pencil") { viewModel.newConversation() }
             }
+            ToolbarItem {
+                Menu {
+                    Button {
+                        viewModel.setPersona(nil)
+                    } label: {
+                        if viewModel.persona == nil {
+                            Label("No Persona", systemImage: "checkmark")
+                        } else {
+                            Text("No Persona")
+                        }
+                    }
+                    if !localPersonas.personas.isEmpty {
+                        Section("Imported") {
+                            ForEach(localPersonas.personas) { persona in
+                                personaButton(persona)
+                            }
+                        }
+                    }
+                    if !accountPersonas.personas.isEmpty {
+                        Section("Character.AI") {
+                            ForEach(accountPersonas.personas) { persona in
+                                personaButton(persona)
+                            }
+                        }
+                    }
+                    Divider()
+                    SettingsLink { Label("Manage Personas…", systemImage: "gearshape") }
+                } label: {
+                    Label(viewModel.persona?.displayName ?? "Persona",
+                          systemImage: viewModel.persona == nil ? "person.crop.rectangle" : "person.crop.rectangle.fill")
+                }
+                .help(viewModel.persona.map { "Persona: \($0.displayName)" } ?? "Attach a persona")
+            }
             ToolbarItem { SettingsLink { Label("Settings", systemImage: "gearshape") } }
         }
         .onAppear { focused = true }
         .onDisappear { viewModel.cancel() }
+    }
+
+    private func personaButton(_ persona: Persona) -> some View {
+        Button {
+            viewModel.setPersona(persona)
+        } label: {
+            if viewModel.persona?.id == persona.id {
+                Label(persona.displayName, systemImage: "checkmark")
+            } else {
+                Text(persona.displayName)
+            }
+        }
     }
 
     private func send() {

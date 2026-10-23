@@ -440,12 +440,7 @@ private struct CloudProviderEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 11) {
-                Image(systemName: "cloud.fill")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color.caiPrimary)
-                    .frame(width: 34, height: 34)
-                    .background(Color.caiPrimary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-                    .accessibilityHidden(true)
+                GlassIconTile(systemName: "cloud.fill")
                 Text("Configure Cloud Provider").font(.title2.weight(.semibold))
             }
             ProviderCard {
@@ -496,8 +491,7 @@ private struct CloudProviderEditor: View {
                         onDismiss()
                     } catch { self.error = error.localizedDescription }
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Color.caiPrimary)
+                .buttonStyle(GlassProminentButtonStyle())
                 .keyboardShortcut(.defaultAction)
                 .disabled(!consent)
             }
@@ -586,12 +580,7 @@ private struct ProviderSetupChrome<Content: View>: View {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 11) {
-                        Image(systemName: symbol)
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(Color.caiPrimary)
-                            .frame(width: 34, height: 34)
-                            .background(Color.caiPrimary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-                            .accessibilityHidden(true)
+                        GlassIconTile(systemName: symbol)
                         Text(title).font(.title2.weight(.semibold))
                     }
                     .accessibilityElement(children: .combine)
@@ -665,8 +654,7 @@ private struct ProviderPrimaryButton: View {
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent)
-        .tint(Color.caiPrimary)
+        .buttonStyle(GlassProminentButtonStyle())
         .controlSize(.large)
         .disabled(!isEnabled)
     }

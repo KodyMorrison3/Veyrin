@@ -187,6 +187,81 @@ extension View {
     }
 }
 
+/// Primary actions use the same transparent Liquid Glass as floating controls
+/// instead of a filled accent slab. The label keeps native text contrast; the
+/// surface supplies the tint, rim and hover/press feedback.
+struct GlassProminentButtonStyle: ButtonStyle {
+    var cornerRadius: CGFloat = 12
+
+    func makeBody(configuration: Configuration) -> some View {
+        GlassProminentBody(configuration: configuration, cornerRadius: cornerRadius)
+    }
+
+    private struct GlassProminentBody: View {
+        let configuration: ButtonStyleConfiguration
+        let cornerRadius: CGFloat
+        @Environment(\.controlSize) private var controlSize
+        @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        @State private var isHovering = false
+
+        private var horizontalPadding: CGFloat {
+            switch controlSize {
+            case .mini, .small: return 10
+            case .large, .extraLarge: return 18
+            default: return 14
+            }
+        }
+
+        private var verticalPadding: CGFloat {
+            switch controlSize {
+            case .mini, .small: return 4
+            case .large, .extraLarge: return 10
+            default: return 7
+            }
+        }
+
+        var body: some View {
+            configuration.label
+                .fontWeight(.semibold)
+                .foregroundStyle(.primary)
+                .padding(.horizontal, horizontalPadding)
+                .padding(.vertical, verticalPadding)
+                .background {
+                    ZStack {
+                        GlassSurfaceBackground(role: .floatingControl, cornerRadius: cornerRadius)
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(Color.primary.opacity(isEnabled && isHovering ? 0.045 : 0))
+                    }
+                }
+                .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .opacity(isEnabled ? (configuration.isPressed ? 0.78 : 1) : 0.45)
+                .onHover { isHovering = $0 }
+                .animation(reduceMotion ? nil : GlassMetrics.interaction, value: configuration.isPressed)
+                .animation(reduceMotion ? nil : GlassMetrics.interaction, value: isHovering)
+        }
+    }
+}
+
+/// A compact icon treatment that floats on the environment instead of sitting
+/// on an opaque accent tile.
+struct GlassIconTile: View {
+    let systemName: String
+    var size: CGFloat = 34
+    var cornerRadius: CGFloat = 10
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: size * 0.5, weight: .semibold))
+            .foregroundStyle(Color.caiPrimary)
+            .frame(width: size, height: size)
+            .background {
+                GlassSurfaceBackground(role: .floatingControl, cornerRadius: cornerRadius)
+            }
+            .accessibilityHidden(true)
+    }
+}
+
 /// Unified global environmental background system.
 ///
 /// Serves as the single source of truth across the entire app:

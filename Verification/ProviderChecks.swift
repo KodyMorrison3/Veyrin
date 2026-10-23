@@ -402,7 +402,7 @@ func runProviderChecks() async throws {
             AnyView(ProviderSelectionView(coordinator: coordinator, store: store, authStore: auth)),
             AnyView(LocalProviderSetupView(store: store)),
             AnyView(CloudProviderSetupView(store: store)),
-            AnyView(ProviderChatView(viewModel: interrupted, onSwitch: {}))
+            AnyView(ProviderChatView(viewModel: interrupted, accountPersonas: auth.personas, onSwitch: {}))
         ]
         for view in views {
             for size in [NSSize(width: 600, height: 560), NSSize(width: 1100, height: 800)] {

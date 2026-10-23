@@ -141,8 +141,7 @@ struct LoginView: View {
                         .fontWeight(.semibold)
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Color.caiPrimary)
+                .buttonStyle(GlassProminentButtonStyle())
                 .controlSize(.large)
                 .disabled(trimmedToken.isEmpty || isSigningIn)
                 .accessibilityLabel("Sign in with session token")
@@ -183,12 +182,7 @@ struct LoginView: View {
 
     private var identity: some View {
         HStack(spacing: 11) {
-            Image(systemName: "bubble.left.and.bubble.right.fill")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Color.caiPrimary)
-                .frame(width: 34, height: 34)
-                .background(Color.caiPrimary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-                .accessibilityHidden(true)
+            GlassIconTile(systemName: "bubble.left.and.bubble.right.fill")
 
             Text("Character.AI")
                 .font(.headline.weight(.semibold))
