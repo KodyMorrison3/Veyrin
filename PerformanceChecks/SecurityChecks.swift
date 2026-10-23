@@ -21,14 +21,17 @@ nonisolated enum SecurityChecks {
         precondition(!CharacterAISession.allowsAuthentication(to: URL(string: "https://character.ai@evil.example/")))
 
         let redirectPolicy = CharacterAIRedirectPolicy()
-        let url = URL(string: "https://character.ai/")!
-        let response = HTTPURLResponse(url: url, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: ["Location": "https://example.com/"])!
+        let redirectURL = URL(string: "https://character.ai/")!
+        let response = HTTPURLResponse(url: redirectURL, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: ["Location": "https://example.com/"])!
         let request = URLRequest(url: URL(string: "https://example.com/")!)
-        var redirectedRequest: URLRequest? = request
-        redirectPolicy.urlSession(URLSession.shared, task: URLSession.shared.dataTask(with: url),
+        var redirectedRequest: URLRequest?
+        let finished = DispatchSemaphore(value: 0)
+        redirectPolicy.urlSession(URLSession.shared, task: URLSession.shared.dataTask(with: redirectURL),
                                   willPerformHTTPRedirection: response, newRequest: request) {
             redirectedRequest = $0
+            finished.signal()
         }
+        precondition(finished.wait(timeout: .now() + 1) == .success)
         precondition(redirectedRequest == nil)
 
         let rawServerText = "private-server-detail"

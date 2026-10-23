@@ -65,6 +65,11 @@ Veyrin is an **unofficial** macOS client for [Character.AI](https://character.ai
 - Edit and pin messages
 - Create and hide conversations
 
+### Local character library
+- Save Discover characters and import characters from a Character.AI account export
+- Search and filter saved characters, and export the library as a Veyrin archive
+- Chat with saved characters using a local Ollama model; Ollama uses loopback HTTP at `127.0.0.1:11434` and can optionally be launched by Veyrin when needed
+
 ### Native macOS
 - SwiftUI interface with native navigation
 - Lazy conversation rendering
@@ -102,14 +107,14 @@ With no public third-party API available, the protocol implementation is based o
 - Veyrin does not attempt to bypass authentication, CAPTCHA, rate limits, paywalls or other access controls.
 - Never share session credentials, protocol captures or request dumps. Sensitive investigation files should stay out of version control.
 
-There is no durable local conversation database or offline-first mode. Persona definitions and selections are saved in account-labelled preferences (not encrypted); images may be cached on disk, and custom wallpaper is saved locally. Signing out clears session-owned memory caches, but does not erase those local preferences or image files.
+The local character catalogue and local-character conversations are saved as **unencrypted JSON** under `~/Library/Application Support/Veyrin`. They remain on disk when you sign out. Character.AI conversations still do not have a durable local database or offline-first mode; Ollama local-character chats are stored separately from Character.AI conversation history. Persona definitions and selections are saved in account-labelled preferences (not encrypted); images may be cached on disk, and custom wallpaper is saved locally. Signing out clears session-owned memory caches, but does not erase those local files, preferences or image files.
 
 The release preparation audit found account/profile and feed captures in deleted historical test files. Deleting a file or ignoring it does not remove its history. The current screenshots have broader account/sidebar redactions, but older copies remain in Git history. Public distribution is on hold until these historical privacy findings are resolved. This is not an independent security certification.
 
 ## Limitations
 
 - **Character search isn't supported.** Character.AI's search endpoint blocks this client, and Veyrin does not work around that restriction. Use **Discover** and **Similar Characters** to find characters.
-- **No offline use.** Conversations depend on access to Character.AI; offline-first loading is planned, not implemented.
+- **No offline use for Character.AI conversations.** They depend on access to Character.AI; offline-first loading is planned, not implemented. The local character library can be used with Ollama running on this Mac.
 - **Compatibility can break at any time** because the app depends on undocumented backend behaviour.
 - **Ad-hoc signed, not notarised.** The experimental package has a verifiable local signature, but no Developer ID identity or Apple notarisation. It is not a trusted, notarised distribution.
 - **No automatic updates.** Settings can check GitHub release metadata; it does not install updates.
@@ -123,7 +128,7 @@ The release preparation audit found account/profile and feed captures in deleted
 - Xcode 27 with the macOS 27 SDK and Swift 6.4 toolchain
 - A Character.AI account for authenticated use (not required to build or run offline tests)
 
-The deployment target is macOS 27.0, the bundle identifier is `com.kodymorrison.veyrin`, and the app is version 0.1.0 (build 1). The Swift 6.4 compiler runs in Swift 5 language mode with complete concurrency checking.
+The deployment target is macOS 27.0, the bundle identifier is `com.kodymorrison.veyrin`, and the app is version 0.1.0 (build 1). The Swift 6.4 compiler runs in Swift 5 language mode with complete concurrency checking. The app uses the third-party Swift Package Manager dependencies ZipArchive and SystemPackage.
 
 ### Build and run
 
@@ -161,6 +166,8 @@ bash Verification/run-profile-navigation-checks.sh
 ```
 
 The suites compile app sources and use synthetic HTTP/WebSocket fixtures and native rendering checks. There is no XCTest target. They do not use a live account or prove live service compatibility.
+
+Character imports and library exports can include third-party characters whose rights are not specified. Review each source service's terms and respect creators' rights before sharing imported or saved content.
 
 ### Package a DMG
 
@@ -218,7 +225,7 @@ You may need to approve the app under **System Settings → Privacy & Security**
 - [ ] Stable release readiness and broader user testing
 - [ ] Developer ID signing and notarisation
 - [ ] Public distribution and update channel
-- [ ] Local conversation persistence and offline-first loading
+- [ ] Durable local Character.AI conversation persistence and offline-first loading
 - [ ] Expanded keyboard shortcuts
 - [ ] Further performance and reliability work
 
