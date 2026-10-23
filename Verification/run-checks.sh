@@ -20,6 +20,29 @@ while IFS= read -r -d '' source; do
     checks+=("$source")
 done < <(find Verification -maxdepth 1 -name '*.swift' -print0)
 build_products="$package_build/Build/Products/Debug"
+find_product() {
+    local product="$1" root="$2" match
+    match=$(find "$root" -type f -name "$product" -print -quit)
+    if [[ -z "$match" ]]; then
+        echo "error: could not find $product under $root after the Xcode build" >&2
+        exit 1
+    fi
+    printf '%s\n' "$match"
+}
+zip_object=$(find_product ZipArchive.o "$package_build/Build")
+system_object=$(find_product SystemPackage.o "$package_build/Build")
+zlib_object=$(find_product CZipArchiveZlib.o "$package_build/Build")
+system_c_object=$(find_product CSystem.o "$package_build/Build")
+system_modulemap=$(find "$package_build/SourcePackages" -type f -path '*/Sources/CSystem/include/module.modulemap' -print -quit)
+if [[ -z "$system_modulemap" ]]; then
+    echo "error: could not find the swift-system CSystem module map under $package_build/SourcePackages" >&2
+    exit 1
+fi
+zlib_modulemap=$(find "$package_build/Build" -type f -name 'CZipArchiveZlib.modulemap' -print -quit)
+if [[ -z "$zlib_modulemap" ]]; then
+    echo "error: could not find CZipArchiveZlib.modulemap under $package_build/Build" >&2
+    exit 1
+fi
 swift_flags=(
     -parse-as-library -D DEBUG -swift-version 5 -strict-concurrency=complete
     -default-isolation MainActor
@@ -28,12 +51,12 @@ swift_flags=(
     -enable-upcoming-feature GlobalActorIsolatedTypesUsability
     -enable-upcoming-feature InferSendableFromCaptures
     -I "$build_products"
-    -Xcc "-fmodule-map-file=$package_build/SourcePackages/checkouts/swift-system/Sources/CSystem/include/module.modulemap"
-    -Xcc "-fmodule-map-file=$package_build/Build/Intermediates.noindex/GeneratedModuleMaps/CZipArchiveZlib.modulemap"
-    -Xlinker "$build_products/ZipArchive.o"
-    -Xlinker "$build_products/SystemPackage.o"
-    -Xlinker "$build_products/CZipArchiveZlib.o"
-    -Xlinker "$package_build/Build/Intermediates.noindex/swift-system.build/Debug/CSystem-t.build/Objects-normal/arm64/Binary/CSystem.o"
+    -Xcc "-fmodule-map-file=$system_modulemap"
+    -Xcc "-fmodule-map-file=$zlib_modulemap"
+    -Xlinker "$zip_object"
+    -Xlinker "$system_object"
+    -Xlinker "$zlib_object"
+    -Xlinker "$system_c_object"
     -Xlinker -rpath -Xlinker "$build_products"
 )
 xcrun swiftc "${swift_flags[@]}" -o "$output/reliability-checks" "${sources[@]}" "${checks[@]}"
