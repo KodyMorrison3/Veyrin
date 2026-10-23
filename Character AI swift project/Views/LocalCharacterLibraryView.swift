@@ -9,6 +9,8 @@ struct LocalCharacterLibraryView: View {
     @State private var tag = "All tags"
     @State private var selectedCharacter: LocalCharacter?
     @State private var notice: String?
+    @State private var pendingRightsAction: LibraryRightsAction?
+    @State private var showingRightsConfirmation = false
 
     let onStartChat: (LocalCharacter) -> Void
 
@@ -19,9 +21,9 @@ struct LocalCharacterLibraryView: View {
             HStack {
                 Text("My Library").font(.largeTitle.weight(.semibold))
                 Spacer()
-                Button("Import archive…", systemImage: "square.and.arrow.down") { importArchive() }
-                Button("Import Character.AI export…", systemImage: "person.crop.square.badge.plus") { importCharacterAIExport() }
-                Button("Export library…", systemImage: "square.and.arrow.up") { exportArchive() }
+                Button("Import archive…", systemImage: "square.and.arrow.down") { confirmRights(for: .importArchive) }
+                Button("Import Character.AI export…", systemImage: "person.crop.square.badge.plus") { confirmRights(for: .importAccountExport) }
+                Button("Export library…", systemImage: "square.and.arrow.up") { confirmRights(for: .exportLibrary) }
             }
             .padding(20)
 
@@ -122,12 +124,39 @@ struct LocalCharacterLibraryView: View {
             .background { ShellEnvironmentalBackground() }
             .presentationBackground(.regularMaterial)
         }
+        .confirmationDialog(
+            pendingRightsAction?.confirmationTitle ?? "Character content notice",
+            isPresented: $showingRightsConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(pendingRightsAction?.continueTitle ?? "Continue") {
+                guard let action = pendingRightsAction else { return }
+                pendingRightsAction = nil
+                perform(action)
+            }
+            Button("Cancel", role: .cancel) { pendingRightsAction = nil }
+        } message: {
+            Text("Characters may be third-party content and their rights may not be specified. You are responsible for respecting the source service’s terms and creators’ rights. This is general information, not legal advice.")
+        }
         .alert("Library Error", isPresented: Binding(
             get: { library.errorMessage != nil },
             set: { if !$0 { library.errorMessage = nil } }
         )) {
             Button("OK", role: .cancel) { library.errorMessage = nil }
         } message: { Text(library.errorMessage ?? "Please try again.") }
+    }
+
+    private func confirmRights(for action: LibraryRightsAction) {
+        pendingRightsAction = action
+        showingRightsConfirmation = true
+    }
+
+    private func perform(_ action: LibraryRightsAction) {
+        switch action {
+        case .importArchive: importArchive()
+        case .importAccountExport: importCharacterAIExport()
+        case .exportLibrary: exportArchive()
+        }
     }
 
     private func importArchive() {
@@ -188,6 +217,27 @@ struct LocalCharacterLibraryView: View {
             guard response == .OK, let url = panel.url else { return }
             do { try library.exportArchive(to: url); notice = "Library exported." }
             catch { library.errorMessage = error.localizedDescription }
+        }
+    }
+}
+
+private enum LibraryRightsAction {
+    case importArchive
+    case importAccountExport
+    case exportLibrary
+
+    var confirmationTitle: String {
+        switch self {
+        case .importArchive: "Import character archive?"
+        case .importAccountExport: "Import account export?"
+        case .exportLibrary: "Export character library?"
+        }
+    }
+
+    var continueTitle: String {
+        switch self {
+        case .importArchive, .importAccountExport: "Continue to Import"
+        case .exportLibrary: "Continue to Export"
         }
     }
 }

@@ -167,7 +167,7 @@ bash Verification/run-profile-navigation-checks.sh
 
 The suites compile app sources and use synthetic HTTP/WebSocket fixtures and native rendering checks. There is no XCTest target. They do not use a live account or prove live service compatibility.
 
-Character imports and library exports can include third-party characters whose rights are not specified. Review each source service's terms and respect creators' rights before sharing imported or saved content.
+Before importing a character archive/account export or exporting the library, Veyrin asks you to confirm a neutral content notice. Imported and saved characters may be third-party content and rights may not be specified; you are responsible for respecting the source service's terms and creators' rights. This is general information, not legal advice.
 
 ### Package a DMG
 
