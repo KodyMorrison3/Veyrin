@@ -94,5 +94,6 @@ struct ReliabilityChecks {
         try await runHTTPChecks()
         try await runImageChecks()
         try runRenderingChecks()
+        try await runProviderChecks()
     }
 }

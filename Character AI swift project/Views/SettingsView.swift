@@ -31,13 +31,14 @@ struct SettingsView: View {
     let authStore: AuthStore
 
     enum SettingsPane: String, CaseIterable, Identifiable {
-        case account, appearance, chat, characters, notifications, privacy, advanced
+        case account, providers, appearance, chat, characters, notifications, privacy, advanced
 
         var id: String { rawValue }
 
         var title: String {
             switch self {
             case .account: return "Account"
+            case .providers: return "Providers"
             case .appearance: return "Appearance"
             case .chat: return "Chat"
             case .characters: return "Characters"
@@ -50,6 +51,7 @@ struct SettingsView: View {
         var systemImage: String {
             switch self {
             case .account: return "person.crop.circle"
+            case .providers: return "network"
             case .appearance: return "paintbrush"
             case .chat: return "bubble.left.and.bubble.right"
             case .characters: return "theatermasks"
@@ -94,6 +96,7 @@ struct SettingsView: View {
             Group {
                 switch selectedPane {
                 case .account: accountPane
+                case .providers: ProviderSettingsView(store: ProviderStore.shared)
                 case .appearance: appearancePane
                 case .chat: chatPane
                 case .characters: charactersPane

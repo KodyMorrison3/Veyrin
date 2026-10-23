@@ -2,20 +2,67 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var authStore: AuthStore
+    @ObservedObject private var providers = ProviderStore.shared
+    @StateObject private var coordinator = ProviderCoordinator()
 
     var body: some View {
         Group {
-            if authStore.isAuthenticated {
-                MainView(authStore: authStore)
-                    .id(authStore.sessionGeneration)
-            } else if authStore.isRestoringSession {
-                ProgressView("Checking saved session…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                LoginView()
+            switch coordinator.screen {
+            case .selector:
+                ProviderSelectionView(coordinator: coordinator, store: providers, authStore: authStore)
+            case .characterAI:
+                characterAI
+                    .toolbar {
+                        ToolbarItem(placement: .navigation) {
+                            Button("Character.AI · Switch Provider", systemImage: "arrow.triangle.swap") { coordinator.show(.selector) }
+                                .help("Character.AI · Switch provider")
+                        }
+                    }
+            case .local:
+                LocalProviderSetupView(store: providers) { provider, selection in
+                    coordinator.start(provider: provider, selection: selection, store: providers)
+                }
+                .toolbar { backToProviders }
+            case .cloud:
+                CloudProviderSetupView(store: providers) { provider, selection in
+                    coordinator.start(provider: provider, selection: selection, store: providers)
+                }
+                .toolbar { backToProviders }
+            case .textChat:
+                if let chat = coordinator.chat {
+                    ProviderChatView(viewModel: chat) { coordinator.show(.selector) }
+                }
             }
         }
-        .task { await authStore.restoreStoredSession() }
+        .frame(minWidth: 600, minHeight: 560)
+        .task {
+            coordinator.launch(store: providers)
+            await authStore.restoreStoredSession()
+            if authStore.isAuthenticated { coordinator.enteredCharacterAI(store: providers) }
+        }
+        .onChange(of: authStore.isAuthenticated) {
+            coordinator.authenticationChanged(authenticated: authStore.isAuthenticated, store: providers)
+        }
+        .onDisappear { coordinator.chat?.cancel() }
+    }
+
+    @ViewBuilder private var characterAI: some View {
+        if authStore.isAuthenticated {
+            MainView(authStore: authStore)
+                .id(authStore.sessionGeneration)
+                .onAppear { coordinator.enteredCharacterAI(store: providers) }
+        } else if authStore.isRestoringSession {
+            ProgressView("Checking saved Character.AI session…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            LoginView()
+        }
+    }
+
+    private var backToProviders: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Button("Providers", systemImage: "chevron.left") { coordinator.show(.selector) }
+        }
     }
 }
 

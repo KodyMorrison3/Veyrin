@@ -10,6 +10,8 @@ struct LocalCharacterChatView: View {
     @State private var errorMessage: String?
     @State private var isLoadingModels = false
     @State private var isGenerating = false
+    @State private var generationTask: Task<Void, Never>?
+    @State private var modelsTask: Task<Void, Never>?
     @FocusState private var composerFocused: Bool
     @ObservedObject private var environmentalPaletteStore = EnvironmentalPaletteStore.shared
     @Environment(\.colorScheme) private var colorScheme
@@ -19,8 +21,8 @@ struct LocalCharacterChatView: View {
 
     let character: LocalCharacter
 
-    private var ollama: LocalOllamaService {
-        try! LocalOllamaService(startsApplicationWhenUnavailable: preferences.startOllamaAutomatically)
+    private func ollama() throws -> LocalOllamaService {
+        try LocalOllamaService(startsApplicationWhenUnavailable: preferences.startOllamaAutomatically)
     }
 
     var body: some View {
@@ -83,6 +85,10 @@ struct LocalCharacterChatView: View {
             do { conversation = try library.conversation(for: character) }
             catch { errorMessage = error.localizedDescription }
             await loadModels()
+        }
+        .onDisappear {
+            generationTask?.cancel()
+            modelsTask?.cancel()
         }
         .navigationTitle(Text(verbatim: ""))
     }
@@ -234,7 +240,8 @@ struct LocalCharacterChatView: View {
                 }
                 if models.isEmpty {
                     Button("Retry Ollama", systemImage: "arrow.clockwise") {
-                        Task { await loadModels() }
+                        modelsTask?.cancel()
+                        modelsTask = Task { await loadModels() }
                     }
                 }
             } label: {
@@ -266,15 +273,15 @@ struct LocalCharacterChatView: View {
                     .foregroundStyle(Color.caiText)
                     .focused($composerFocused)
                     .disabled(isGenerating)
-                    .onSubmit { Task { await send() } }
+                    .onSubmit { beginSend() }
                     .onKeyPress(keys: [.return], phases: .down) { press in
                         guard !press.modifiers.contains(.shift) else { return .ignored }
-                        if !isSendDisabled { Task { await send() } }
+                        if !isSendDisabled { beginSend() }
                         return .handled
                     }
             }
 
-            Button { Task { await send() } } label: {
+            Button { beginSend() } label: {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(.white)
@@ -307,11 +314,16 @@ struct LocalCharacterChatView: View {
         isLoadingModels = true
         defer { isLoadingModels = false }
         do {
-            models = try await ollama.models()
+            models = try await ollama().models()
             if models.isEmpty { errorMessage = LocalOllamaError.noModels.localizedDescription }
             if !models.contains(selectedModel) { selectedModel = models.first ?? "" }
             if !models.isEmpty { errorMessage = nil }
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func beginSend() {
+        guard !isSendDisabled else { return }
+        generationTask = Task { await send() }
     }
 
     private func send() async {
@@ -326,9 +338,15 @@ struct LocalCharacterChatView: View {
             conversation = current
             isGenerating = true
             defer { isGenerating = false }
-            let answer = try await ollama.reply(model: selectedModel, character: character, messages: current.messages)
+            let answer = try await ollama().reply(model: selectedModel, character: character, messages: current.messages)
+            try Task.checkCancellation()
             try library.append(LocalChatMessage(role: "assistant", content: answer), characterID: character.id)
             conversation = library.conversations[character.id]
-        } catch { errorMessage = error.localizedDescription }
+        } catch is CancellationError {
+            // Leaving the provider must not save a late answer into this chat.
+        } catch {
+            guard !Task.isCancelled else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 }

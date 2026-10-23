@@ -25,15 +25,14 @@ struct LocalOllamaService {
     private let waitForStartup: @Sendable (Duration) async throws -> Void
     private let startsApplicationWhenUnavailable: Bool
 
-    init(baseURL: URL = URL(string: "http://127.0.0.1:11434")!, session: URLSession = .shared,
+    init(baseURL: URL? = nil, session: URLSession = CharacterAISession.shared,
          startsApplicationWhenUnavailable: Bool = true,
          launchApplication: @escaping @MainActor () async throws -> Void = LocalOllamaService.launchOllama,
          waitForStartup: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) throws {
-        guard baseURL.scheme == "http",
-              ["127.0.0.1", "localhost", "::1"].contains(baseURL.host ?? "") else {
-            throw LocalOllamaError.nonLoopbackURL
-        }
-        self.baseURL = baseURL
+        let resolvedURL: URL
+        do { resolvedURL = try ProviderEndpoint.local(baseURL?.absoluteString ?? ProviderStore.shared.localEndpoint) }
+        catch { throw LocalOllamaError.nonLoopbackURL }
+        self.baseURL = resolvedURL
         self.session = session
         self.startsApplicationWhenUnavailable = startsApplicationWhenUnavailable
         self.launchApplication = launchApplication
@@ -113,7 +112,7 @@ struct LocalOllamaService {
         request.timeoutInterval = 180
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw LocalOllamaError.unavailable }
         guard (200..<300).contains(http.statusCode) else {
             throw LocalOllamaError.serverRejected(http.statusCode)

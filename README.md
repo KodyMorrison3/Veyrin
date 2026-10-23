@@ -4,7 +4,7 @@
 
   <h1>Veyrin</h1>
 
-  <p>A native Character.AI client for macOS, built with Swift and SwiftUI and shaped around the way desktop chat should feel on a Mac.</p>
+  <p>A native macOS AI client for Character.AI, local Ollama models and configured cloud providers, built with Swift and SwiftUI.</p>
   <p>
     <a href="#status"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Status-Experimental-8A63D2.svg?mode=dark&amp;size=sm"><img alt="Status: experimental" src="https://shieldcn.dev/badge/Status-Experimental-8A63D2.svg?mode=light&amp;size=sm"></picture></a>
     <a href="#limitations"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Unofficial-Use%20at%20your%20own%20risk-18181B.svg?mode=dark&amp;size=sm"><img alt="Unofficial client, use at your own risk" src="https://shieldcn.dev/badge/Unofficial-Use%20at%20your%20own%20risk-18181B.svg?mode=light&amp;size=sm"></picture></a>
@@ -37,7 +37,7 @@
 
 ## About
 
-Veyrin is an **unofficial** macOS client for [Character.AI](https://character.ai). It's a native SwiftUI app, not a website embedded in a browser view or an Electron wrapper. Authentication, networking, services and UI are separated into layers, with REST requests for data and WebSockets for streamed message generation.
+Veyrin is an **unofficial** macOS client for [Character.AI](https://character.ai), with separate text-chat support for Ollama and cloud providers. It's a native SwiftUI app, not a website embedded in a browser view or an Electron wrapper. Authentication, networking, services and UI are separated into layers. Character.AI keeps its REST and WebSocket implementation; local/cloud text chat uses HTTP streaming.
 
 > [!WARNING]
 > **Use at your own risk.** Veyrin is independent and experimental. Character.AI has no public API for third-party clients, so the app relies on undocumented endpoints. Changes to Character.AI's backend can break features or sign-in without notice.
@@ -58,6 +58,16 @@ Veyrin is an **unofficial** macOS client for [Character.AI](https://character.ai
 
 ## Features
 
+### Providers
+- Native provider chooser at launch: **Character.AI**, **Local Models**, **Cloud Providers**
+- Switch providers without restarting; Character.AI keeps its existing sign-in, history and character features
+- Ollama connection testing, installed-model selection and streamed text responses through a configurable loopback endpoint
+- OpenAI Chat Completions and explicitly configured OpenAI-compatible text endpoints, with add/edit/test/remove controls and Keychain-backed API keys
+- **Remember my last provider** is off by default. Enabling it restores the last selected provider/model after connection checks where supported; disabling it does not sign out or remove keys
+- New local/cloud text chats are kept only in memory. Switching providers starts a separate conversation; context is never transferred automatically
+
+See [Provider setup and architecture](PROVIDERS.md) for setup, privacy boundaries, verification results and limitations. Connection tests use model listing; they do **not** prove that a model permits chat generation. No live AI connection was verified during implementation.
+
 ### Conversations
 - Conversation history, recent conversations and chat previews
 - Streamed message generation over WebSockets
@@ -68,7 +78,8 @@ Veyrin is an **unofficial** macOS client for [Character.AI](https://character.ai
 ### Local character library
 - Save Discover characters and import characters from a Character.AI account export
 - Search and filter saved characters, and export the library as a Veyrin archive
-- Chat with saved characters using a local Ollama model; Ollama uses loopback HTTP at `127.0.0.1:11434` and can optionally be launched by Veyrin when needed
+- Chat with saved characters using Ollama; its configurable endpoint defaults to loopback HTTP at `127.0.0.1:11434`. The existing local-character flow can optionally launch Ollama when needed; the new provider chooser does not launch it or download models
+- For local-only inference, use downloaded models and disable Ollama cloud features. A loopback address alone does not prove local inference; see [Ollama privacy/setup](PROVIDERS.md#ollama)
 
 ### Native macOS
 - SwiftUI interface with native navigation
@@ -97,11 +108,13 @@ flowchart TD
     E --> F
 ```
 
-With no public third-party API available, the protocol implementation is based on observing how the existing Character.AI client behaves.
+With no public third-party Character.AI API available, that protocol implementation is based on observing how the existing Character.AI client behaves. It has not been forced into a generic completion API. The separate `ChatProvider` contract covers model discovery and streamed text for local/cloud adapters; [PROVIDERS.md](PROVIDERS.md#architecture-and-concurrency) describes the boundary and extension points.
 
 ## Security and privacy
 
-- Sign-in uses a session token you supply. It is validated with Character.AI before being stored in the macOS Keychain; treat it like a password.
+- Character.AI sign-in uses a session token you supply. It is validated with Character.AI before being stored in the macOS Keychain; treat it like a password.
+- Cloud API keys use separate Keychain items. Preferences contain provider names, endpoints, model IDs and an optional last-provider selection, never API keys. Editing a cloud destination requires re-entering its key and confirming trust in the endpoint.
+- Local/cloud provider transport uses ephemeral URLSessions without persistent cookies, HTTP credentials or response caching, refuses redirects and does not expose server error bodies in the UI. Cloud chat sends context only to its explicitly selected endpoint.
 - Authenticated requests use HTTPS/WSS. Their URLSession has no persistent HTTP cache, cookie store or credential store, and refuses redirects. In-memory account caches are cleared when the session changes.
 - The app runs in the macOS App Sandbox, requests outgoing network access, and uses the read-write user-selected-files entitlement so exports can be written to a destination chosen in the save panel.
 - Veyrin does not attempt to bypass authentication, CAPTCHA, rate limits, paywalls or other access controls.
@@ -115,7 +128,9 @@ The release preparation audit found account/profile and feed captures in deleted
 
 - **Character search isn't supported.** Character.AI's search endpoint blocks this client, and Veyrin does not work around that restriction. Use **Discover** and **Similar Characters** to find characters.
 - **No offline use for Character.AI conversations.** They depend on access to Character.AI; offline-first loading is planned, not implemented. The local character library can be used with Ollama running on this Mac.
-- **Compatibility can break at any time** because the app depends on undocumented backend behaviour.
+- **Character.AI compatibility can break at any time** because that integration depends on undocumented backend behaviour.
+- **Cloud compatibility is deliberately narrow.** The adapter supports Bearer-authenticated model listing and streamed text Chat Completions, not every OpenAI model, the Responses API, tools, images or arbitrary vendor APIs. A successful model-list request is not a successful chat test.
+- **New provider text chats are not saved.** They are separate from the existing disk-backed local-character conversations. No local-to-cloud context migration is performed.
 - **Ad-hoc signed, not notarised.** The experimental package has a verifiable local signature, but no Developer ID identity or Apple notarisation. It is not a trusted, notarised distribution.
 - **No automatic updates.** Settings can check GitHub release metadata; it does not install updates.
 
@@ -126,7 +141,7 @@ The release preparation audit found account/profile and feed captures in deleted
 - A Mac running **macOS 27 or later**
 - An Apple Silicon Mac (arm64)
 - Xcode 27 with the macOS 27 SDK and Swift 6.4 toolchain
-- A Character.AI account for authenticated use (not required to build or run offline tests)
+- A Character.AI account for Character.AI features, Ollama with a downloaded model for local chat, or your own cloud API key for cloud chat; none is required to build or run offline tests
 
 The deployment target is macOS 27.0, the bundle identifier is `com.kodymorrison.veyrin`, and the app is version 0.1.0 (build 1). The Swift 6.4 compiler runs in Swift 5 language mode with complete concurrency checking. The app uses the third-party Swift Package Manager dependencies ZipArchive and SystemPackage.
 
@@ -165,7 +180,7 @@ bash Verification/model-default/run-model-default-checks.sh
 bash Verification/run-profile-navigation-checks.sh
 ```
 
-The suites compile app sources and use synthetic HTTP/WebSocket fixtures and native rendering checks. There is no XCTest target. They do not use a live account or prove live service compatibility.
+The suites compile app sources and use synthetic HTTP/WebSocket fixtures and native rendering checks. There is no XCTest target. They do not use a live account or prove live service compatibility. [ProviderChecks.swift](Verification/ProviderChecks.swift), included in the main verification script, covers provider routing/preferences, session gates, model discovery, NDJSON/SSE parsing, cancellation, switching during generation, retry and credential/endpoint handling. See [provider verification notes](PROVIDERS.md#verification) for actual results and checks still needed.
 
 Before importing a character archive/account export or exporting the library, Veyrin asks you to confirm a neutral content notice. Imported and saved characters may be third-party content and rights may not be specified; you are responsible for respecting the source service's terms and creators' rights. This is general information, not legal advice.
 

@@ -65,33 +65,14 @@
 				000000000000000000000010 /* Character AI swift project */,
 			);
 			name = "Character AI swift project";
-			productName = MyApp;
-			productReference = 000000000000000000000120 /* Veyrin.app */;
-			productType = "com.apple.product-type.application";
 			packageProductDependencies = (
 				000000000000000000000171 /* ZipArchive */,
 			);
+			productName = MyApp;
+			productReference = 000000000000000000000120 /* Veyrin.app */;
+			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		000000000000000000000171 /* ZipArchive */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 000000000000000000000181 /* XCRemoteSwiftPackageReference "swift-zip-archive" */;
-			productName = ZipArchive;
-		};
-/* End XCSwiftPackageProductDependency section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		000000000000000000000181 /* XCRemoteSwiftPackageReference "swift-zip-archive" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/adam-fowler/swift-zip-archive";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.8.1;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
 
 /* Begin PBXProject section */
 		000000000000000000000000 /* Project object */ = {
@@ -107,9 +88,6 @@
 				};
 			};
 			buildConfigurationList = 000000000000000010000000 /* Build configuration list for PBXProject "Character AI swift project" */;
-			packageReferences = (
-				000000000000000000000181 /* XCRemoteSwiftPackageReference "swift-zip-archive" */,
-			);
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -118,6 +96,9 @@
 			);
 			mainGroup = 000000000000000000000001;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				000000000000000000000181 /* XCRemoteSwiftPackageReference "swift-zip-archive" */,
+			);
 			preferredProjectObjectVersion = 90;
 			productRefGroup = 000000000000000000000020 /* Products */;
 			projectDirPath = "";
@@ -284,7 +265,7 @@
 				"ASSETCATALOG_COMPILER_APPICON_NAME[arch=*]" = AppIcon;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = "Character AI swift project/Veyrin.entitlements";
-				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 4KQYB95J7T;
@@ -417,6 +398,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		000000000000000000000181 /* XCRemoteSwiftPackageReference "swift-zip-archive" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/adam-fowler/swift-zip-archive";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.8.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		000000000000000000000171 /* ZipArchive */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000181 /* XCRemoteSwiftPackageReference "swift-zip-archive" */;
+			productName = ZipArchive;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 000000000000000000000000 /* Project object */;
 }
