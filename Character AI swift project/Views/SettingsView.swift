@@ -112,7 +112,8 @@ struct SettingsView: View {
                 case .advanced: advancedPane
                 }
             }
-            .frame(minWidth: 480, minHeight: 380)
+            .frame(minWidth: 480, maxWidth: .infinity,
+                   minHeight: 380, idealHeight: 560, maxHeight: 700)
         }
         // Seamless frosted window: uses the unified ShellEnvironmentalBackground
         // with reduced vignette so the environmental wallpaper softly anchors the window

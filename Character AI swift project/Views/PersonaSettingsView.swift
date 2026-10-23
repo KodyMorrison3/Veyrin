@@ -12,8 +12,8 @@ struct PersonaSettingsView: View {
     @State private var notice: String?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
+        ScrollView(.vertical) {
+            LazyVStack(alignment: .leading, spacing: 8) {
                 section(
                     title: "For Local & Cloud Chats",
                     footer: "Personas imported here are sent as the system prompt to Ollama and cloud providers. Files can be Veyrin persona JSON, character-card JSON, or a plain-text/Markdown prompt. Nothing is uploaded until you choose a persona in a provider chat."
@@ -74,7 +74,10 @@ struct PersonaSettingsView: View {
                 }
             }
             .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollIndicators(.automatic)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .confirmationDialog(
             "Delete \(pendingDeletion?.displayName ?? "this persona")?",
             isPresented: Binding(get: { pendingDeletion != nil },
@@ -101,7 +104,9 @@ struct PersonaSettingsView: View {
         HStack(alignment: .top, spacing: 12) {
             personaIcon(persona)
             VStack(alignment: .leading, spacing: 4) {
-                Text(persona.displayName).font(.body.weight(.medium))
+                Text(persona.displayName)
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
                 if let title = persona.title, !title.isEmpty {
                     Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -129,7 +134,9 @@ struct PersonaSettingsView: View {
         HStack(alignment: .top, spacing: 12) {
             personaIcon(persona)
             VStack(alignment: .leading, spacing: 4) {
-                Text(persona.displayName).font(.body.weight(.medium))
+                Text(persona.displayName)
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
                 if let title = persona.title, !title.isEmpty {
                     Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
