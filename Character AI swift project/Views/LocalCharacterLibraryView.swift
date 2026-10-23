@@ -11,6 +11,7 @@ struct LocalCharacterLibraryView: View {
     @State private var notice: String?
     @State private var pendingRightsAction: LibraryRightsAction?
     @State private var showingRightsConfirmation = false
+    @State private var pendingRemoval: LocalCharacter?
 
     let onStartChat: (LocalCharacter) -> Void
 
@@ -60,53 +61,82 @@ struct LocalCharacterLibraryView: View {
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 16)], spacing: 16) {
                         ForEach(results) { character in
-                            Button { selectedCharacter = character } label: {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    ZStack(alignment: .bottomLeading) {
-                                        if let fileName = character.avatarFileName,
-                                           let url = CharacterImageURL.makeURL(avatarFileName: fileName) {
-                                            CachedAvatarView(url: url) {
-                                                avatarFallback(character.name)
-                                            }
-                                            .frame(maxWidth: .infinity)
-                                            .frame(height: 168)
-                                            .clipped()
-                                        } else {
-                                            avatarFallback(character.name)
+                            ZStack(alignment: .topTrailing) {
+                                Button { selectedCharacter = character } label: {
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        ZStack(alignment: .bottomLeading) {
+                                            if let fileName = character.avatarFileName,
+                                               let url = CharacterImageURL.makeURL(avatarFileName: fileName) {
+                                                CachedAvatarView(url: url) {
+                                                    avatarFallback(character.name)
+                                                }
                                                 .frame(maxWidth: .infinity)
                                                 .frame(height: 168)
-                                        }
-                                        Text(character.name)
-                                            .font(.headline.weight(.semibold))
-                                            .foregroundStyle(.white)
-                                            .lineLimit(2)
-                                            .shadow(color: .black.opacity(0.6), radius: 5)
-                                            .padding(12)
-                                    }
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        Text(character.tagline.isEmpty ? character.description : character.tagline)
-                                            .font(.callout).foregroundStyle(.secondary).lineLimit(3)
-                                        HStack(spacing: 6) {
-                                            Text(character.sourcePlatform)
-                                            if let count = character.interactionCount {
-                                                Text("· \(count.formatted()) chats")
+                                                .clipped()
+                                            } else {
+                                                avatarFallback(character.name)
+                                                    .frame(maxWidth: .infinity)
+                                                    .frame(height: 168)
                                             }
+                                            Text(character.name)
+                                                .font(.headline.weight(.semibold))
+                                                .foregroundStyle(.white)
+                                                .lineLimit(2)
+                                                .shadow(color: .black.opacity(0.6), radius: 5)
+                                                .padding(12)
                                         }
-                                        .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            Text(character.tagline.isEmpty ? character.description : character.tagline)
+                                                .font(.callout).foregroundStyle(.secondary).lineLimit(3)
+                                            HStack(spacing: 6) {
+                                                Text(character.sourcePlatform)
+                                                if let count = character.interactionCount {
+                                                    Text("· \(count.formatted()) chats")
+                                                }
+                                            }
+                                            .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                                        }
+                                        .padding(.horizontal, 12)
+                                        .padding(.bottom, 12)
                                     }
-                                    .padding(.horizontal, 12)
-                                    .padding(.bottom, 12)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentSurface(cornerRadius: 14)
+                                    .contentShape(RoundedRectangle(cornerRadius: 14))
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentSurface(cornerRadius: 14)
-                                .contentShape(RoundedRectangle(cornerRadius: 14))
+                                .buttonStyle(.plain)
+
+                                Button { pendingRemoval = character } label: {
+                                    Image(systemName: "trash")
+                                        .font(.callout.weight(.semibold))
+                                        .foregroundStyle(.white)
+                                        .frame(width: 32, height: 32)
+                                        .background(.black.opacity(0.38), in: Circle())
+                                        .overlay(Circle().strokeBorder(.white.opacity(0.22)))
+                                        .contentShape(Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .padding(10)
+                                .help("Remove \(character.name) from My Library")
+                                .accessibilityLabel("Remove \(character.name) from My Library")
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                     .padding(20)
                     .frame(maxWidth: 1100)
                     .frame(maxWidth: .infinity)
+                }
+                .alert(
+                    "Remove from My Library?",
+                    isPresented: Binding(
+                        get: { pendingRemoval != nil },
+                        set: { if !$0 { pendingRemoval = nil } }
+                    ),
+                    presenting: pendingRemoval
+                ) { character in
+                    Button("Remove from My Library", role: .destructive) { remove(character) }
+                    Button("Cancel", role: .cancel) { pendingRemoval = nil }
+                } message: { character in
+                    Text("\(character.name) and its saved local chat history will be removed from this Mac. This cannot be undone.")
                 }
             }
         }
@@ -144,6 +174,17 @@ struct LocalCharacterLibraryView: View {
         )) {
             Button("OK", role: .cancel) { library.errorMessage = nil }
         } message: { Text(library.errorMessage ?? "Please try again.") }
+    }
+
+    private func remove(_ character: LocalCharacter) {
+        do {
+            try library.remove(character.id, deletingConversation: true)
+            if selectedCharacter?.id == character.id { selectedCharacter = nil }
+            notice = "Removed \(character.name) from your library."
+        } catch {
+            library.errorMessage = error.localizedDescription
+        }
+        pendingRemoval = nil
     }
 
     private func confirmRights(for action: LibraryRightsAction) {

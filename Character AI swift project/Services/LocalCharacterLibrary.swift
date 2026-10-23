@@ -273,6 +273,22 @@ final class LocalCharacterLibrary: ObservableObject {
         return characters.contains { $0.id == id }
     }
 
+    /// Removes the catalogue entry, leaving its saved conversation alone unless
+    /// explicitly requested. Bookmark toggles keep the conversation so the
+    /// character can be saved again without losing its local history.
+    func remove(_ id: String, deletingConversation: Bool = false) throws {
+        guard catalogueIsAvailable else { throw LocalCharacterLibraryError.catalogueUnavailable }
+        guard characters.contains(where: { $0.id == id }) else { return }
+        let previous = characters
+        characters.removeAll { $0.id == id }
+        do { try saveCatalogue() }
+        catch { characters = previous; throw error }
+        if deletingConversation {
+            try? FileManager.default.removeItem(at: conversationFile(id))
+        }
+        errorMessage = nil
+    }
+
     func saveFromDiscover(_ discoverCharacter: DiscoverFeedCharacter) throws {
         let existing = characters.first { $0.id == discoverCharacter.externalID }
         let character = try LocalCharacter(discoverCharacter: discoverCharacter, existing: existing)

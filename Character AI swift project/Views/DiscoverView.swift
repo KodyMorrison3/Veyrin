@@ -36,6 +36,12 @@ struct DiscoverView: View {
         .scrollEdgeEffectHidden()
         // Inherits MainView's full-window ShellEnvironmentalBackground.
         .navigationTitle("Discover")
+        .alert("Library Error", isPresented: Binding(
+            get: { library.errorMessage != nil },
+            set: { if !$0 { library.errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { library.errorMessage = nil }
+        } message: { Text(library.errorMessage ?? "Please try again.") }
         .onDisappear { viewModel.cancelSearch() }
         .task {
             await viewModel.loadInitialPages()
@@ -360,8 +366,13 @@ struct DiscoverView: View {
     private func saveButton(_ character: DiscoverFeedCharacter) -> some View {
         let isSaved = library.containsCharacter(character.externalID)
         return Button {
-            do { try library.saveFromDiscover(character) }
-            catch { library.errorMessage = error.localizedDescription }
+            do {
+                if isSaved, let id = character.externalID {
+                    try library.remove(id)
+                } else {
+                    try library.saveFromDiscover(character)
+                }
+            } catch { library.errorMessage = error.localizedDescription }
         } label: {
             Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
                 .font(.callout.weight(.semibold))
@@ -370,15 +381,20 @@ struct DiscoverView: View {
         }
         .buttonStyle(.bordered)
         .clipShape(Circle())
-        .help(isSaved ? "Update saved character in My Library" : "Save character to My Library")
-        .accessibilityLabel(isSaved ? "Update saved character in My Library" : "Save character to My Library")
+        .help(isSaved ? "Remove from My Library" : "Save character to My Library")
+        .accessibilityLabel(isSaved ? "Remove from My Library" : "Save character to My Library")
     }
 
     private func saveButton(_ result: CharacterSearchResult) -> some View {
         let isSaved = library.containsCharacter(result.externalID)
         return Button {
-            do { try library.saveFromDiscover(result) }
-            catch { library.errorMessage = error.localizedDescription }
+            do {
+                if isSaved, let id = result.externalID {
+                    try library.remove(id)
+                } else {
+                    try library.saveFromDiscover(result)
+                }
+            } catch { library.errorMessage = error.localizedDescription }
         } label: {
             Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
                 .font(.callout.weight(.semibold))
@@ -387,8 +403,8 @@ struct DiscoverView: View {
         }
         .buttonStyle(.bordered)
         .clipShape(Circle())
-        .help(isSaved ? "Update saved character in My Library" : "Save character to My Library")
-        .accessibilityLabel(isSaved ? "Update saved character in My Library" : "Save character to My Library")
+        .help(isSaved ? "Remove from My Library" : "Save character to My Library")
+        .accessibilityLabel(isSaved ? "Remove from My Library" : "Save character to My Library")
     }
 
     private func characterCard(_ character: DiscoverFeedCharacter) -> some View {

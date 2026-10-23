@@ -467,6 +467,36 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
         precondition(duplicateArchiveLibrary.characters.first { $0.id == "duplicate-id" }?.name == "Last duplicate")
         print("PASS duplicate catalogue IDs keep the last entry during save and both import paths")
 
+        func removalCharacter(_ id: String, _ name: String) -> DiscoverFeedCharacter {
+            DiscoverFeedCharacter(
+                externalID: id, name: name, participantName: nil,
+                interactionCount: nil, title: nil, description: nil, greeting: "Hello",
+                visibility: nil, avatarFileName: nil, username: nil, shortHash: nil
+            )
+        }
+        let removalRoot = libraryRoot.appendingPathComponent("removal", isDirectory: true)
+        let removalLibrary = LocalCharacterLibrary(supportDirectory: removalRoot)
+        let keptID = UUID().uuidString
+        let unbookmarkedID = UUID().uuidString
+        try removalLibrary.saveFromDiscover(removalCharacter(keptID, "Kept Character"))
+        try removalLibrary.saveFromDiscover(removalCharacter(unbookmarkedID, "Unbookmarked Character"))
+        _ = try removalLibrary.conversation(for: LocalCharacter(discoverCharacter: removalCharacter(keptID, "Kept Character")))
+        _ = try removalLibrary.conversation(for: LocalCharacter(discoverCharacter: removalCharacter(unbookmarkedID, "Unbookmarked Character")))
+        let removalConversations = removalRoot.appendingPathComponent("conversations", isDirectory: true)
+        try removalLibrary.remove(unbookmarkedID)
+        precondition(!removalLibrary.containsCharacter(unbookmarkedID))
+        precondition(removalLibrary.containsCharacter(keptID))
+        precondition(FileManager.default.fileExists(atPath: removalConversations.appendingPathComponent("\(unbookmarkedID).json").path),
+                     "Unbookmarking must keep the local conversation for a later re-save")
+        let reloadedRemovalLibrary = LocalCharacterLibrary(supportDirectory: removalRoot)
+        precondition(!reloadedRemovalLibrary.containsCharacter(unbookmarkedID))
+        precondition(reloadedRemovalLibrary.containsCharacter(keptID))
+        try reloadedRemovalLibrary.remove(keptID, deletingConversation: true)
+        precondition(!reloadedRemovalLibrary.containsCharacter(keptID))
+        precondition(!FileManager.default.fileExists(atPath: removalConversations.appendingPathComponent("\(keptID).json").path),
+                     "Removing from My Library must delete that character's local conversation")
+        print("PASS unbookmarking removes only the bookmark and explicit library removal clears local chat history")
+
         let brokenCatalogueRoot = libraryRoot.appendingPathComponent("broken-catalogue", isDirectory: true)
         try FileManager.default.createDirectory(at: brokenCatalogueRoot, withIntermediateDirectories: true)
         let catalogueURL = brokenCatalogueRoot.appendingPathComponent("characters.json")
@@ -485,6 +515,12 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
         } catch LocalCharacterLibraryError.catalogueUnavailable {}
         let catalogueAfterFailedSave = try Data(contentsOf: catalogueURL)
         precondition(catalogueAfterFailedSave == brokenCatalogue)
+        do {
+            try brokenCatalogueLibrary.remove("another-character")
+            preconditionFailure("A broken catalogue unexpectedly accepted a removal")
+        } catch LocalCharacterLibraryError.catalogueUnavailable {}
+        let catalogueAfterFailedRemoval = try Data(contentsOf: catalogueURL)
+        precondition(catalogueAfterFailedRemoval == brokenCatalogue)
 
         let conversationRoot = libraryRoot.appendingPathComponent("broken-conversation", isDirectory: true)
         let conversationLibrary = LocalCharacterLibrary(supportDirectory: conversationRoot)
