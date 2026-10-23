@@ -5,6 +5,7 @@ import SwiftUI
 @main struct PerformanceChecks {
     @MainActor static func main() async throws {
         MarkdownChecks.run()
+        SecurityChecks.run()
         try await RegressionChecks.run()
         try await EfficiencyChecks.run()
         print("PASS all performance regression checks")
