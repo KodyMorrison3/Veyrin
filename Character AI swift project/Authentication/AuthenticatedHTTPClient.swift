@@ -38,29 +38,8 @@ struct AuthenticatedHTTPClient {
             to: &request
         )
 
+        let (data, _) = try await perform(request, generation: generation)
         do {
-            let (data, response) = try await session.data(
-                for: request
-            )
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw NetworkError.invalidResponse
-            }
-
-            if httpResponse.statusCode == 401 {
-                // Only the session this request was made with may be cleared.
-                authStore.invalidateSession(
-                    ifGeneration: generation,
-                    authorization: request.value(forHTTPHeaderField: "Authorization")
-                )
-                throw NetworkError.unauthenticated
-            }
-
-            guard 200..<300 ~= httpResponse.statusCode else {
-                throw NetworkError.httpError(
-                    httpResponse.statusCode
-                )
-            }
             let decoded = try await HTTPResponseDecoder.decode(Response.self, from: data)
             guard generation == authStore.sessionGeneration else { throw CancellationError() }
             return decoded
@@ -93,29 +72,8 @@ struct AuthenticatedHTTPClient {
             to: &request
         )
 
+        let (data, _) = try await perform(request, generation: generation)
         do {
-            let (data, response) = try await session.data(
-                for: request
-            )
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw NetworkError.invalidResponse
-            }
-
-            if httpResponse.statusCode == 401 {
-                // Only the session this request was made with may be cleared.
-                authStore.invalidateSession(
-                    ifGeneration: generation,
-                    authorization: request.value(forHTTPHeaderField: "Authorization")
-                )
-                throw NetworkError.unauthenticated
-            }
-
-            guard 200..<300 ~= httpResponse.statusCode else {
-                throw NetworkError.httpError(
-                    httpResponse.statusCode
-                )
-            }
             let decoded = try await HTTPResponseDecoder.decode(Response.self, from: data)
             guard generation == authStore.sessionGeneration else { throw CancellationError() }
             return decoded
@@ -155,15 +113,19 @@ struct AuthenticatedHTTPClient {
             to: &request
         )
 
-        do {
-            let (_, response) = try await session.data(
-                for: request
-            )
+        _ = try await perform(request, generation: generation)
+    }
 
+    @MainActor
+    private func perform(
+        _ request: URLRequest,
+        generation: UUID
+    ) async throws -> (Data, HTTPURLResponse) {
+        do {
+            let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw NetworkError.invalidResponse
             }
-
             if httpResponse.statusCode == 401 {
                 // Only the session this request was made with may be cleared.
                 authStore.invalidateSession(
@@ -172,12 +134,10 @@ struct AuthenticatedHTTPClient {
                 )
                 throw NetworkError.unauthenticated
             }
-
             guard 200..<300 ~= httpResponse.statusCode else {
-                throw NetworkError.httpError(
-                    httpResponse.statusCode
-                )
+                throw NetworkError.httpError(httpResponse.statusCode)
             }
+            return (data, httpResponse)
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as NetworkError {
