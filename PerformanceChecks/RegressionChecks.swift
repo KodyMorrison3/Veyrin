@@ -412,6 +412,61 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
             .appendingPathComponent("Veyrin-library-check-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: libraryRoot) }
 
+        let duplicateCharacter = try LocalCharacter(discoverCharacter: DiscoverFeedCharacter(
+            externalID: "duplicate-id", name: "Last duplicate", participantName: nil,
+            interactionCount: nil, title: nil, description: nil, greeting: nil,
+            visibility: nil, avatarFileName: nil, username: nil, shortHash: nil
+        ))
+        let duplicateRecords = [
+            try LocalCharacter(discoverCharacter: DiscoverFeedCharacter(
+                externalID: "duplicate-id", name: "First duplicate", participantName: nil,
+                interactionCount: nil, title: nil, description: nil, greeting: nil,
+                visibility: nil, avatarFileName: nil, username: nil, shortHash: nil
+            )),
+            duplicateCharacter
+        ]
+        func libraryWithDuplicateIDs(_ name: String) throws -> LocalCharacterLibrary {
+            let root = libraryRoot.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try JSONEncoder().encode(duplicateRecords)
+                .write(to: root.appendingPathComponent("characters.json"))
+            let library = LocalCharacterLibrary(supportDirectory: root)
+            precondition(library.characters.count == 2)
+            return library
+        }
+
+        let duplicateSaveLibrary = try libraryWithDuplicateIDs("duplicate-save")
+        _ = try duplicateSaveLibrary.saveFromDiscover([DiscoverFeedCharacter(
+            externalID: "new-character", name: "New character", participantName: nil,
+            interactionCount: nil, title: nil, description: nil, greeting: nil,
+            visibility: nil, avatarFileName: nil, username: nil, shortHash: nil
+        )])
+        precondition(duplicateSaveLibrary.characters.filter { $0.id == "duplicate-id" }.count == 1)
+        precondition(duplicateSaveLibrary.characters.first { $0.id == "duplicate-id" }?.name == "Last duplicate")
+
+        let duplicateAccountLibrary = try libraryWithDuplicateIDs("duplicate-account-import")
+        let duplicateAccountFolder = libraryRoot.appendingPathComponent("account-export", isDirectory: true)
+        try FileManager.default.createDirectory(at: duplicateAccountFolder, withIntermediateDirectories: true)
+        let duplicateAccountFile = duplicateAccountFolder.appendingPathComponent("character.json")
+        let duplicateAccountData = try JSONSerialization.data(withJSONObject: [["id": "account-import", "name": "Account import"]])
+        try duplicateAccountData.write(to: duplicateAccountFile)
+        _ = try duplicateAccountLibrary.importCharacterAIAccountExport(from: duplicateAccountFile)
+        precondition(duplicateAccountLibrary.characters.filter { $0.id == "duplicate-id" }.count == 1)
+        precondition(duplicateAccountLibrary.characters.first { $0.id == "duplicate-id" }?.name == "Last duplicate")
+
+        let duplicateArchiveLibrary = try libraryWithDuplicateIDs("duplicate-archive-import")
+        let duplicateArchiveFile = libraryRoot.appendingPathComponent("duplicate-archive.json")
+        let duplicateArchiveData = try JSONSerialization.data(withJSONObject: [
+            "format": "veyrin.local-character-library",
+            "version": 1,
+            "characters": [["archive_id": UUID().uuidString, "name": "Archive import"]]
+        ])
+        try duplicateArchiveData.write(to: duplicateArchiveFile)
+        _ = try duplicateArchiveLibrary.importArchive(from: duplicateArchiveFile)
+        precondition(duplicateArchiveLibrary.characters.filter { $0.id == "duplicate-id" }.count == 1)
+        precondition(duplicateArchiveLibrary.characters.first { $0.id == "duplicate-id" }?.name == "Last duplicate")
+        print("PASS duplicate catalogue IDs keep the last entry during save and both import paths")
+
         let brokenCatalogueRoot = libraryRoot.appendingPathComponent("broken-catalogue", isDirectory: true)
         try FileManager.default.createDirectory(at: brokenCatalogueRoot, withIntermediateDirectories: true)
         let catalogueURL = brokenCatalogueRoot.appendingPathComponent("characters.json")

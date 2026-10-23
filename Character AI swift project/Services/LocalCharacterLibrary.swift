@@ -288,7 +288,7 @@ final class LocalCharacterLibrary: ObservableObject {
     @discardableResult
     func saveFromDiscover(_ discoverCharacters: [DiscoverFeedCharacter]) throws -> Int {
         guard catalogueIsAvailable else { throw LocalCharacterLibraryError.catalogueUnavailable }
-        var merged = Dictionary(uniqueKeysWithValues: characters.map { ($0.id, $0) })
+        var merged = Dictionary(characters.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         for discoverCharacter in discoverCharacters {
             let existing = characters.first { $0.id == discoverCharacter.externalID }
             let character = try LocalCharacter(discoverCharacter: discoverCharacter, existing: existing)
@@ -318,7 +318,7 @@ final class LocalCharacterLibrary: ObservableObject {
 
     func importCharacterAIAccountExport(from url: URL) throws -> CharacterAIAccountExportImportResult {
         guard catalogueIsAvailable else { throw LocalCharacterLibraryError.catalogueUnavailable }
-        let existing = Dictionary(uniqueKeysWithValues: characters.map { ($0.id, $0) })
+        let existing = Dictionary(characters.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         let parsed = try CharacterAIAccountExportImporter.readCharacters(from: url, existing: existing)
         var merged = existing
         for character in parsed.characters { merged[character.id] = character }
@@ -339,7 +339,7 @@ final class LocalCharacterLibrary: ObservableObject {
               let rows = envelope["characters"] as? [[String: Any]] else {
             throw LocalCharacterLibraryError.invalidArchive
         }
-        var merged = Dictionary(uniqueKeysWithValues: characters.map { ($0.id, $0) })
+        var merged = Dictionary(characters.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         for row in rows {
             let character: LocalCharacter
             if row["archive_id"] != nil {
