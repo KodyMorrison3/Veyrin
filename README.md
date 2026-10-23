@@ -98,7 +98,7 @@ With no public third-party API available, the protocol implementation is based o
 
 - Sign-in uses a session token you supply. It is validated with Character.AI before being stored in the macOS Keychain; treat it like a password.
 - Authenticated requests use HTTPS/WSS. Their URLSession has no persistent HTTP cache, cookie store or credential store, and refuses redirects. In-memory account caches are cleared when the session changes.
-- The app runs in the macOS App Sandbox and requests outgoing network access.
+- The app runs in the macOS App Sandbox, requests outgoing network access, and uses the read-write user-selected-files entitlement so exports can be written to a destination chosen in the save panel.
 - Veyrin does not attempt to bypass authentication, CAPTCHA, rate limits, paywalls or other access controls.
 - Never share session credentials, protocol captures or request dumps. Sensitive investigation files should stay out of version control.
 
@@ -164,7 +164,7 @@ The suites compile app sources and use synthetic HTTP/WebSocket fixtures and nat
 
 ### Package a DMG
 
-[Scripts/package-dmg.sh](Scripts/package-dmg.sh) builds Release for arm64, verifies version/build/bundle ID, checks the signature and exact Sandbox entitlements, then creates, verifies and mounts the DMG. Signing must be chosen explicitly:
+[Scripts/package-dmg.sh](Scripts/package-dmg.sh) builds Release for arm64, verifies version/build/bundle ID, checks the signature and exact Sandbox entitlements (including read-write access to user-selected files for exports), then creates, verifies and mounts the DMG. Signing must be chosen explicitly:
 
 ```bash
 bash Scripts/package-dmg.sh --ad-hoc

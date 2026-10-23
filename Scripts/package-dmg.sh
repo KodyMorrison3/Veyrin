@@ -84,7 +84,7 @@ with open(sys.argv[1], 'rb') as stream:
     actual = plistlib.load(stream)
 required = {'com.apple.security.app-sandbox': True,
             'com.apple.security.network.client': True,
-            'com.apple.security.files.user-selected.read-only': True}
+            'com.apple.security.files.user-selected.read-write': True}
 if actual != required:
     raise SystemExit('error: unexpected Release entitlements (including any debug/access permissions)')
 PY
