@@ -16,15 +16,24 @@ struct LoginView: View {
     @State private var sessionToken = ""
     @State private var keychainError: String?
     @State private var isSigningIn = false
+    @State private var webSessionCookie = ""
+    @State private var isShowingWebSession = false
+    @State private var webSessionError: String?
+    @State private var hasSavedWebSessionCookie = false
 
-    /// The token is the only field: the account ID and username are resolved
-    /// from the validated session, so nothing else is typed here.
+    /// Sign-in needs only the token; the account ID and username are resolved
+    /// from the validated session. The optional web session cookie is used
+    /// solely for character search.
     private enum Field: Hashable {
         case token
     }
 
     private var trimmedToken: String {
         sessionToken.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedWebSessionCookie: String {
+        webSessionCookie.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var body: some View {
@@ -60,6 +69,61 @@ struct LoginView: View {
                         .autocorrectionDisabled()
                         .accessibilityLabel("Session token")
                         .accessibilityHint("Required to sign in. Press Return to continue.")
+                }
+                .padding(.bottom, 14)
+
+                DisclosureGroup(isExpanded: $isShowingWebSession) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        SecureField(
+                            "Paste name=value or Cookie header",
+                            text: $webSessionCookie
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled()
+                        .accessibilityLabel("Web session cookie")
+                        .accessibilityHint("Optional. Used only for character search.")
+
+                        Text("Optional. Character search needs a Character.AI web session cookie; other features use your session token. It is stored in the Keychain, sent only to character.ai, and should be treated like a password.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        if let webSessionError {
+                            Label(webSessionError, systemImage: "exclamationmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        if hasSavedWebSessionCookie {
+                            HStack(spacing: 8) {
+                                Label("Saved in Keychain", systemImage: "checkmark.seal.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer(minLength: 8)
+                                Button("Remove") {
+                                    do {
+                                        try authStore.clearWebSessionCookie()
+                                        hasSavedWebSessionCookie = false
+                                        webSessionError = nil
+                                    } catch {
+                                        webSessionError = "Couldn't remove the saved cookie from Keychain."
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .font(.caption)
+                            }
+                        }
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    HStack(spacing: 5) {
+                        Text("Web session cookie")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Optional")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
                 .padding(.bottom, 20)
 
@@ -111,7 +175,10 @@ struct LoginView: View {
                 reduceTransparency: reduceTransparency
             )
         }
-        .onAppear { focusedField = .token }
+        .onAppear {
+            focusedField = .token
+            hasSavedWebSessionCookie = authStore.hasWebSessionCookie
+        }
     }
 
     private var identity: some View {
@@ -137,12 +204,24 @@ struct LoginView: View {
         guard !trimmedToken.isEmpty, !isSigningIn else { return }
         isSigningIn = true
         keychainError = nil
+        webSessionError = nil
+        let cookie = trimmedWebSessionCookie
 
         Task {
             defer { isSigningIn = false }
             do {
+                // Validate and store the optional search credential before
+                // signing in, so a malformed paste is reported on this screen
+                // instead of disappearing behind the authenticated UI.
+                if !cookie.isEmpty {
+                    try authStore.saveWebSessionCookie(cookie)
+                    webSessionCookie = ""
+                    hasSavedWebSessionCookie = true
+                }
                 try await authStore.signIn(sessionToken: trimmedToken)
                 sessionToken = ""
+            } catch let error as WebSessionCookieError {
+                webSessionError = error.errorDescription
             } catch is CancellationError {
                 // A newer sign-in attempt replaced this one.
             } catch SessionValidationError.invalidSession {
@@ -152,7 +231,7 @@ struct LoginView: View {
             } catch SessionValidationError.accountIDUnavailable {
                 keychainError = "Character.AI accepted the token but didn't return your account ID. Try signing in again."
             } catch {
-                keychainError = "Couldn't save the session to Keychain. Please try again."
+                keychainError = "Couldn't save your credentials to Keychain. Please try again."
             }
         }
     }

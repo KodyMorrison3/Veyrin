@@ -55,8 +55,10 @@ final class AuthStore: ObservableObject {
 
     private let storage: SessionStorage
     private static let sessionKey = "authSession"
+    private static let webSessionCookieKey = "webSessionCookie"
     private var signInAttempt = 0
     private var hasStartedRestore = false
+    private var cachedWebSessionCookie: String??
 
     var isAuthenticated: Bool {
         session != nil
@@ -120,7 +122,12 @@ final class AuthStore: ObservableObject {
 
         let stored: AuthSession
         do {
-            guard let data = try storage.loadData(forKey: AuthStore.sessionKey) else { return }
+            guard let data = try storage.loadData(forKey: AuthStore.sessionKey) else {
+                // A cookie saved during an unfinished sign-in cannot be trusted
+                // to belong to whoever signs in next.
+                try? clearWebSessionCookie()
+                return
+            }
             stored = try JSONDecoder().decode(AuthSession.self, from: data)
         } catch {
             authLogger.error("Failed to read stored session: \(error.localizedDescription, privacy: .private)")
@@ -162,6 +169,36 @@ final class AuthStore: ObservableObject {
         clearStoredSession()
     }
 
+    // MARK: - Web session cookie (character search)
+
+    /// Optional `web-next-auth` cookie for Character.AI's search-results
+    /// endpoint, which rejects the app's session token. It is stored beside
+    /// the session in the Keychain and sent only to `character.ai` by
+    /// `CharacterSearchService`.
+    var hasWebSessionCookie: Bool { webSessionCookie() != nil }
+
+    func webSessionCookie() -> String? {
+        if let cachedWebSessionCookie { return cachedWebSessionCookie }
+        let cookie = (try? storage.loadData(forKey: Self.webSessionCookieKey))
+            .flatMap { String(data: $0, encoding: .utf8) }
+            .flatMap { try? WebSessionCookie.normalizedHeader(from: $0) }
+        cachedWebSessionCookie = .some(cookie)
+        return cookie
+    }
+
+    /// Validates and normalizes what the user pasted before anything is saved.
+    /// Accepts either a complete `Cookie:` header or a bare token value.
+    func saveWebSessionCookie(_ raw: String) throws {
+        let header = try WebSessionCookie.normalizedHeader(from: raw)
+        try storage.save(Data(header.utf8), forKey: Self.webSessionCookieKey)
+        cachedWebSessionCookie = header
+    }
+
+    func clearWebSessionCookie() throws {
+        try storage.delete(forKey: Self.webSessionCookieKey)
+        cachedWebSessionCookie = nil
+    }
+
     /// Clears the session only when the failed request was made with the
     /// session that is still current. A late 401 from an older session or
     /// request therefore cannot remove a newer valid one.
@@ -191,5 +228,120 @@ final class AuthStore: ObservableObject {
         } catch {
             authLogger.error("Failed to clear stored session: \(error.localizedDescription, privacy: .private)")
         }
+        // The search cookie belongs to the account that supplied it. Never
+        // carry it across a sign-out or a rejected stored session into a
+        // different account.
+        try? clearWebSessionCookie()
+    }
+}
+
+// MARK: - Web session cookie input
+
+enum WebSessionCookieError: LocalizedError, Equatable {
+    case empty
+    case malformed
+    case tooLong
+
+    var errorDescription: String? {
+        switch self {
+        case .empty:
+            return "Paste a web session cookie, or leave the field empty."
+        case .malformed:
+            return "That doesn't look like a cookie. Copy the full Cookie header or just the session-token value."
+        case .tooLong:
+            return "That cookie is too long. Copy only the web session cookie."
+        }
+    }
+}
+
+/// Turns pasted search credentials into one safe `Cookie` header. The user may
+/// paste the whole header from browser developer tools (`a=b; c=d`) or only the
+/// token value; a bare value is named `web-next-auth`, matching Character.AI's
+/// web client.
+nonisolated enum WebSessionCookie {
+    static let maxLength = 8_192
+    static let defaultName = "web-next-auth"
+
+    static func normalizedHeader(from raw: String) throws -> String {
+        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { throw WebSessionCookieError.empty }
+
+        if value.lowercased().hasPrefix("cookie:") {
+            value = String(value.dropFirst("cookie:".count))
+                .trimmingCharacters(in: .whitespaces)
+        }
+
+        guard value.utf8.count <= maxLength else {
+            throw WebSessionCookieError.tooLong
+        }
+        // A header value may not contain control characters or line breaks:
+        // pasted text must never be able to add another HTTP header.
+        guard value.unicodeScalars.allSatisfy({ scalar in
+            scalar.isASCII && scalar.value >= 0x20 && scalar.value != 0x7F
+        }) else {
+            throw WebSessionCookieError.malformed
+        }
+
+        let normalized = try containsCookieName(value) || value.contains(";")
+            ? normalizedCookiePairs(from: value)
+            : normalizedBareValue(value)
+
+        guard normalized.utf8.count <= maxLength else {
+            throw WebSessionCookieError.tooLong
+        }
+        return normalized
+    }
+
+    private static func containsCookieName(_ value: String) -> Bool {
+        value.range(
+            of: #"^(?:__Secure-|__Host-)?(?:web-)?next-auth[^=;\s]*="#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
+    }
+
+    private static func normalizedCookiePairs(from value: String) throws -> String {
+        var pairs: [String] = []
+        for rawPair in value.split(separator: ";", omittingEmptySubsequences: true) {
+            let pair = rawPair.trimmingCharacters(in: .whitespaces)
+            guard let separator = pair.firstIndex(of: "=") else {
+                throw WebSessionCookieError.malformed
+            }
+            let name = pair[..<separator].trimmingCharacters(in: .whitespaces)
+            let cookieValue = pair[pair.index(after: separator)...]
+                .trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty,
+                  !cookieValue.isEmpty,
+                  !name.contains(where: { $0.isWhitespace || $0 == "," || $0 == "\"" }) else {
+                throw WebSessionCookieError.malformed
+            }
+            pairs.append("\(canonicalName(name))=\(cookieValue)")
+        }
+        guard !pairs.isEmpty else { throw WebSessionCookieError.malformed }
+        return pairs.joined(separator: "; ")
+    }
+
+    /// Earlier builds guessed a NextAuth-style suffix for a bare value. Repair
+    /// those saved/imported names so an existing Keychain item keeps working
+    /// after the correction to the real cookie name.
+    private static func canonicalName(_ name: String) -> String {
+        let lowercased = name.lowercased()
+        let legacyNames = [
+            "web-next-auth.session-token",
+            "__secure-web-next-auth.session-token",
+            "__secure-next-auth.session-token",
+            "next-auth.session-token"
+        ]
+        return legacyNames.contains(lowercased) ? defaultName : name
+    }
+
+    private static func normalizedBareValue(_ value: String) throws -> String {
+        let lowercased = value.lowercased()
+        guard !value.contains(";"),
+              !value.contains(where: { $0.isWhitespace }),
+              !lowercased.hasPrefix("token "),
+              !lowercased.hasPrefix("bearer ") else {
+            throw WebSessionCookieError.malformed
+        }
+        return "\(defaultName)=\(value)"
     }
 }

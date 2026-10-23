@@ -4,6 +4,7 @@ struct DiscoverView: View {
     @StateObject private var viewModel: DiscoverViewModel
     @StateObject private var library = LocalCharacterLibrary.shared
     @ObservedObject private var preferences = AppPreferences.shared
+    @Environment(\.openSettings) private var openSettings
     let onSelectCharacter: (String) -> Void
 
     init(
@@ -19,7 +20,10 @@ struct DiscoverView: View {
     }
 
     var body: some View {
-        Group {
+        // Keep a stable container around the two content modes. Swapping a
+        // Group's child type on the first keystroke rebuilds the toolbar that
+        // hosts the search field, which resigns first responder mid-typing.
+        ZStack {
             if viewModel.hasActiveSearch {
                 searchSection
             } else {
@@ -65,26 +69,30 @@ struct DiscoverView: View {
             .onSubmit {
                 Task { await viewModel.submitSearch() }
             }
-            if viewModel.hasActiveSearch {
-                Button {
-                    viewModel.clearSearch()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(QuietHoverButtonStyle())
-                .help("Clear search")
-                .keyboardShortcut(.cancelAction)
-
-                Button {
-                    Task { await viewModel.submitSearch() }
-                } label: {
-                    Image(systemName: "arrow.right.circle")
-                }
-                .buttonStyle(QuietHoverButtonStyle())
-                .help("Search")
-                .keyboardShortcut(.defaultAction)
+            // Always keep these in the hierarchy: adding them only once text
+            // exists changes the toolbar item's structure and drops focus.
+            Button {
+                viewModel.clearSearch()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
             }
+            .buttonStyle(QuietHoverButtonStyle())
+            .help("Clear search")
+            .keyboardShortcut(.cancelAction)
+            .opacity(viewModel.hasActiveSearch ? 1 : 0)
+            .disabled(!viewModel.hasActiveSearch)
+
+            Button {
+                Task { await viewModel.submitSearch() }
+            } label: {
+                Image(systemName: "arrow.right.circle")
+            }
+            .buttonStyle(QuietHoverButtonStyle())
+            .help("Search")
+            .keyboardShortcut(.defaultAction)
+            .opacity(viewModel.hasActiveSearch ? 1 : 0)
+            .disabled(!viewModel.hasActiveSearch)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -179,17 +187,25 @@ struct DiscoverView: View {
                 if viewModel.isSearchingResults {
                     ProgressView("Searching…")
                 } else if viewModel.searchNeedsWebSession {
-                    // Expected condition while the results endpoint requires a
-                    // web-session credential. Retry stays available: upstream
-                    // behavior at this boundary has varied before.
+                    // The results endpoint needs a browser web-session cookie.
+                    // Point at the place it can be added instead of leaving a
+                    // dead end; Retry stays available for upstream changes.
                     VStack(alignment: .leading, spacing: 8) {
                         Label(
-                            "Character search needs a web session — unavailable in the native app yet.",
+                            viewModel.searchWebSessionRejected
+                                ? "Character.AI rejected the saved web session cookie. It may have expired."
+                                : "Character search needs a web session cookie.",
                             systemImage: "globe"
                         )
                         .foregroundStyle(.secondary)
-                        Button("Retry") {
-                            Task { await viewModel.submitSearch() }
+                        Text("Add or update it in Preferences → Account. Suggestions work without it.")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        HStack(spacing: 8) {
+                            Button("Open Account Settings") { openSettings() }
+                            Button("Retry") {
+                                Task { await viewModel.submitSearch() }
+                            }
                         }
                     }
                 } else if let searchError = viewModel.searchError {

@@ -7,25 +7,30 @@
 //  Two endpoints, very different auth stories:
 //  - Autocomplete on `neo.` works today with the app's `Token` auth.
 //  - The results endpoint (`character.ai/api/trpc/search.search`) requires a
-//    browser-only `web-next-auth` cookie. With the app's Token auth it
-//    reliably answers HTTP 500 wrapping an upstream 401; that known signature
-//    is mapped to `SearchError.resultsRequireWebSession` so the UI can show an
-//    honest unavailable state instead of a generic failure. No bypass is
-//    attempted — reproducing web credentials is out of scope by design.
+//    browser-only `web-next-auth` cookie. The app never obtains that cookie
+//    itself; the user may paste one, which is stored in the Keychain and sent
+//    only to `character.ai`. Without it, the endpoint's HTTP 500 wrapping an
+//    upstream 401 is mapped to `SearchError.resultsRequireWebSession`; with a
+//    cookie that is refused, it maps to `SearchError.webSessionRejected`.
+//    No credential is reproduced, fetched or refreshed by the app.
 //
 
 import Foundation
 
 enum SearchError: LocalizedError {
-    /// The results endpoint needs a web-session credential the native client
-    /// does not have. This is a known, expected condition — not a bug.
+    /// The results endpoint needs a web-session cookie and none is saved.
     case resultsRequireWebSession
+    /// A saved web-session cookie was refused (usually expired or revoked).
+    case webSessionRejected
 
     var errorDescription: String? {
         switch self {
         case .resultsRequireWebSession:
             return
-                "Character search needs a web session — unavailable in the native app yet."
+                "Character search needs a web session cookie. Add it in Preferences → Account."
+        case .webSessionRejected:
+            return
+                "Character.AI rejected the saved web session cookie. It may have expired — update it in Preferences → Account."
         }
     }
 }
@@ -33,6 +38,7 @@ enum SearchError: LocalizedError {
 struct CharacterSearchService {
     private let session: URLSession
     private let authorizationProvider: DiscoverService.AuthorizationProvider
+    private let webSessionCookieProvider: () -> String?
 
     init(
         session: URLSession = CharacterAISession.shared,
@@ -40,17 +46,23 @@ struct CharacterSearchService {
     ) {
         self.session = session
         self.authorizationProvider = .authStore(authStore)
+        self.webSessionCookieProvider = { authStore.webSessionCookie() }
     }
 
     #if DEBUG
-    /// Test-only fixed-token provider. Production code should use the
-    /// `authStore` initializer; contract tests must not touch the Keychain.
+    /// Test-only fixed providers. Production code should use the `authStore`
+    /// initializer; contract tests must not touch the Keychain.
     init(
         session: URLSession = CharacterAISession.shared,
-        fixedToken: String
+        fixedToken: String,
+        webSessionCookie: String? = nil
     ) {
         self.session = session
         self.authorizationProvider = .fixedToken(fixedToken)
+        let normalized = webSessionCookie.flatMap {
+            try? WebSessionCookie.normalizedHeader(from: $0)
+        }
+        self.webSessionCookieProvider = { normalized }
     }
     #endif
 
@@ -78,16 +90,31 @@ struct CharacterSearchService {
             .searchAutocomplete
     }
 
-    // MARK: - Results (blocked on a web-session credential)
+    // MARK: - Results (needs a user-supplied web-session cookie)
 
     func searchCharacters(query: String) async throws -> [CharacterSearchResult] {
         guard let url = Self.resultsURL(query: query) else {
             throw NetworkError.invalidURL
         }
 
+        let webSessionCookie = webSessionCookieProvider()
+
         var request = URLRequest(url: url)
         request.setValue("*/*", forHTTPHeaderField: "Accept")
-        try await addAuthentication(to: &request)
+        if let webSessionCookie {
+            // Match the browser request this endpoint serves: the cookie is
+            // the credential, so do not also present the native Token header.
+            // This cookie is never attached to neo.character.ai or a provider.
+            request.setValue(webSessionCookie, forHTTPHeaderField: "Cookie")
+            request.setValue("https://character.ai", forHTTPHeaderField: "Origin")
+            request.setValue("https://character.ai/", forHTTPHeaderField: "Referer")
+            request.setValue(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+                forHTTPHeaderField: "User-Agent"
+            )
+        } else {
+            try await addAuthentication(to: &request)
+        }
 
         do {
             let (data, response) = try await session.data(for: request)
@@ -97,15 +124,23 @@ struct CharacterSearchService {
             }
 
             // The known signature: gateway HTTP 500 wrapping upstream 401.
-            // Treat it as the documented web-session requirement, not a crash
-            // or a generic server error. Anything else stays a NetworkError.
+            // Without a cookie this is the documented web-session requirement;
+            // with one it means the credential was refused. Anything else stays
+            // a NetworkError.
             if httpResponse.statusCode == 500,
                let batch = try? await HTTPResponseDecoder.decode(
                     TRPCBatchResponse<SearchResultsPayload>.self,
                     from: data
                ),
                batch.entries.contains(where: { $0.error != nil }) {
-                throw SearchError.resultsRequireWebSession
+                throw webSessionCookie == nil
+                    ? SearchError.resultsRequireWebSession
+                    : SearchError.webSessionRejected
+            }
+
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403,
+               webSessionCookie != nil {
+                throw SearchError.webSessionRejected
             }
 
             guard 200..<300 ~= httpResponse.statusCode else {
@@ -122,6 +157,9 @@ struct CharacterSearchService {
                 throw NetworkError.invalidResponse
             }
             if entry.error != nil {
+                if webSessionCookie != nil {
+                    throw SearchError.webSessionRejected
+                }
                 throw NetworkError.serverMessage(
                     "Character.AI rejected the search request."
                 )

@@ -31,6 +31,9 @@ final class DiscoverViewModel: ObservableObject {
     /// and was refused — an expected condition, shown as an honest notice
     /// (suggestions keep working), not a generic error.
     @Published private(set) var searchNeedsWebSession = false
+    /// True when the failure was a saved cookie being refused, rather than no
+    /// cookie being present. Both states point at Preferences → Account.
+    @Published private(set) var searchWebSessionRejected = false
     @Published private(set) var searchError: String?
 
     private let service: DiscoverService
@@ -235,6 +238,7 @@ final class DiscoverViewModel: ObservableObject {
         lastSearchedQuery = trimmed
         isSearchingResults = true
         searchNeedsWebSession = false
+        searchWebSessionRejected = false
         searchError = nil
         defer { if generation == resultsGeneration { isSearchingResults = false } }
 
@@ -249,6 +253,11 @@ final class DiscoverViewModel: ObservableObject {
             guard !Task.isCancelled, generation == resultsGeneration else { return }
             searchResults = []
             searchNeedsWebSession = true
+        } catch SearchError.webSessionRejected {
+            guard !Task.isCancelled, generation == resultsGeneration else { return }
+            searchResults = []
+            searchNeedsWebSession = true
+            searchWebSessionRejected = true
         } catch {
             guard !Task.isCancelled, generation == resultsGeneration else { return }
             searchResults = []

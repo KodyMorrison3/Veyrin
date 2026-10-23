@@ -74,7 +74,6 @@ private struct MainView: View {
     @StateObject private var viewModel: ChatViewModel
     @State private var selectedChatID: String?
     @State private var conversationSearchText = ""
-    @FocusState private var isConversationSearchFocused: Bool
     @State private var pendingCreatedChat: ConversationSummary?
     @State private var pendingCopiedConversation: ConversationSummary?
     @State private var pendingHistoryChat: ConversationSummary?
@@ -217,16 +216,6 @@ private struct MainView: View {
 
     @ToolbarContentBuilder
     private var navigationToolbar: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            Button {
-                isConversationSearchFocused = true
-            } label: {
-                Label("Search conversations", systemImage: "magnifyingglass")
-            }
-            .keyboardShortcut("f", modifiers: .command)
-            .help("Search conversations")
-        }
-
         ToolbarItem(placement: .navigation) {
             Button {
                 selectedChatID = nil
@@ -406,11 +395,9 @@ private struct MainView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .foregroundStyle(Color.caiText)
-                    .focused($isConversationSearchFocused)
                     .accessibilityLabel("Search characters")
                     .onKeyPress(.escape) {
                         conversationSearchText = ""
-                        isConversationSearchFocused = false
                         return .handled
                     }
                 if !conversationSearchText.isEmpty {

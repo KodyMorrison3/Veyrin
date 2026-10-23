@@ -24,6 +24,10 @@ struct SettingsView: View {
     @State private var latestRelease: GitHubRelease?
     @State private var releaseCheckMessage: String?
     @State private var isCheckingForUpdates = false
+    @State private var webSessionCookie = ""
+    @State private var hasSavedWebSessionCookie = false
+    @State private var webSessionNotice: String?
+    @State private var webSessionError: String?
 
     /// The signed-in username (typed session metadata — never the token),
     /// injected by the app so the Account pane can state who is signed in.
@@ -173,30 +177,108 @@ struct SettingsView: View {
 
     private var accountPane: some View {
         ScrollView {
-            settingsSection(
-                title: "Profile",
-                footer: "Public profile details are available from the account menu in the sidebar. " +
-                    "Account changes (email, password, subscription, deletion) are not supported by this app."
-            ) {
-                HStack {
-                    Text("Signed in as")
-                    Spacer()
-                    Text(username.isEmpty ? "Not signed in" : "@\(username)")
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                settingsSection(
+                    title: "Profile",
+                    footer: "Public profile details are available from the account menu in the sidebar. " +
+                        "Account changes (email, password, subscription, deletion) are not supported by this app."
+                ) {
+                    HStack {
+                        Text("Signed in as")
+                        Spacer()
+                        Text(username.isEmpty ? "Not signed in" : "@\(username)")
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 6)
+                    Divider()
+                    Button {
+                        isShowingCharms = true
+                    } label: {
+                        Label("View Charms", systemImage: "sparkles")
+                    }
+                    .padding(.vertical, 6)
+                    .popover(isPresented: $isShowingCharms) {
+                        CharmsView(authStore: authStore)
+                            .frame(width: 560, height: 600)
+                    }
                 }
-                .padding(.vertical, 6)
-                Divider()
-                Button {
-                    isShowingCharms = true
-                } label: {
-                    Label("View Charms", systemImage: "sparkles")
-                }
-                .padding(.vertical, 6)
-                .popover(isPresented: $isShowingCharms) {
-                    CharmsView(authStore: authStore)
-                        .frame(width: 560, height: 600)
+
+                settingsSection(
+                    title: "Character search",
+                    footer: "Character.AI's search-results endpoint does not accept the app's session token. " +
+                        "In a signed-in character.ai browser tab, copy the web-next-auth cookie as name=value, " +
+                        "or copy the whole Cookie header. " +
+                        "It is stored in the Keychain, sent only to character.ai, removed when you sign out, and should be treated like a password."
+                ) {
+                    HStack {
+                        Text("Web session cookie")
+                        Spacer()
+                        Text(hasSavedWebSessionCookie ? "Saved in Keychain" : "Not added")
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 6)
+                    Divider()
+
+                    SecureField("Paste name=value or Cookie header", text: $webSessionCookie)
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled()
+                        .accessibilityLabel("Web session cookie")
+                        .padding(.vertical, 6)
+
+                    HStack(spacing: 8) {
+                        Button("Save Cookie") { saveWebSessionCookie() }
+                            .disabled(trimmedWebSessionCookie.isEmpty)
+                        if hasSavedWebSessionCookie {
+                            Button("Remove Cookie", role: .destructive) { removeWebSessionCookie() }
+                        }
+                    }
+                    .padding(.vertical, 4)
+
+                    if let webSessionError {
+                        Label(webSessionError, systemImage: "exclamationmark.circle.fill")
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if let webSessionNotice {
+                        Text(webSessionNotice)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
+        }
+        .onAppear {
+            hasSavedWebSessionCookie = authStore.hasWebSessionCookie
+        }
+    }
+
+    private var trimmedWebSessionCookie: String {
+        webSessionCookie.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func saveWebSessionCookie() {
+        webSessionNotice = nil
+        webSessionError = nil
+        do {
+            try authStore.saveWebSessionCookie(webSessionCookie)
+            webSessionCookie = ""
+            hasSavedWebSessionCookie = true
+            webSessionNotice = "Web session cookie saved. Try the search again."
+        } catch {
+            webSessionError = error.localizedDescription
+        }
+    }
+
+    private func removeWebSessionCookie() {
+        webSessionNotice = nil
+        webSessionError = nil
+        do {
+            try authStore.clearWebSessionCookie()
+            webSessionCookie = ""
+            hasSavedWebSessionCookie = false
+            webSessionNotice = "Web session cookie removed."
+        } catch {
+            webSessionError = "Couldn't remove the cookie from Keychain. Please try again."
         }
     }
 
@@ -452,8 +534,9 @@ struct SettingsView: View {
             settingsSection(
                 title: "On this Mac",
                 footer: "The session token is kept in the macOS Keychain and sent only as the " +
-                    "Authorization header to Character.AI. Server-side privacy controls would " +
-                    "require contracts this app has not confirmed."
+                    "Authorization header to Character.AI. An optional character-search cookie is " +
+                    "kept in the same Keychain, sent only to character.ai and removed on sign-out. " +
+                    "Server-side privacy controls would require contracts this app has not confirmed."
             ) {
                 HStack {
                     Text("Session storage")

@@ -54,25 +54,56 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
         var pageSize = 2
         var pageCount = 2
         var failure: Int?
+        var searchRefusal = false
+        var lastSearchCookie: String?
+        var lastSearchOrigin: String?
+        var lastSearchAuthorization: String?
     }
     private static let state = State()
     private var work: DispatchWorkItem?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    static func reset(delay: TimeInterval = 0, pageSize: Int = 2, pageCount: Int = 2, failure: Int? = nil) {
+    static func reset(
+        delay: TimeInterval = 0,
+        pageSize: Int = 2,
+        pageCount: Int = 2,
+        failure: Int? = nil,
+        searchRefusal: Bool = false
+    ) {
         state.lock.lock(); defer { state.lock.unlock() }
-        state.requests = [:]; state.delay = delay; state.pageSize = pageSize; state.pageCount = pageCount; state.failure = failure
+        state.requests = [:]; state.delay = delay; state.pageSize = pageSize; state.pageCount = pageCount
+        state.failure = failure; state.searchRefusal = searchRefusal
+        state.lastSearchCookie = nil; state.lastSearchOrigin = nil
+        state.lastSearchAuthorization = nil
     }
     static func count(_ path: String? = nil) -> Int {
         state.lock.lock(); defer { state.lock.unlock() }
         return path.map { state.requests[$0, default: 0] } ?? state.requests.values.reduce(0, +)
     }
+    static var lastSearchCookie: String? {
+        state.lock.lock(); defer { state.lock.unlock() }
+        return state.lastSearchCookie
+    }
+    static var lastSearchOrigin: String? {
+        state.lock.lock(); defer { state.lock.unlock() }
+        return state.lastSearchOrigin
+    }
+    static var lastSearchAuthorization: String? {
+        state.lock.lock(); defer { state.lock.unlock() }
+        return state.lastSearchAuthorization
+    }
     override func startLoading() {
         let path = request.url!.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         Self.state.lock.lock()
         Self.state.requests[path, default: 0] += 1
-        let delay = Self.state.delay, size = Self.state.pageSize, pages = Self.state.pageCount, failure = Self.state.failure
+        let delay = Self.state.delay, size = Self.state.pageSize, pages = Self.state.pageCount
+        let failure = Self.state.failure, searchRefusal = Self.state.searchRefusal
+        if path == "api/trpc/search.search" {
+            Self.state.lastSearchCookie = request.value(forHTTPHeaderField: "Cookie")
+            Self.state.lastSearchOrigin = request.value(forHTTPHeaderField: "Origin")
+            Self.state.lastSearchAuthorization = request.value(forHTTPHeaderField: "Authorization")
+        }
         Self.state.lock.unlock()
         let account = request.value(forHTTPHeaderField: "Authorization")?.contains("account-b") == true ? "b" : "a"
         let body: String
@@ -107,11 +138,18 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
         case "recommendation/v1/curated_character_lists": body = "{\"curated_character_lists\":{}}"
         case "api/feed/social_feed": body = "{\"uuid\":\"feed\",\"title\":\"Feed\",\"chips\":[],\"contents\":[],\"next_cursor\":null}"
         case "chat/chat/conversation-facts": body = "{\"conversation_facts\":{}}"
+        case "api/trpc/search.search":
+            body = searchRefusal
+                ? "[{\"error\":{\"json\":{\"message\":\"Unauthorized\",\"code\":401}}}]"
+                : "[{\"result\":{\"data\":{\"json\":{\"characters\":[]}}}}]"
         default: body = "{}"
         }
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            let response = HTTPURLResponse(url: self.request.url!, statusCode: failure ?? 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json", "Cache-Control":"no-store"])!
+            let status = searchRefusal && self.request.url?.path.contains("search.search") == true
+                ? 500
+                : (failure ?? 200)
+            let response = HTTPURLResponse(url: self.request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type":"application/json", "Cache-Control":"no-store"])!
             self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             self.client?.urlProtocol(self, didLoad: Data(body.utf8))
             self.client?.urlProtocolDidFinishLoading(self)
@@ -123,10 +161,10 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
 }
 
 @MainActor final class CheckStorage: SessionStorage {
-    var data: Data?
-    func save(_ data: Data, forKey key: String) throws { self.data = data }
-    func loadData(forKey key: String) throws -> Data? { data }
-    func delete(forKey key: String) throws { data = nil }
+    var values: [String: Data] = [:]
+    func save(_ data: Data, forKey key: String) throws { values[key] = data }
+    func loadData(forKey key: String) throws -> Data? { values[key] }
+    func delete(forKey key: String) throws { values[key] = nil }
 }
 
 @MainActor final class CheckCounter { var value = 0 }
@@ -258,6 +296,76 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
         precondition(CheckProtocol.count("recommendation/v1/curated_character_lists") == 1)
         _ = try await popularTrendingService.loadCuratedLists()
         precondition(CheckProtocol.count("recommendation/v1/curated_character_lists") == 1)
+
+        // Character search web-session cookie: input normalization, Keychain
+        // storage, cookie/header scope and the two refusal states.
+        precondition((try? WebSessionCookie.normalizedHeader(
+            from: "  Cookie: web-next-auth=abc; other=1 \n"
+        )) == "web-next-auth=abc; other=1")
+        precondition((try? WebSessionCookie.normalizedHeader(from: "abc.def=="))
+            == "web-next-auth=abc.def==")
+        precondition((try? WebSessionCookie.normalizedHeader(
+            from: "web-next-auth.session-token=legacy"
+        )) == "web-next-auth=legacy", "Legacy guessed cookie names are repaired")
+        do {
+            _ = try WebSessionCookie.normalizedHeader(from: "   ")
+            preconditionFailure("An empty cookie was accepted")
+        } catch WebSessionCookieError.empty {}
+        do {
+            _ = try WebSessionCookie.normalizedHeader(from: "web-next-auth=a\r\nX-Test: b")
+            preconditionFailure("A cookie with a line break was accepted")
+        } catch WebSessionCookieError.malformed {}
+
+        let cookieStorage = CheckStorage()
+        let cookieAuth = AuthStore(
+            storage: cookieStorage,
+            session: nil,
+            personas: PersonaStore(defaults: defaults),
+            restoreSession: false
+        )
+        try cookieAuth.saveWebSessionCookie("web-next-auth=abc")
+        precondition(cookieAuth.hasWebSessionCookie)
+        precondition(cookieAuth.webSessionCookie() == "web-next-auth=abc")
+        try cookieAuth.clearWebSessionCookie()
+        precondition(!cookieAuth.hasWebSessionCookie && cookieStorage.values.isEmpty)
+        try cookieAuth.saveWebSessionCookie("web-next-auth=abc")
+        precondition(cookieAuth.hasWebSessionCookie)
+        cookieAuth.clearSession()
+        precondition(!cookieAuth.hasWebSessionCookie && cookieStorage.values.isEmpty,
+                     "Signing out must remove the account's search cookie")
+
+        CheckProtocol.reset()
+        let searchWithCookie = CharacterSearchService(
+            session: transport,
+            fixedToken: "synthetic",
+            webSessionCookie: "web-next-auth=abc"
+        )
+        let cookieResults = try await searchWithCookie.searchCharacters(query: "hello")
+        precondition(cookieResults.isEmpty)
+        precondition(CheckProtocol.count("api/trpc/search.search") == 1)
+        precondition(CheckProtocol.lastSearchCookie == "web-next-auth=abc")
+        precondition(CheckProtocol.lastSearchOrigin == "https://character.ai")
+        precondition(CheckProtocol.lastSearchAuthorization == nil,
+                     "The web cookie request must not also present the native Token header")
+
+        CheckProtocol.reset()
+        let searchWithoutCookie = CharacterSearchService(session: transport, fixedToken: "synthetic")
+        let noCookieResults = try await searchWithoutCookie.searchCharacters(query: "hello")
+        precondition(noCookieResults.isEmpty)
+        precondition(CheckProtocol.lastSearchCookie == nil)
+        precondition(CheckProtocol.lastSearchOrigin == nil)
+        precondition(CheckProtocol.lastSearchAuthorization == "Token synthetic")
+
+        CheckProtocol.reset(searchRefusal: true)
+        do {
+            _ = try await searchWithoutCookie.searchCharacters(query: "hello")
+            preconditionFailure("A refused search without a cookie did not report the missing credential")
+        } catch SearchError.resultsRequireWebSession {}
+        do {
+            _ = try await searchWithCookie.searchCharacters(query: "hello")
+            preconditionFailure("A refused saved cookie did not report rejection")
+        } catch SearchError.webSessionRejected {}
+        print("PASS search cookie validation, scoped Cookie/Origin headers, Keychain round-trip and both refusal states")
 
         let userProfileService = UserProfileService(session: transport, authStore: auth)
         let profile = try await userProfileService.loadProfile(username: "user-a")

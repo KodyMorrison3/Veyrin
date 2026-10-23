@@ -76,8 +76,8 @@ See [Provider setup and architecture](PROVIDERS.md) for setup, privacy boundarie
 - Create and hide conversations
 
 ### Local character library
-- Save Discover characters and import characters from a Character.AI account export
-- Search and filter saved characters, and export the library as a Veyrin archive
+- Save Discover characters with their bookmark button, press it again to remove the saved copy, and import characters from a Character.AI account export
+- Search and filter saved characters, remove a character and its local chat history after confirmation, and export the library as a Veyrin archive
 - Chat with saved characters using Ollama; its configurable endpoint defaults to loopback HTTP at `127.0.0.1:11434`. The existing local-character flow can optionally launch Ollama when needed; the new provider chooser does not launch it or download models
 - For local-only inference, use downloaded models and disable Ollama cloud features. A loopback address alone does not prove local inference; see [Ollama privacy/setup](PROVIDERS.md#ollama)
 
@@ -115,7 +115,7 @@ With no public third-party Character.AI API available, that protocol implementat
 - Character.AI sign-in uses a session token you supply. It is validated with Character.AI before being stored in the macOS Keychain; treat it like a password.
 - Cloud API keys use separate Keychain items. Preferences contain provider names, endpoints, model IDs and an optional last-provider selection, never API keys. Editing a cloud destination requires re-entering its key and confirming trust in the endpoint.
 - Local/cloud provider transport uses ephemeral URLSessions without persistent cookies, HTTP credentials or response caching, refuses redirects and does not expose server error bodies in the UI. Cloud chat sends context only to its explicitly selected endpoint.
-- Authenticated requests use HTTPS/WSS. Their URLSession has no persistent HTTP cache, cookie store or credential store, and refuses redirects. In-memory account caches are cleared when the session changes.
+- Authenticated requests use HTTPS/WSS. Their URLSession has no persistent HTTP cache or cookie store, and refuses redirects. An optional character-search cookie is stored as a separate Keychain item, sent only to `character.ai`, never logged, and removed on sign-out. In-memory account caches are cleared when the session changes.
 - The app runs in the macOS App Sandbox, requests outgoing network access, and uses the read-write user-selected-files entitlement so exports can be written to a destination chosen in the save panel.
 - Veyrin does not attempt to bypass authentication, CAPTCHA, rate limits, paywalls or other access controls.
 - Never share session credentials, protocol captures or request dumps. Sensitive investigation files should stay out of version control.
@@ -126,7 +126,7 @@ The release preparation audit found account/profile and feed captures in deleted
 
 ## Limitations
 
-- **Character search isn't supported.** Character.AI's search endpoint blocks this client, and Veyrin does not work around that restriction. Use **Discover** and **Similar Characters** to find characters.
+- **Character search needs a web session cookie.** Character.AI's search-results endpoint does not accept the app's session token. You can paste the `web-next-auth` cookie (or the whole `Cookie` header) from a signed-in browser in the login window or **Preferences → Account**. Veyrin stores it in the Keychain and sends it only to `character.ai`; it does not obtain, refresh or share the cookie itself. Without it, suggestions, Discover and Similar Characters still work.
 - **No offline use for Character.AI conversations.** They depend on access to Character.AI; offline-first loading is planned, not implemented. The local character library can be used with Ollama running on this Mac.
 - **Character.AI compatibility can break at any time** because that integration depends on undocumented backend behaviour.
 - **Cloud compatibility is deliberately narrow.** The adapter supports Bearer-authenticated model listing and streamed text Chat Completions, not every OpenAI model, the Responses API, tools, images or arbitrary vendor APIs. A successful model-list request is not a successful chat test.
