@@ -91,7 +91,7 @@ nonisolated struct FeedPost: Decodable, Sendable {
         authorID = try container.decodeIfPresent(String.self, forKey: .authorID)
         authorType = try container.decodeIfPresent(Int.self, forKey: .authorType)
         type = try container.decode(Int.self, forKey: .type)
-        participants = try container.decode([FeedParticipant].self, forKey: .participants)
+        participants = try container.decodeIfPresent([FeedParticipant].self, forKey: .participants) ?? []
         content = try container.decodeIfPresent(String.self, forKey: .content)
         caption = try container.decodeIfPresent(String.self, forKey: .caption)
         mediaURLs = try container.decode([String].self, forKey: .mediaURLs)

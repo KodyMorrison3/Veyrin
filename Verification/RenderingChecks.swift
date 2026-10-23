@@ -40,6 +40,9 @@ func runRenderingChecks() throws {
     let payload = Data("{\"id\":\"post\",\"type\":1,\"participants\":[],\"media_urls\":[],\"reactions\":{\"z\":2,\"a\":1}}".utf8)
     let post = try JSONDecoder().decode(FeedPost.self, from: payload)
     precondition(post.reactionSummary == "a 1  ·  z 2")
+    let postWithoutParticipants = Data("{\"id\":\"post\",\"type\":1,\"media_urls\":[]}".utf8)
+    let decodedPost = try JSONDecoder().decode(FeedPost.self, from: postWithoutParticipants)
+    precondition(decodedPost.participants.isEmpty, "Feed posts without participants must still decode")
     precondition(PresentationDate.parse("2026-10-07T12:00:00Z") != nil)
     precondition(PresentationDate.parse("2026-10-07T12:00:00.123Z") != nil)
     let suite = "Verification.\(UUID().uuidString)"
