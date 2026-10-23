@@ -87,3 +87,16 @@ captures/
 # Local configuration
 *.local
 *.local.*
+
+# Local data and scratch material
+/screenshots-raw/
+/private/
+/scratch/
+/captures/
+/exports/
+*.sqlite
+*.sqlite3
+*.db
+FIXES_PROGRESS.md
+CharacterSearchAuthDiagnostic.swift
+
