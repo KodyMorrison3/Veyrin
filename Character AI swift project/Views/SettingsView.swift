@@ -138,8 +138,10 @@ struct SettingsView: View {
                 reduceTransparency: reduceTransparency
             )
         }
+        // A root WindowDragGesture competes with the pane ScrollViews and can
+        // let scrolling fall through to the window behind Settings. The scene’s
+        // windowBackgroundDragBehavior keeps background window dragging.
         .contentShape(Rectangle())
-        .gesture(WindowDragGesture())
     }
 
     // MARK: - Shared presentation

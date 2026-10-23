@@ -78,6 +78,7 @@ struct PersonaSettingsView: View {
         }
         .scrollIndicators(.automatic)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .contentShape(Rectangle())
         .confirmationDialog(
             "Delete \(pendingDeletion?.displayName ?? "this persona")?",
             isPresented: Binding(get: { pendingDeletion != nil },
