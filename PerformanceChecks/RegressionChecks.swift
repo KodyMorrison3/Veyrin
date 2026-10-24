@@ -590,6 +590,35 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
         precondition(duplicateArchiveLibrary.characters.first { $0.id == "duplicate-id" }?.name == "Last duplicate")
         print("PASS duplicate catalogue IDs keep the last entry during save and both import paths")
 
+        // About and greeting are the only fields My Library edits. The rest of
+        // an imported character, including its source metadata, must survive.
+        let editRoot = libraryRoot.appendingPathComponent("edit", isDirectory: true)
+        let editLibrary = LocalCharacterLibrary(supportDirectory: editRoot)
+        let editID = UUID().uuidString
+        try editLibrary.saveFromDiscover(DiscoverFeedCharacter(
+            externalID: editID, name: "Editable Character", participantName: nil,
+            interactionCount: 12, title: "Tagline kept", description: "Original about",
+            greeting: "Original greeting", visibility: "VISIBILITY_PUBLIC",
+            avatarFileName: "avatar.png", username: "creator", shortHash: nil
+        ))
+        let editedCharacter = try editLibrary.updateDetails(for: editID, about: "  Edited about \n",
+                                                            greeting: "Edited greeting")
+        precondition(editedCharacter.description == "Edited about" && editedCharacter.greeting == "Edited greeting",
+                     "An edit trims surrounding whitespace")
+        precondition(editedCharacter.name == "Editable Character" && editedCharacter.tagline == "Tagline kept"
+                     && editedCharacter.creatorName == "creator" && editedCharacter.avatarFileName == "avatar.png"
+                     && editedCharacter.interactionCount == 12 && editedCharacter.visibility == "VISIBILITY_PUBLIC",
+                     "Editing About and the greeting must keep the imported metadata")
+        let reloadedEditLibrary = LocalCharacterLibrary(supportDirectory: editRoot)
+        precondition(reloadedEditLibrary.characters.first?.description == "Edited about"
+                     && reloadedEditLibrary.characters.first?.greeting == "Edited greeting",
+                     "A saved edit survives a relaunch")
+        do {
+            try editLibrary.updateDetails(for: "missing-character", about: "", greeting: "")
+            preconditionFailure("Editing a character that is not in the library must fail")
+        } catch LocalCharacterLibraryError.invalidCharacter {}
+        print("PASS About and greeting edits persist, keep imported metadata and fail safely")
+
         func removalCharacter(_ id: String, _ name: String) -> DiscoverFeedCharacter {
             DiscoverFeedCharacter(
                 externalID: id, name: name, participantName: nil,
@@ -644,6 +673,12 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
         } catch LocalCharacterLibraryError.catalogueUnavailable {}
         let catalogueAfterFailedRemoval = try Data(contentsOf: catalogueURL)
         precondition(catalogueAfterFailedRemoval == brokenCatalogue)
+        do {
+            try brokenCatalogueLibrary.updateDetails(for: "another-character", about: "x", greeting: "y")
+            preconditionFailure("A broken catalogue unexpectedly accepted an edit")
+        } catch LocalCharacterLibraryError.catalogueUnavailable {}
+        let catalogueAfterFailedEdit = try Data(contentsOf: catalogueURL)
+        precondition(catalogueAfterFailedEdit == brokenCatalogue)
 
         let conversationRoot = libraryRoot.appendingPathComponent("broken-conversation", isDirectory: true)
         let conversationLibrary = LocalCharacterLibrary(supportDirectory: conversationRoot)

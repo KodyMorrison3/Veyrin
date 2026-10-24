@@ -312,12 +312,23 @@ func runProviderChecks() async throws {
         catch is ProviderError {}
     }
     _ = try ProviderEndpoint.local("http://[::1]:11434")
-    for endpoint in ["http://example.com/v1", "https://localhost/v1", "https://127.0.0.1/v1", "https://service.local/v1", "https://service.local./v1", "https://key@example.com/v1", "https://example.com/v1?key=x", "https://example.com/v1#secret"] {
+    for endpoint in ["http://example.com/v1", "https://service.local/v1", "https://service.local./v1", "https://key@example.com/v1", "https://example.com/v1?key=x", "https://example.com/v1#secret", "http://127.0.0.1:3001/v1?key=x", "http://user@127.0.0.1:3001/v1"] {
         do { _ = try ProviderEndpoint.cloud(endpoint, kind: .openAICompatible); preconditionFailure("Unsafe cloud endpoint accepted") }
         catch is ProviderError {}
     }
     _ = try ProviderEndpoint.cloud("https://api.example.com/v1", kind: .openAICompatible)
+    // A self-hosted OpenAI-compatible router is accepted on loopback only, and
+    // only for the compatible kind; native API types keep their fixed hosts.
+    for endpoint in ["http://127.0.0.1:3001/v1", "http://localhost:3001/v1", "http://[::1]:3001/v1", "https://127.0.0.1:3001/v1"] {
+        let base = try ProviderEndpoint.cloud(endpoint, kind: .openAICompatible)
+        precondition(base.lastPathComponent == "v1", "Loopback router endpoint must keep its base path")
+    }
+    for kind in [ProviderKind.openAI, .openAIResponses, .anthropic, .ollama] {
+        do { _ = try ProviderEndpoint.cloud("http://127.0.0.1:3001/v1", kind: kind); preconditionFailure("Loopback accepted for \(kind)") }
+        catch is ProviderError {}
+    }
     let presetPaths = [
+        "freellmapi": "http://127.0.0.1:31415/v1/chat/completions",
         "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         "groq": "https://api.groq.com/openai/v1/chat/completions",
         "openrouter": "https://openrouter.ai/api/v1/chat/completions",
@@ -340,6 +351,22 @@ func runProviderChecks() async throws {
     try await expectProviderError(.missingCredential) {
         _ = try TextChatProvider(configuration: configuration, apiKey: "key\r\ninjected")
     }
+
+    // Router health metadata: unusable models are flagged, `auto` leads, and a
+    // provider that omits the fields keeps every model selectable.
+    ProviderStubHTTP.configure("""
+    {"data":[{"id":"gemini-x","available":true,"execution_status":"ready"},
+    {"id":"auto","available":true},
+    {"id":"embed","available":false,"unavailable_reason":"disabled"},
+    {"id":"quota","available":true,"execution_status":"exhausted"},
+    {"id":"needs-key","execution_status":"needsKey"},
+    {"id":"plain-model"}]}
+    """)
+    let routed = try await cloud.models()
+    precondition(routed.map(\.id) == ["auto", "gemini-x", "plain-model", "embed", "needs-key", "quota"],
+                 "Router entries lead, then ready models, then the unusable ones")
+    precondition(routed.map(\.isAvailable) == [true, true, true, false, false, false],
+                 "Only an explicit report may hide a model")
 
     ProviderStubHTTP.configure("{\"models\":[]}")
     let empty = try await local.models()
@@ -566,6 +593,182 @@ func runProviderChecks() async throws {
     try await providerEventually("Retry did not finish") { !interrupted.isGenerating }
     precondition(interrupted.messages.count == 2 && interrupted.messages.last?.content == "Hello 👋 world")
     precondition(!interrupted.wasInterrupted && interrupted.errorMessage == nil)
+
+    // Provider transcripts are client-side only, so edit, regenerate, rewind and
+    // fork must leave exactly the turns a resend would carry.
+    ProviderStubHTTP.configure(ndjson)
+    let editable = ProviderChatViewModel(provider: local, model: "fixture-model")
+    for prompt in ["First", "Second"] {
+        editable.send(prompt)
+        try await providerEventually("Provider reply did not finish") { !editable.isGenerating }
+    }
+    precondition(editable.messages.map(\.role) == [.user, .assistant, .user, .assistant])
+    precondition(editable.messages.allSatisfy { $0.content == "Hello 👋 world" || $0.content == "First" || $0.content == "Second" })
+
+    let firstPromptID = editable.messages[0].id
+    precondition(editable.editMessage(firstPromptID, newContent: "  Corrected prompt  "))
+    precondition(editable.messages.count == 1, "Editing drops everything that answered the old text")
+    precondition(editable.messages[0].content == "Corrected prompt")
+    precondition(!editable.editMessage(firstPromptID, newContent: " \n "), "Empty edits must be rejected")
+    precondition(editable.messages.count == 1 && editable.messages[0].content == "Corrected prompt")
+    precondition(!editable.editMessage(UUID(), newContent: "Unknown"), "Unknown messages cannot be edited")
+
+    editable.send("Third")
+    try await providerEventually("Third reply did not finish") { !editable.isGenerating }
+    precondition(editable.messages.map(\.role) == [.user, .user, .assistant])
+    let thirdReplyID = editable.messages[2].id
+    precondition(editable.canRegenerate(thirdReplyID))
+    precondition(!editable.canRegenerate(editable.messages[1].id), "Only replies can be regenerated")
+    precondition(editable.regenerateMessage(thirdReplyID))
+    try await providerEventually("Regenerated reply did not finish") { !editable.isGenerating }
+    precondition(editable.messages.count == 3 && editable.messages[2].id != thirdReplyID)
+    precondition(editable.messages[2].role == .assistant && editable.messages[1].content == "Third")
+
+    // A greeting has no prompt to re-send.
+    editable.newConversation()
+    precondition(editable.messages.isEmpty && !editable.canRegenerate(UUID()))
+
+    let rewinding = ProviderChatViewModel(provider: local, model: "fixture-model")
+    for prompt in ["One", "Two"] {
+        rewinding.send(prompt)
+        try await providerEventually("Rewind fixture did not finish") { !rewinding.isGenerating }
+    }
+    let keptReplyID = rewinding.messages[1].id
+    precondition(rewinding.rewind(through: keptReplyID))
+    precondition(rewinding.messages.count == 2 && rewinding.messages[1].id == keptReplyID)
+    precondition(!rewinding.rewind(through: UUID()), "Unknown messages cannot be rewound")
+    rewinding.retry()
+    try await providerEventually("Retry after rewind did not finish") { !rewinding.isGenerating }
+    // Retry re-runs the kept reply rather than appending past it.
+    precondition(rewinding.messages.count == 2 && rewinding.messages.last?.content == "Hello 👋 world")
+
+    let forkSource = rewinding.messages[0]
+    precondition(rewinding.fork(through: forkSource.id))
+    precondition(rewinding.messages.map(\.id) == [forkSource.id])
+    rewinding.retry()
+    precondition(!rewinding.isGenerating && rewinding.messages.count == 1,
+                 "A fork must not keep the old retry target")
+
+    // Provider chats resume from disk, and edit/rewind/fork rewrite the saved
+    // turns instead of leaving a stale copy behind.
+    let transcriptRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("veyrin-transcripts-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: transcriptRoot) }
+    let transcriptStore = ProviderTranscriptStore(supportDirectory: transcriptRoot)
+    ProviderStubHTTP.configure(ndjson)
+
+    let savedChat = ProviderChatViewModel(provider: local, model: "fixture-model", transcripts: transcriptStore)
+    precondition(savedChat.messages.isEmpty, "A chat that was never used must not invent history")
+    savedChat.send("Saved prompt")
+    try await providerEventually("Saved chat did not finish") { !savedChat.isGenerating }
+    precondition(savedChat.storageErrorMessage == nil && savedChat.messages.count == 2)
+
+    let resumed = ProviderChatViewModel(provider: local, model: "fixture-model", transcripts: transcriptStore)
+    precondition(resumed.messages.map(\.content) == savedChat.messages.map(\.content),
+                 "Reopening the same chat resumes its saved turns")
+    precondition(ProviderChatViewModel(provider: local, model: "other-model", transcripts: transcriptStore).messages.isEmpty,
+                 "A different model is a different conversation")
+
+    precondition(resumed.rewind(through: resumed.messages[0].id))
+    let rewound = ProviderChatViewModel(provider: local, model: "fixture-model", transcripts: transcriptStore)
+    precondition(rewound.messages.count == 1 && rewound.messages[0].content == "Saved prompt")
+    precondition(rewound.editMessage(rewound.messages[0].id, newContent: "Edited prompt"))
+    let edited = ProviderChatViewModel(provider: local, model: "fixture-model", transcripts: transcriptStore)
+    precondition(edited.messages.count == 1 && edited.messages[0].content == "Edited prompt",
+                 "Editing must rewrite the saved transcript")
+
+    edited.newConversation()
+    precondition(ProviderChatViewModel(provider: local, model: "fixture-model", transcripts: transcriptStore).messages.isEmpty,
+                 "New Chat replaces the saved conversation")
+
+    let greetingCharacter = try LocalCharacter(accountExportRecord: ["external_id": "saved-greeting",
+                                                                   "name": "Guide",
+                                                                   "greeting": "Welcome back."])
+    let greeted = ProviderChatViewModel(provider: local, model: "fixture-model",
+                                        character: greetingCharacter, transcripts: transcriptStore)
+    precondition(greeted.messages.map(\.content) == ["Welcome back."])
+    greeted.send("Hello")
+    try await providerEventually("Greeting chat did not finish") { !greeted.isGenerating }
+    let greetedAgain = ProviderChatViewModel(provider: local, model: "fixture-model",
+                                            character: greetingCharacter, transcripts: transcriptStore)
+    precondition(greetedAgain.messages.count == 3 && greetedAgain.messages[0].content == "Welcome back.",
+                 "A resumed chat must not duplicate its greeting")
+    greetedAgain.setCharacter(nil)
+    precondition(greetedAgain.messages.isEmpty, "Each character keeps its own slot")
+
+    let blockedPath = FileManager.default.temporaryDirectory
+        .appendingPathComponent("veyrin-blocked-\(UUID().uuidString)")
+    try Data("not a directory".utf8).write(to: blockedPath)
+    defer { try? FileManager.default.removeItem(at: blockedPath) }
+    let blockedChat = ProviderChatViewModel(provider: local, model: "fixture-model",
+                                           transcripts: ProviderTranscriptStore(supportDirectory: blockedPath))
+    blockedChat.send("Nowhere to save")
+    try await providerEventually("Blocked save chat did not finish") { !blockedChat.isGenerating }
+    precondition(blockedChat.storageErrorMessage != nil, "A failed save must be reported, not swallowed")
+
+    // Sidebar summaries: newest first, Markdown flattened, and only real
+    // conversations (a greeting on its own is not a saved chat yet).
+    let sidebarKey = ProviderTranscriptKey(providerID: "ollama", kind: .ollama,
+                                          model: "sidebar-model", characterID: "saved-greeting")
+    try transcriptStore.save([ProviderChatMessage(role: .assistant, content: "Hi"),
+                              ProviderChatMessage(role: .user, content: "hello"),
+                              ProviderChatMessage(role: .assistant, content: "*smiles*\n\nGood to see you")],
+                             for: sidebarKey, characterName: "Guide")
+    let sidebarRow = transcriptStore.summaries.first
+    precondition(sidebarRow?.title == "Guide" && sidebarRow?.key == sidebarKey)
+    precondition(sidebarRow?.preview == "smiles Good to see you",
+                 "The sidebar flattens Markdown and line breaks into one line")
+    precondition(transcriptStore.summaries.map(\.updatedAt) == transcriptStore.summaries.map(\.updatedAt).sorted(by: >),
+                 "Newest conversations lead the sidebar")
+    let greetingOnlyKey = ProviderTranscriptKey(providerID: "ollama", kind: .ollama,
+                                               model: "sidebar-model", characterID: "greeting-only")
+    try transcriptStore.save([ProviderChatMessage(role: .assistant, content: "Welcome.")],
+                             for: greetingOnlyKey, characterName: "Guide")
+    precondition(!transcriptStore.summaries.contains { $0.key == greetingOnlyKey },
+                 "A chat with no user message has no sidebar row")
+    transcriptStore.remove(sidebarKey)
+    precondition(!transcriptStore.summaries.contains { $0.key == sidebarKey },
+                 "Removing a chat removes its sidebar row")
+
+    // A chat with no character is titled by its provider, so a local chat and a
+    // cloud chat are not two identical "Provider chat" rows that open different
+    // providers from the same-looking tap.
+    let providerTitledKey = ProviderTranscriptKey(providerID: "ollama", kind: .ollama,
+                                                 model: "sidebar-model", characterID: nil)
+    try transcriptStore.save([ProviderChatMessage(role: .user, content: "hi there")],
+                             for: providerTitledKey, providerName: "Ollama")
+    precondition(transcriptStore.summaries.first { $0.key == providerTitledKey }?.title == "Ollama",
+                 "A chat with no character is titled by its provider")
+    let legacyLocalRow = ProviderTranscriptSummary(key: providerTitledKey, characterName: nil,
+                                                  providerName: nil, avatarFileName: nil,
+                                                  lastMessage: nil, updatedAt: Date())
+    precondition(legacyLocalRow.title == "Ollama",
+                 "A transcript saved before provider names still says which provider it belongs to")
+    let legacyCloudRow = ProviderTranscriptSummary(
+        key: ProviderTranscriptKey(providerID: UUID().uuidString, kind: .openAICompatible,
+                                   model: "auto", characterID: nil),
+        characterName: nil, providerName: nil, avatarFileName: nil,
+        lastMessage: nil, updatedAt: Date())
+    precondition(legacyCloudRow.title == "Cloud chat" && legacyCloudRow.title != legacyLocalRow.title,
+                 "A local chat and a cloud chat never share a title")
+    transcriptStore.remove(providerTitledKey)
+
+    // The Local screen runs its prepare step before asking for models: that step
+    // is what starts Ollama on demand, so a screen that skipped it would report
+    // the provider as unreachable whenever Ollama was not already running.
+    let orderLog = ProviderOrderLog()
+    let localConnection = ProviderConnection()
+    localConnection.test(prepare: { await orderLog.append("prepare") }, { OrderedProvider(log: orderLog) })
+    try await providerEventually("Connection test did not finish") { !localConnection.isLoading }
+    let order = await orderLog.values
+    precondition(order == ["prepare", "models"], "The provider must be prepared before its models are requested")
+    precondition(localConnection.error == nil && localConnection.models.map(\.id) == ["ordered-model"])
+
+    // A second run must clear the previous result rather than merge into it.
+    localConnection.test { OrderedProvider(log: ProviderOrderLog()) }
+    try await providerEventually("Second connection test did not finish") { !localConnection.isLoading }
+    precondition(localConnection.models.map(\.id) == ["ordered-model"] && localConnection.status != nil)
+
     precondition(!local.descriptor.capabilities.contains(.characters) && !cloud.descriptor.capabilities.contains(.accountHistory))
     precondition(ProviderDescriptor.characterAI.capabilities.contains(.characters))
 
@@ -573,12 +776,19 @@ func runProviderChecks() async throws {
     // smoke check, not an interactive or visual approval of the design.
     _ = NSApplication.shared
     let auth = AuthStore(storage: ProviderTestStorage(), restoreSession: false)
+    let sidebarLibrary = LocalCharacterLibrary(supportDirectory: transcriptRoot)
     for scheme in [ColorScheme.light, .dark] {
         let views: [AnyView] = [
             AnyView(ProviderSelectionView(coordinator: coordinator, store: store, authStore: auth)),
             AnyView(LocalProviderSetupView(store: store)),
             AnyView(CloudProviderSetupView(store: store)),
-            AnyView(ProviderChatView(viewModel: interrupted, accountPersonas: auth.personas, onSwitch: {}))
+            AnyView(ProviderChatView(viewModel: interrupted, accountPersonas: auth.personas, onSwitch: {})),
+            // The provider chat picks characters from this library, which adds
+            // Start chat and a no-character entry on top of the editing screen.
+            AnyView(LocalCharacterLibraryView(onStartChat: { _ in })),
+            AnyView(ProviderConversationSidebar(store: transcriptStore, library: sidebarLibrary,
+                                                chat: interrupted, errorMessage: nil,
+                                                onOpen: { _ in }, onNewChat: {}))
         ]
         for view in views {
             for size in [NSSize(width: 600, height: 560), NSSize(width: 1100, height: 800)] {
@@ -590,5 +800,27 @@ func runProviderChecks() async throws {
         }
     }
     try await runExtendedProviderChecks(transport: transport)
-    print("Provider endpoints, credentials, model discovery, NDJSON/SSE framing/errors, HTTP cancellation, selection/restoration, session gates, switching/retry and native layout checks passed")
+    print("Provider endpoints, credentials, model discovery, NDJSON/SSE framing/errors, HTTP cancellation, selection/restoration, session gates, switching/retry, transcript edit/regenerate/rewind/fork, saved-transcript resume and native layout checks passed")
+}
+
+/// Records the order of the steps a connection test performs.
+private actor ProviderOrderLog {
+    private(set) var values: [String] = []
+    func append(_ value: String) { values.append(value) }
+}
+
+/// A provider that only reports the moment it is asked for models, so a check
+/// can prove the prepare step (starting Ollama) happened first.
+private nonisolated struct OrderedProvider: ChatProvider {
+    let log: ProviderOrderLog
+    let descriptor = ProviderDescriptor(id: "ordered", name: "Ordered", kind: .ollama,
+                                        capabilities: [.textChat, .modelDiscovery])
+
+    func models() async throws -> [ModelDescriptor] {
+        await log.append("models")
+        return [ModelDescriptor(id: "ordered-model")]
+    }
+
+    func stream(model: String, messages: [ProviderChatMessage],
+                receive: @escaping @Sendable (ChatStreamEvent) async throws -> Void) async throws {}
 }

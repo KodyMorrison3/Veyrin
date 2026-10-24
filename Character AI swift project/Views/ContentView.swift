@@ -4,6 +4,7 @@ struct ContentView: View {
     @EnvironmentObject private var authStore: AuthStore
     @ObservedObject private var providers = ProviderStore.shared
     @StateObject private var coordinator = ProviderCoordinator()
+    @State private var confirmingSidebarNewChat = false
 
     var body: some View {
         Group {
@@ -30,7 +31,42 @@ struct ContentView: View {
                 .toolbar { backToProviders }
             case .textChat:
                 if let chat = coordinator.chat {
-                    ProviderChatView(viewModel: chat, accountPersonas: authStore.personas) { coordinator.show(.selector) }
+                    // The sidebar lists saved local and cloud chats by character,
+                    // so navigation does not depend on remembering which provider
+                    // and model a conversation was started with.
+                    NavigationSplitView {
+                        ProviderConversationSidebar(
+                            store: ProviderTranscriptStore.shared,
+                            library: LocalCharacterLibrary.shared,
+                            chat: chat,
+                            errorMessage: coordinator.errorMessage,
+                            onOpen: { summary in coordinator.open(summary, store: providers) },
+                            onNewChat: {
+                                // Same rule as the toolbar: an unused chat starts
+                                // over silently, a saved one asks first.
+                                if chat.messages.contains(where: { $0.role == .user }) {
+                                    confirmingSidebarNewChat = true
+                                } else {
+                                    chat.newConversation()
+                                }
+                            }
+                        )
+                        .confirmationDialog("Start a new conversation?",
+                                            isPresented: $confirmingSidebarNewChat,
+                                            titleVisibility: .visible) {
+                            Button("Start New Conversation", role: .destructive) { chat.newConversation() }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("This replaces the saved conversation for this provider, model and character. It cannot be undone.")
+                        }
+                    } detail: {
+                        ProviderChatView(viewModel: chat, accountPersonas: authStore.personas) {
+                            coordinator.show(.selector)
+                        }
+                        // A new conversation starts with a clean composer, not the
+                        // draft and dialogs of the chat that was open before it.
+                        .id(chat.identity)
+                    }
                 }
             }
         }
@@ -84,7 +120,6 @@ private struct MainView: View {
     @State private var isShowingDiscover = false
     @State private var isShowingFeed = false
     @State private var isShowingLocalLibrary = false
-    @State private var localConversationCharacter: LocalCharacter?
     @State private var feedProfileUsername: String?
     @State private var isShowingFeedCreatorProfile = false
 
@@ -220,7 +255,6 @@ private struct MainView: View {
         ToolbarItem(placement: .navigation) {
             Button {
                 selectedChatID = nil
-                localConversationCharacter = nil
                 isShowingFeed = false
                 isShowingLocalLibrary = false
                 isShowingDiscover = true
@@ -233,7 +267,6 @@ private struct MainView: View {
         ToolbarItem(placement: .navigation) {
             Button {
                 selectedChatID = nil
-                localConversationCharacter = nil
                 isShowingDiscover = false
                 isShowingFeed = true
             } label: {
@@ -247,7 +280,6 @@ private struct MainView: View {
                 selectedChatID = nil
                 isShowingDiscover = false
                 isShowingFeed = false
-                localConversationCharacter = nil
                 isShowingLocalLibrary = true
             } label: {
                 Label("My Library", systemImage: "books.vertical")
@@ -348,7 +380,6 @@ private struct MainView: View {
                 set: { chatID in
                     selectedChatID = chatID
                     if chatID != nil {
-                        localConversationCharacter = nil
                         isShowingLocalLibrary = false
                         isShowingDiscover = false
                         isShowingFeed = false
@@ -749,16 +780,10 @@ private struct MainView: View {
 
     @ViewBuilder
     private var detailView: some View {
-        if let localConversationCharacter {
-            LocalCharacterChatView(character: localConversationCharacter, accountPersonas: authStore.personas)
-                .id(localConversationCharacter.id)
-        } else if isShowingLocalLibrary {
-            LocalCharacterLibraryView { character in
-                localConversationCharacter = character
-                isShowingLocalLibrary = false
-                isShowingDiscover = false
-                isShowingFeed = false
-            }
+        if isShowingLocalLibrary {
+            // The library edits characters; chatting with them happens in the
+            // local provider window, so there is no separate local chat screen.
+            LocalCharacterLibraryView()
         } else if isShowingDiscover {
             DiscoverView(
                 authStore: authStore,

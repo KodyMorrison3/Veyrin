@@ -3,7 +3,7 @@
 //  Character AI swift project
 //
 //  Feature-local client preferences backing the Settings window. These are
-//  local UI preferences only — no Character.AI account settings are modeled
+//  local UI preferences only - no Character.AI account settings are modeled
 //  here (no confirmed backend contracts exist for those), so every control
 //  in Settings maps to something this app actually supports.
 //

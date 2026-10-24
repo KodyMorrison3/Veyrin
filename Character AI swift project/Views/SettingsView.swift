@@ -604,7 +604,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 settingsSection(
                     title: "Local Models",
-                    footer: "When enabled, Veyrin opens Ollama when you enter a local character chat if it isn't already responding. Ollama is only quit when you quit Veyrin and Veyrin was the app that opened it."
+                    footer: "When enabled, opening Local Models asks Ollama for its models and opens Ollama first if it isn't already responding. Ollama is only quit when you quit Veyrin and Veyrin was the app that opened it."
                 ) {
                     Toggle("Start Ollama automatically", isOn: $preferences.startOllamaAutomatically)
                         .padding(.vertical, 4)

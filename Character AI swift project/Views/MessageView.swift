@@ -164,39 +164,47 @@ struct MessageView: View {
                 messageActionRows(candidate: candidate)
             }
 
-        // Subtle action trigger overlay on hover or pinned
-        if turn.isPinned || isHoveringMessage || isShowingActions {
-            HStack(spacing: 2) {
-                if turn.isPinned {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color.caiPrimary)
-                }
-
-                Button {
-                    isShowingActions = true
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.caiMuted)
-                        .frame(width: 22, height: 22)
-                        .background(Circle().fill(palette.atmosphericBase.opacity(colorScheme == .dark ? 0.85 : 0.55)))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Message actions")
-                .popover(isPresented: $isShowingActions, arrowEdge: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        messageActionRows(candidate: candidate)
-                    }
-                    .padding(8)
-                    .frame(width: 260)
-                    .presentationBackground(.regularMaterial)
-                }
+            // The pin stays a badge on the bubble's corner; the actions
+            // trigger sits just outside the bubble. Both are overlays, so
+            // neither appearing nor leaving can resize the bubble and move the
+            // rest of the transcript — same construction as ProviderChatView.
+            if turn.isPinned {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.caiPrimary)
+                    .padding(4)
+                    .transition(.opacity)
             }
-            .padding(4)
-            .transition(.opacity)
+
+            if isHoveringMessage || isShowingActions {
+                actionsButton(candidate: candidate)
+                    .offset(x: turn.isHuman ? -32 : 32)
+                    .transition(.opacity)
+            }
         }
+    }
+
+    private func actionsButton(candidate: Candidate) -> some View {
+        Button {
+            isShowingActions = true
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.caiMuted)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(palette.atmosphericBase.opacity(colorScheme == .dark ? 0.85 : 0.55)))
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Message actions")
+        .popover(isPresented: $isShowingActions, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                messageActionRows(candidate: candidate)
+            }
+            .padding(8)
+            .frame(width: 260)
+            .presentationBackground(.regularMaterial)
+        }
+        .padding(4)
     }
 
     private var filteredNotice: some View {

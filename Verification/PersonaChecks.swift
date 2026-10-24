@@ -198,7 +198,7 @@ private func runRoleplayPersonaChecks(folder: URL, source: Persona, character: L
         let views: [AnyView] = [AnyView(PersonaAvatarView(persona: source, size: 48)),
             AnyView(PersonaAvatarView(persona: .defaultUser(), size: 22)),
             AnyView(RoleplayPersonaControl(context: context)),
-            AnyView(LocalCharacterChatView(character: character, accountPersonas: account))]
+            AnyView(LocalCharacterLibraryView())]
         for view in views {
             let host = NSHostingView(rootView: view.environment(\.colorScheme, scheme))
             host.frame = NSRect(x: 0, y: 0, width: 600, height: 560)

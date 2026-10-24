@@ -13,6 +13,16 @@ nonisolated enum ProviderKind: String, Codable, CaseIterable, Sendable {
         case .openAICompatible: "OpenAI-compatible"
         }
     }
+
+    /// A label short enough for a sidebar row, used where a chat has no saved
+    /// provider name: it is what tells a local chat from a cloud one.
+    var shortTitle: String {
+        switch self {
+        case .characterAI: "Character.AI"
+        case .ollama: "Ollama"
+        default: "Cloud chat"
+        }
+    }
 }
 
 nonisolated struct ProviderCapabilities: OptionSet, Sendable {
@@ -66,6 +76,9 @@ nonisolated struct ProviderPreset: Identifiable, Sendable {
     }
 
     static let freeCloud: [ProviderPreset] = [
+        ProviderPreset(id: "freellmapi", name: "FreeLLMAPI · local router",
+                       endpoint: "http://127.0.0.1:31415/v1",
+                       note: "The FreeLLMAPI desktop app listens on port 31415; a Docker or self-hosted install uses 3001, so edit the port to match. Paste the freellmapi-… unified key from its dashboard. It only ever receives traffic from this Mac."),
         ProviderPreset(id: "gemini", name: "Gemini · free tier",
                        endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/",
                        note: "Free tokens on selected Flash models. Unpaid prompts may be reviewed or used to improve Google’s models."),
@@ -83,6 +96,9 @@ nonisolated struct ProviderPreset: Identifiable, Sendable {
 
 nonisolated struct ModelDescriptor: Identifiable, Equatable, Sendable {
     let id: String
+    /// Routers such as FreeLLMAPI report whether a model can serve a request
+    /// right now. Providers that say nothing stay selectable.
+    var isAvailable: Bool = true
     var name: String { id }
 }
 
@@ -126,6 +142,10 @@ nonisolated enum ProviderEndpoint {
 
     static func cloud(_ text: String, kind: ProviderKind) throws -> URL {
         let url = try base(text)
+        // A self-hosted OpenAI-compatible router on this Mac is a legitimate
+        // cloud configuration, and its key never leaves the loopback interface.
+        // Every other kind keeps its fixed official HTTPS endpoint below.
+        if kind == .openAICompatible, isLoopbackHost(url) { return url }
         guard url.scheme == "https", let host = url.host?.lowercased(),
               !host.hasSuffix("."), host.contains("."), !host.hasSuffix(".local"), !host.hasSuffix(".localhost"),
               !host.hasSuffix(".internal"), !host.contains(":"),
@@ -137,6 +157,13 @@ nonisolated enum ProviderEndpoint {
             }
         } else if kind != .openAICompatible { throw ProviderError.invalidConfiguration }
         return url
+    }
+
+    /// Matches `local(_:)`: only the addresses that reach this Mac itself.
+    private static func isLoopbackHost(_ url: URL) -> Bool {
+        guard ["http", "https"].contains(url.scheme) else { return false }
+        let host = url.host?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")) ?? ""
+        return ["localhost", "127.0.0.1", "::1"].contains(host)
     }
 
     private static func base(_ text: String) throws -> URL {
@@ -160,7 +187,7 @@ nonisolated enum ProviderError: LocalizedError, Equatable {
         switch self {
         case .invalidEndpoint: "Enter a URL without a username, password, query or fragment."
         case .invalidLocalEndpoint: "Use an HTTP or HTTPS Ollama address on this Mac (localhost, 127.0.0.1 or ::1), without a path."
-        case .invalidCloudEndpoint: "Use a public HTTPS API base URL. Native OpenAI and Claude configurations use their fixed official endpoints."
+        case .invalidCloudEndpoint: "Use a public HTTPS API base URL, or a loopback address such as http://127.0.0.1:3001/v1 for a local OpenAI-compatible router. Native OpenAI and Claude configurations use their fixed official endpoints."
         case .invalidConfiguration: "Enter a provider name and a valid model identifier."
         case .missingCredential: "Add an API key in Providers settings before connecting."
         case .credentialStorage: "The API key could not be read or saved in Keychain. Try again."

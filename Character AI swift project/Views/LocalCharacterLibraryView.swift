@@ -3,6 +3,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct LocalCharacterLibraryView: View {
+    /// Nil hides Start chat, which is what the Character.AI window wants: there
+    /// the provider window owns chatting, so the library only edits characters.
+    var onStartChat: ((LocalCharacter?) -> Void)? = nil
     @StateObject private var library = LocalCharacterLibrary.shared
     @State private var query = ""
     @State private var source = "All sources"
@@ -12,8 +15,6 @@ struct LocalCharacterLibraryView: View {
     @State private var pendingRightsAction: LibraryRightsAction?
     @State private var showingRightsConfirmation = false
     @State private var pendingRemoval: LocalCharacter?
-
-    let onStartChat: (LocalCharacter) -> Void
 
     private var results: [LocalCharacter] { library.matching(query, source: source, tag: tag) }
 
@@ -60,6 +61,35 @@ struct LocalCharacterLibraryView: View {
             } else {
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 16)], spacing: 16) {
+                        // In a provider chat the grid also picks the provider itself,
+                        // which replaces the old "No Character" menu entry.
+                        if let onStartChat {
+                            Button { onStartChat(nil) } label: {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    ZStack {
+                                        Rectangle().fill(.secondary.opacity(0.10))
+                                        Image(systemName: "person.crop.circle.badge.xmark")
+                                            .font(.system(size: 34))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 168)
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("No character").font(.headline.weight(.semibold))
+                                        Text("Send messages straight to this provider, with no character prompt or greeting.")
+                                            .font(.callout).foregroundStyle(.secondary).lineLimit(3)
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.bottom, 12)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentSurface(cornerRadius: 14)
+                                .contentShape(RoundedRectangle(cornerRadius: 14))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Chat without a character")
+                        }
+
                         ForEach(results) { character in
                             ZStack(alignment: .topTrailing) {
                                 Button { selectedCharacter = character } label: {
@@ -144,13 +174,11 @@ struct LocalCharacterLibraryView: View {
         .popover(item: $selectedCharacter) { character in
             LocalCharacterDetailView(
                 character: character,
-                onStartChat: {
-                    selectedCharacter = nil
-                    onStartChat(character)
-                },
+                library: library,
+                onStartChat: onStartChat,
                 onDismiss: { selectedCharacter = nil }
             )
-            .frame(width: 480, height: 560)
+            .frame(width: 520, height: 560)
             .background { ShellEnvironmentalBackground() }
             .presentationBackground(.regularMaterial)
         }
@@ -285,9 +313,29 @@ private enum LibraryRightsAction {
 
 private struct LocalCharacterDetailView: View {
     let character: LocalCharacter
-    let onStartChat: () -> Void
+    @ObservedObject var library: LocalCharacterLibrary
+    var onStartChat: ((LocalCharacter?) -> Void)?
     let onDismiss: () -> Void
     @ObservedObject private var preferences = AppPreferences.shared
+
+    @State private var isEditing = false
+    @State private var aboutDraft = ""
+    @State private var greetingDraft = ""
+    @State private var editError: String?
+
+    /// Read through the library so a saved edit shows straight away instead of
+    /// the snapshot this popover was opened with.
+    private var current: LocalCharacter {
+        library.characters.first { $0.id == character.id } ?? character
+    }
+
+    private func trimmed(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var hasUnsavedEdit: Bool {
+        trimmed(aboutDraft) != current.description || trimmed(greetingDraft) != current.greeting
+    }
 
     private func avatarFallback(_ name: String, size: CGFloat) -> some View {
         ZStack {
@@ -302,46 +350,11 @@ private struct LocalCharacterDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                header
-                if !character.description.isEmpty {
-                    section("About") { Text(character.description).textSelection(.enabled) }
-                }
-                if !character.tags.isEmpty {
-                    section("Tags") {
-                        Label(character.tags.joined(separator: " · "), systemImage: "tag")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                if !character.greeting.isEmpty {
-                    section("Greeting") { Text(character.greeting).textSelection(.enabled) }
-                }
-                if !character.examples.isEmpty {
-                    section("Example dialogue") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(Array(character.examples.prefix(4).enumerated()), id: \.offset) { _, example in
-                                Text(example).textSelection(.enabled)
-                                if example != character.examples.prefix(4).last { Divider() }
-                            }
-                        }
-                    }
-                }
-                DisclosureGroup("Source and rights details") {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Creator: \(character.creatorName.isEmpty ? "Not stated" : character.creatorName)")
-                        Text("Licence claim: \(character.licence)")
-                        Text("Source: \(character.sourceURL.isEmpty ? character.sourceName : character.sourceURL)")
-                        Text("Imported: \(character.importedAt)")
-                    }
-                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
-                }
+            if isEditing {
+                editor
+            } else {
+                details
             }
-            .padding(.top, 56)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 24)
-            .frame(maxWidth: 760, alignment: .leading)
-            .frame(maxWidth: .infinity)
         }
         .overlay(alignment: .topLeading) {
             Button(action: onDismiss) {
@@ -359,25 +372,142 @@ private struct LocalCharacterDetailView: View {
         }
     }
 
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            header
+            if !current.description.isEmpty {
+                section("About") { Text(current.description).textSelection(.enabled) }
+            }
+            if !current.tags.isEmpty {
+                section("Tags") {
+                    Label(current.tags.joined(separator: " · "), systemImage: "tag")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if !current.greeting.isEmpty {
+                section("Greeting") { Text(current.greeting).textSelection(.enabled) }
+            }
+            if !current.examples.isEmpty {
+                section("Example dialogue") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(current.examples.prefix(4).enumerated()), id: \.offset) { _, example in
+                            Text(example).textSelection(.enabled)
+                            if example != current.examples.prefix(4).last { Divider() }
+                        }
+                    }
+                }
+            }
+            DisclosureGroup("Source and rights details") {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Creator: \(current.creatorName.isEmpty ? "Not stated" : current.creatorName)")
+                    Text("Licence claim: \(current.licence)")
+                    Text("Source: \(current.sourceURL.isEmpty ? current.sourceName : current.sourceURL)")
+                    Text("Imported: \(current.importedAt)")
+                }
+                .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
+            }
+        }
+        .padding(.top, 56)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 24)
+        .frame(maxWidth: 760, alignment: .leading)
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Editing lives inline: macOS sheets and dialogs are unreliable inside a
+    /// popover, so the detail view swaps into a form instead of presenting one.
+    private var editor: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("Edit \(current.name)").font(.title3.weight(.semibold))
+                Spacer(minLength: 8)
+                Button("Cancel") {
+                    editError = nil
+                    isEditing = false
+                }
+                Button("Save", action: save)
+                    .buttonStyle(GlassProminentButtonStyle())
+                    .disabled(!hasUnsavedEdit)
+                    .help(hasUnsavedEdit ? "Save changes to this character" : "Nothing to save yet")
+            }
+
+            editField("About", text: $aboutDraft, minHeight: 150,
+                      help: "What this character is: setting, personality and history. Sent as part of the character prompt.")
+            editField("Greeting", text: $greetingDraft, minHeight: 150,
+                      help: "The first message of a new conversation. Saved conversations keep their existing messages.")
+
+            if let editError {
+                Label(editError, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Text("Only About and the greeting are editable here. The name, avatar, tags and source details stay as imported, so the character's origin is never rewritten.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        // Load the draft when the form appears, so cancelling and reopening —
+        // or saving and editing again — always starts from the saved text.
+        .onAppear {
+            aboutDraft = current.description
+            greetingDraft = current.greeting
+        }
+        .padding(.top, 56)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 24)
+        .frame(maxWidth: 760, alignment: .leading)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func editField(_ title: String, text: Binding<String>, minHeight: CGFloat, help: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.headline)
+            TextEditor(text: text)
+                .font(.body)
+                .scrollContentBackground(.hidden)
+                .padding(6)
+                .frame(minHeight: minHeight)
+                .contentSurface(cornerRadius: 10)
+                .accessibilityLabel(title)
+            Text(help)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func save() {
+        do {
+            try library.updateDetails(for: current.id, about: aboutDraft, greeting: greetingDraft)
+            editError = nil
+            isEditing = false
+        } catch {
+            editError = error.localizedDescription
+        }
+    }
+
     private var header: some View {
         HStack(alignment: .top, spacing: 16) {
-            if let fileName = character.avatarFileName,
+            if let fileName = current.avatarFileName,
                let url = CharacterImageURL.makeURL(avatarFileName: fileName) {
-                CachedAvatarView(url: url) { avatarFallback(character.name, size: 64) }
+                CachedAvatarView(url: url) { avatarFallback(current.name, size: 64) }
                     .frame(width: 64, height: 64)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             } else {
-                avatarFallback(character.name, size: 64)
+                avatarFallback(current.name, size: 64)
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text(character.name)
+                Text(current.name)
                     .font(.title2.weight(.semibold))
-                if !character.tagline.isEmpty {
-                    Text(character.tagline)
+                if !current.tagline.isEmpty {
+                    Text(current.tagline)
                         .font(.title3)
                         .foregroundStyle(.secondary)
                 }
-                Text(character.origin + " · " + character.sourcePlatform)
+                Text(current.origin + " · " + current.sourcePlatform)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 LazyVGrid(
@@ -385,10 +515,10 @@ private struct LocalCharacterDetailView: View {
                     alignment: .leading,
                     spacing: 8
                 ) {
-                    if let count = character.interactionCount {
+                    if let count = current.interactionCount {
                         Label(count.formatted(), systemImage: "bubble.left")
                     }
-                    if let visibility = character.visibility {
+                    if let visibility = current.visibility {
                         Text(visibility.replacingOccurrences(of: "VISIBILITY_", with: "").lowercased().capitalized)
                     }
                 }
@@ -396,9 +526,35 @@ private struct LocalCharacterDetailView: View {
                 .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
-            Button("Start chat", systemImage: "bubble.left.and.bubble.right", action: onStartChat)
-                .buttonStyle(GlassProminentButtonStyle())
+            // Two pills do not fit beside the name at this width, and a wrapped
+            // "Start / chat" reads as a layout bug, so the provider copy stacks
+            // them and pins each to one line. The Character.AI copy keeps the
+            // single Edit pill it always had.
+            if let onStartChat {
+                VStack(alignment: .trailing, spacing: 8) {
+                    Button("Start chat", systemImage: "bubble.left.and.bubble.right") { onStartChat(current) }
+                        .buttonStyle(GlassProminentButtonStyle())
+                        .help("Open this character's conversation in the current provider chat")
+                    editButton
+                }
+                .controlSize(.small)
+                .lineLimit(1)
+                .fixedSize()
+            } else {
+                editButton
+            }
         }
+    }
+
+    /// From the Character.AI window there is no provider chat to start, so that
+    /// copy edits the character instead.
+    private var editButton: some View {
+        Button("Edit", systemImage: "square.and.pencil") {
+            editError = nil
+            isEditing = true
+        }
+        .buttonStyle(GlassProminentButtonStyle())
+        .help("Edit this character's About and greeting")
     }
 
     private func section<Content: View>(

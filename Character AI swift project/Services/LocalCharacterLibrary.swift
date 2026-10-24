@@ -5,9 +5,11 @@ struct LocalCharacter: Codable, Identifiable, Sendable {
     let id: String
     let name: String
     let tagline: String
-    let description: String
+    /// About. Editable in My Library, unlike the source metadata beside it.
+    var description: String
     let definition: String
-    let greeting: String
+    /// The character's first message. Editable; applies to new conversations.
+    var greeting: String
     let examples: [String]
     let tags: [String]
     let sourcePlatform: String
@@ -273,6 +275,27 @@ final class LocalCharacterLibrary: ObservableObject {
     func containsCharacter(_ id: String?) -> Bool {
         guard let id else { return false }
         return characters.contains { $0.id == id }
+    }
+
+    /// Replaces the two fields My Library exposes for editing. Everything else —
+    /// name, source metadata, avatar, tags — is preserved, and saved local
+    /// conversations are left alone so real history is never rewritten by an
+    /// edit. The edited greeting applies to conversations started from now on.
+    @discardableResult
+    func updateDetails(for id: String, about: String, greeting: String) throws -> LocalCharacter {
+        guard catalogueIsAvailable else { throw LocalCharacterLibraryError.catalogueUnavailable }
+        guard let index = characters.firstIndex(where: { $0.id == id }) else {
+            throw LocalCharacterLibraryError.invalidCharacter
+        }
+        var updated = characters[index]
+        updated.description = about.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.greeting = greeting.trimmingCharacters(in: .whitespacesAndNewlines)
+        let previous = characters
+        characters[index] = updated
+        do { try saveCatalogue() }
+        catch { characters = previous; throw error }
+        errorMessage = nil
+        return updated
     }
 
     /// Removes the catalogue entry, leaving its saved conversation alone unless

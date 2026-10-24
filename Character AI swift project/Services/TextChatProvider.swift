@@ -50,7 +50,7 @@ nonisolated struct TextChatProvider: ChatProvider {
             do { page = try JSONDecoder().decode(CloudModels.self, from: data) }
             catch { throw ProviderError.invalidResponse }
             if page.has_more != true {
-                return Set(names.map(\.id)).sorted().map { ModelDescriptor(id: $0) }
+                return Self.ordered(names)
             }
             guard let next = page.last_id, !next.isEmpty, seenCursors.insert(next).inserted else {
                 throw ProviderError.invalidResponse
@@ -62,14 +62,36 @@ nonisolated struct TextChatProvider: ChatProvider {
 
     @concurrent private static func decodeModels(_ data: Data, local: Bool) async throws -> [ModelDescriptor] {
         do {
-            let names: [String]
             if local {
-                names = try JSONDecoder().decode(LocalModels.self, from: data).models.map(\.name)
-            } else {
-                names = try JSONDecoder().decode(CloudModels.self, from: data).data.map(\.id)
+                let names = try JSONDecoder().decode(LocalModels.self, from: data).models.map(\.name)
+                return ordered(names.map { ModelDescriptor(id: $0) })
             }
-            return Set(names.filter { !$0.isEmpty && $0.count <= 200 }).sorted().map { ModelDescriptor(id: $0) }
+            let entries = try JSONDecoder().decode(CloudModels.self, from: data).data
+            let models = entries.compactMap { entry -> ModelDescriptor? in
+                guard !entry.id.isEmpty, entry.id.count <= 200 else { return nil }
+                return ModelDescriptor(id: entry.id, isAvailable: entry.isReady)
+            }
+            return ordered(models)
         } catch { throw ProviderError.invalidResponse }
+    }
+
+    /// Deduplicates and sorts router entries first, so a provider that offers an
+    /// `auto` model leads with the selection that fails over by itself. Models a
+    /// router reports as unusable stay listed but sort last and carry the flag.
+    private static func ordered(_ models: [ModelDescriptor]) -> [ModelDescriptor] {
+        var unique: [String: ModelDescriptor] = [:]
+        for model in models where unique[model.id] == nil { unique[model.id] = model }
+        func rank(_ id: String) -> Int {
+            if id == "auto" { return 0 }
+            if id.hasPrefix("auto:") { return 1 }
+            return 2
+        }
+        return unique.values.sorted { lhs, rhs in
+            guard lhs.id != rhs.id else { return false }
+            if lhs.isAvailable != rhs.isAvailable { return lhs.isAvailable }
+            let lhsRank = rank(lhs.id), rhsRank = rank(rhs.id)
+            return lhsRank == rhsRank ? lhs.id < rhs.id : lhsRank < rhsRank
+        }
     }
 
     func stream(model: String, messages: [ProviderChatMessage],
@@ -138,7 +160,19 @@ nonisolated struct TextChatProvider: ChatProvider {
         let has_more: Bool?
         let last_id: String?
     }
-    private struct CloudModel: Decodable { let id: String }
+    private struct CloudModel: Decodable {
+        let id: String
+        let available: Bool?
+        let execution_status: String?
+
+        /// Silently assuming "ready" keeps ordinary providers (which omit these
+        /// fields) unchanged; only an explicit report hides a model.
+        var isReady: Bool {
+            guard available != false else { return false }
+            guard let execution_status else { return true }
+            return execution_status.caseInsensitiveCompare("ready") == .orderedSame
+        }
+    }
     private struct WireMessage: Encodable { let role: String; let content: String }
     private struct ChatRequest: Encodable { let model: String; let messages: [WireMessage]; let stream: Bool }
     private struct ResponsesRequest: Encodable {

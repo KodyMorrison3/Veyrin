@@ -4,6 +4,9 @@ cd "$(dirname "$0")/.."
 mkdir -p .build
 output=$(mktemp -d /tmp/veyrin-verification.XXXXXX)
 trap 'rm -rf "$output"' EXIT
+# Keep fixture provider transcripts out of the real Application Support folder.
+export VEYRIN_SUPPORT_DIRECTORY="$output/support"
+mkdir -p "$VEYRIN_SUPPORT_DIRECTORY"
 package_build="${VEYRIN_DERIVED_DATA:-.build/VeyrinDerivedData}"
 if [[ ! -d "$package_build/Build/Products/Debug/ZipArchive.swiftmodule" ]]; then
     mkdir -p "$(dirname "$package_build")"

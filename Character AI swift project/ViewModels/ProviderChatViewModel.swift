@@ -17,34 +17,85 @@ final class ProviderChatViewModel: ObservableObject {
         return transientPersona
     }
     @Published private(set) var character: LocalCharacter?
+    /// Surfaced beside the transcript so a failed write is never silent.
+    @Published private(set) var storageErrorMessage: String?
     let provider: any ChatProvider
     let model: String
+    /// The open conversation's identity. Views use it to reset per-chat state
+    /// (draft, dialogs, scroll) when the sidebar switches conversations.
+    var identity: String { transcriptKey.identity }
+    /// Nil keeps the chat in memory only, which is what checks and previews
+    /// want; the app passes the shared store so a chat resumes on relaunch.
+    private let transcripts: ProviderTranscriptStore?
+    private var transcriptKey: ProviderTranscriptKey
     private var generation: Task<Void, Never>?
     private var generationID = UUID()
     private var pendingText = ""
     private var publication: Task<Void, Never>?
     private var retryMessage: String?
 
-    init(provider: any ChatProvider, model: String, persona: Persona? = nil, character: LocalCharacter? = nil) {
+    init(provider: any ChatProvider, model: String, persona: Persona? = nil,
+         character: LocalCharacter? = nil,
+         transcripts: ProviderTranscriptStore? = nil) {
         self.provider = provider
         self.model = model
         self.transientPersona = persona
         self.character = character
-        seedGreeting()
+        self.transcripts = transcripts
+        self.transcriptKey = ProviderTranscriptKey(
+            providerID: provider.descriptor.id,
+            kind: provider.descriptor.kind,
+            model: model,
+            characterID: character?.id
+        )
+        restoreTranscript()
     }
 
-    /// A different character always starts a separate conversation. The view
-    /// confirms discarding an existing transcript before calling this method.
+    /// Each character has its own saved conversation for this provider and
+    /// model, so switching characters resumes that character's chat.
     func setCharacter(_ character: LocalCharacter?) {
+        cancel()
         self.character = character
         roleplayPersona?.setCharacter(character?.id)
-        newConversation()
+        transcriptKey = ProviderTranscriptKey(
+            providerID: provider.descriptor.id,
+            kind: provider.descriptor.kind,
+            model: model,
+            characterID: character?.id
+        )
+        errorMessage = nil
+        wasInterrupted = false
+        retryMessage = nil
+        storageErrorMessage = nil
+        restoreTranscript()
+    }
+
+    private func restoreTranscript() {
+        messages = transcripts?.load(transcriptKey) ?? []
+        seedGreeting()
     }
 
     private func seedGreeting() {
         guard let greeting = character?.greeting,
-              !greeting.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+              !greeting.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              messages.isEmpty else { return }
         messages = [ProviderChatMessage(role: .assistant, content: greeting)]
+    }
+
+    /// Providers keep no history, so every mutation rewrites the saved
+    /// transcript. That is what makes rewind, edit and fork stick after a
+    /// relaunch instead of leaving stale turns behind.
+    private func persist() {
+        guard let transcripts else { return }
+        do {
+            try transcripts.save(messages, for: transcriptKey,
+                                 characterName: character?.name,
+                                 avatarFileName: character?.avatarFileName,
+                                 providerName: provider.descriptor.name)
+            storageErrorMessage = nil
+        } catch {
+            storageErrorMessage = "This conversation could not be saved on this Mac. Copy anything you want to keep before closing the window."
+        }
     }
 
     func setPersona(_ persona: Persona?) {
@@ -61,6 +112,7 @@ final class ProviderChatViewModel: ObservableObject {
         guard !text.isEmpty, !isGenerating else { return }
         retryMessage = text
         messages.append(ProviderChatMessage(role: .user, content: text))
+        persist()
         generate()
     }
 
@@ -68,6 +120,77 @@ final class ProviderChatViewModel: ObservableObject {
         guard !isGenerating, retryMessage != nil else { return }
         if messages.last?.role == .assistant { messages.removeLast() }
         generate()
+    }
+
+    /// Providers keep no server-side turn model, so everything after an edited
+    /// message answered text that was never sent and is dropped with it.
+    @discardableResult
+    func editMessage(_ messageID: UUID, newContent: String) -> Bool {
+        let trimmed = newContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isGenerating,
+              !trimmed.isEmpty,
+              let index = messages.firstIndex(where: { $0.id == messageID }) else { return false }
+        messages[index].content = trimmed
+        removeMessages(after: index)
+        retryMessage = lastPrompt()
+        errorMessage = nil
+        wasInterrupted = false
+        persist()
+        return true
+    }
+
+    /// A reply can be regenerated only when the prompt that produced it is
+    /// still in the transcript; a seeded greeting has nothing to re-send.
+    func canRegenerate(_ messageID: UUID) -> Bool {
+        guard !isGenerating,
+              let index = messages.firstIndex(where: { $0.id == messageID }),
+              messages[index].role == .assistant else { return false }
+        return messages[..<index].contains { $0.role == .user }
+    }
+
+    /// Replaces a reply with a fresh sample and drops the turns that followed
+    /// it, because they answered the reply being replaced.
+    @discardableResult
+    func regenerateMessage(_ messageID: UUID) -> Bool {
+        guard canRegenerate(messageID),
+              let index = messages.firstIndex(where: { $0.id == messageID }) else { return false }
+        messages.removeSubrange(index...)
+        retryMessage = lastPrompt()
+        persist()
+        generate()
+        return true
+    }
+
+    /// Keeps `messageID` and every earlier message, discarding the rest.
+    @discardableResult
+    func rewind(through messageID: UUID) -> Bool {
+        guard !isGenerating,
+              let index = messages.firstIndex(where: { $0.id == messageID }) else { return false }
+        removeMessages(after: index)
+        retryMessage = lastPrompt()
+        errorMessage = nil
+        wasInterrupted = false
+        persist()
+        return true
+    }
+
+    /// A provider chat lives only in this window, so there is no earlier
+    /// conversation to preserve: the prefix becomes the whole conversation and
+    /// the retry anchor is cleared, making the next send a new message.
+    @discardableResult
+    func fork(through messageID: UUID) -> Bool {
+        guard rewind(through: messageID) else { return false }
+        retryMessage = nil
+        return true
+    }
+
+    private func removeMessages(after index: Int) {
+        guard index + 1 < messages.count else { return }
+        messages.removeSubrange((index + 1)...)
+    }
+
+    private func lastPrompt() -> String? {
+        messages.last { $0.role == .user }?.content
     }
 
     private func generate() {
@@ -131,6 +254,7 @@ final class ProviderChatViewModel: ObservableObject {
         wasInterrupted = interrupted
         if !interrupted { retryMessage = nil }
         generation = nil
+        persist()
     }
 
     func cancel() {
@@ -141,13 +265,17 @@ final class ProviderChatViewModel: ObservableObject {
         generationID = UUID()
     }
 
+    /// Starts an empty conversation in the same slot, so the saved transcript
+    /// for this provider, model and character is replaced rather than appended.
     func newConversation() {
         cancel()
+        transcripts?.remove(transcriptKey)
         messages = []
         seedGreeting()
         errorMessage = nil
         wasInterrupted = false
         retryMessage = nil
+        storageErrorMessage = nil
     }
 }
 
@@ -175,10 +303,36 @@ final class ProviderCoordinator: ObservableObject {
         self.screen = screen
     }
 
-    func start(provider: any ChatProvider, selection: ProviderSelection, store: ProviderStore) {
+    func start(provider: any ChatProvider, selection: ProviderSelection, store: ProviderStore,
+               character: LocalCharacter? = nil) {
         show(.textChat)
-        chat = ProviderChatViewModel(provider: provider, model: selection.model)
+        chat = ProviderChatViewModel(provider: provider, model: selection.model,
+                                     character: character, transcripts: .shared)
         store.remember(selection)
+    }
+
+    /// Reopens a saved chat from the sidebar. Its provider must still be
+    /// configured; a removed configuration is reported rather than guessed at.
+    func open(_ summary: ProviderTranscriptSummary, store: ProviderStore) {
+        if summary.key.kind != .ollama, UUID(uuidString: summary.key.providerID) != nil,
+           !store.configurations.contains(where: { $0.id.uuidString == summary.key.providerID }) {
+            errorMessage = "That chat's provider has been removed. Add it again to reopen the conversation."
+            return
+        }
+        let character = summary.key.characterID.flatMap { id in
+            LocalCharacterLibrary.shared.characters.first { $0.id == id }
+        }
+        let selection = ProviderSelection(
+            kind: summary.key.kind,
+            configurationID: UUID(uuidString: summary.key.providerID),
+            model: summary.key.model
+        )
+        do {
+            let provider = try store.provider(for: selection)
+            start(provider: provider, selection: selection, store: store, character: character)
+        } catch {
+            errorMessage = (error as? ProviderError ?? .unavailable).localizedDescription
+        }
     }
 
     func enteredCharacterAI(store: ProviderStore) {

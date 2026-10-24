@@ -63,11 +63,11 @@ Veyrin is an **unofficial** macOS client for [Character.AI](https://character.ai
 ### Providers
 - Native provider chooser at launch: **Character.AI**, **Local Models**, **Cloud Providers**
 - Switch providers without restarting; Character.AI keeps its existing sign-in, history and character features
-- Ollama connection testing, installed-model selection and streamed text responses through a configurable loopback endpoint
+- Ollama connection testing, installed-model selection and streamed text responses through a configurable loopback endpoint. Opening **Local Models** asks the endpoint for its models and opens Ollama first when **Start Ollama automatically** is enabled in Settings (on by default); with the toggle off nothing is launched. Veyrin never downloads models
 - Claude (Anthropic Messages), OpenAI Responses, OpenAI Chat Completions and explicitly configured OpenAI-compatible Chat Completions endpoints, with add/edit/test/remove controls and Keychain-backed API keys
 - **Remember my last provider** is off by default. Enabling it restores the last selected provider/model after connection checks where supported; disabling it does not sign out or remove keys
-- New local/cloud text chats are kept only in memory. Switching providers starts a separate conversation; context is never transferred automatically
-- **Free Providers** presets prefill Gemini, Groq, OpenRouter and Cloudflare Workers AI endpoints; keys and model IDs still come from your own account, and each provider's quota and privacy terms still apply
+- New local/cloud text chats are saved per provider, model and character under `Application Support/Veyrin/provider-chats`, and resume when reopened; **New Chat** replaces the saved conversation after confirmation. Switching providers starts a separate conversation; context is never transferred automatically. Chats are listed in a conversation sidebar beside the chat, and every mutation (edit, rewind, regenerate, fork) rewrites the saved turns
+- **Free Providers** presets prefill FreeLLMAPI (a router on this Mac), Gemini, Groq, OpenRouter and Cloudflare Workers AI endpoints; keys and model IDs still come from your own account, and each provider's quota and privacy terms still apply
 
 See [Provider setup and architecture](PROVIDERS.md) for setup, privacy boundaries, verification results and limitations. Connection tests use model listing; they do **not** prove that a model permits chat generation. No live AI connection was verified during implementation.
 
@@ -88,9 +88,9 @@ See [Provider setup and architecture](PROVIDERS.md) for setup, privacy boundarie
 
 ### Local character library
 - Save Discover/search characters with their bookmark button, fetching the full profile greeting; press it again to remove the saved copy, or import characters and greetings from a Character.AI account export
-- Choose a saved character from the **Character** menu in local/cloud provider chats. Its greeting appears immediately as the first assistant message and becomes part of the model's history when you send a message; **New Chat** restores one greeting. Changing characters after chatting requires confirmation and starts a separate transcript
-- Search and filter saved characters, remove a character and its local chat history after confirmation, and export the library as a Veyrin archive
-- Chat with saved characters using Ollama; its configurable endpoint defaults to loopback HTTP at `127.0.0.1:11434`. The existing local-character flow can optionally launch Ollama when needed; the new provider chooser does not launch it or download models
+- Pick a saved character from **My Library**, the toolbar button beside **Switch Provider** in local/cloud provider chats. It is the same screen the Character.AI window shows, with **Start chat** and **Edit** on each character and a **No character** entry in its grid, and it replaces the chat column while open. The greeting appears immediately as the first assistant message and becomes part of the model's history when you send a message; **New Chat** restores one greeting. Changing characters after chatting requires confirmation and starts a separate transcript
+- Search and filter saved characters, edit a character's About and greeting (saved in place, with the imported name, avatar, tags and source details preserved), remove a character and its local chat history after confirmation, and export the library as a Veyrin archive
+- Chat with saved characters through the provider chat window using Ollama; its configurable loopback endpoint defaults to HTTP at `127.0.0.1:11434`. The chooser opens Ollama when the Settings toggle allows it, and only loopback addresses are accepted, so a key never leaves this Mac
 - For local-only inference, use downloaded models and disable Ollama cloud features. A loopback address alone does not prove local inference; see [Ollama privacy/setup](PROVIDERS.md#ollama)
 
 ### Native macOS
@@ -128,7 +128,7 @@ flowchart TD
 
 Veyrin deliberately keeps two chat paths. Character.AI uses its own REST and WebSocket services because no public third-party API exists; that protocol is based on observing the existing client and is not forced through a generic completion API. Local and cloud chat use the separate `ChatProvider` contract implemented by `TextChatProvider`, which covers model discovery and streamed text over HTTP. Keeping those paths separate preserves Character.AI-specific features such as candidates, pins and edits while keeping provider adapters small, instead of forcing both backends through a lowest-common-denominator conversation API. [PROVIDERS.md](PROVIDERS.md#architecture-and-concurrency) describes that boundary and its extension points.
 
-Personas are shared text rather than a third transport. Account personas come from Character.AI and are cached by `PersonaStore`; imported personas are stored offline by `LocalPersonaStore` and exchanged as JSON or Markdown through `PersonaTransfer`. When a persona is active in a provider chat, `ProviderChatViewModel` prepends its name, title, description and definition as a system message. The transcript remains in memory, and only the selected endpoint receives the request.
+Personas are shared text rather than a third transport. Account personas come from Character.AI and are cached by `PersonaStore`; imported personas are stored offline by `LocalPersonaStore` and exchanged as JSON or Markdown through `PersonaTransfer`. When a persona is active in a provider chat, `ProviderChatViewModel` prepends its name, title, description and definition as a system message. The transcript is saved on this Mac beside the character's own local conversation, and only the selected endpoint receives the request.
 
 ## Security and privacy
 
@@ -142,7 +142,7 @@ Personas are shared text rather than a third transport. Account personas come fr
 
 The local character catalogue and local-character conversations are saved as **unencrypted JSON** under `~/Library/Application Support/Veyrin`. They remain on disk when you sign out. Character.AI conversations still do not have a durable local database or offline-first mode; Ollama local-character chats are stored separately from Character.AI conversation history. Persona definitions and selections are saved in account-labelled preferences (not encrypted); personas imported for local/cloud chats are saved separately as unencrypted JSON in `local-personas.json`; images may be cached on disk, and custom wallpaper is saved locally. Signing out clears session-owned memory caches, but does not erase those local files, preferences or image files.
 
-The release preparation audit found account/profile and feed captures in deleted historical test files. Deleting a file or ignoring it does not remove its history. The current screenshots have broader account/sidebar redactions, but older copies remain in Git history. Public distribution is on hold until these historical privacy findings are resolved. This is not an independent security certification.
+The screenshots in this README are redacted. Older captures — including copies that remain in Git history — may still contain account or feed details, so treat any capture you share as public. This is not an independent security certification.
 
 ## Limitations
 
@@ -150,7 +150,7 @@ The release preparation audit found account/profile and feed captures in deleted
 - **No offline use for Character.AI conversations.** They depend on access to Character.AI; offline-first loading is planned, not implemented. The local character library can be used with Ollama running on this Mac.
 - **Character.AI compatibility can break at any time** because that integration depends on undocumented backend behaviour.
 - **Cloud support is text-only.** Choose Anthropic Messages, OpenAI Responses or Chat Completions to match the model. Custom endpoints must document OpenAI-compatible Chat Completions and Bearer authentication. Tools/MCP, images, Codex/ChatGPT subscription sign-in and arbitrary vendor protocols are not implemented. A successful model-list request is not a successful chat test.
-- **New provider text chats are not saved.** They are separate from the existing disk-backed local-character conversations. No local-to-cloud context migration is performed. Persona references are remembered per saved character; selection in a chat without a character is temporary. Deleted/unavailable personas are shown as unavailable and their details are not sent.
+- **Provider text chats are saved only on this Mac.** They are separate from Character.AI conversation history and no local-to-cloud context migration is performed. Persona references are remembered per saved character; selection in a chat without a character is temporary. Deleted/unavailable personas are shown as unavailable and their details are not sent.
 - **Persona transfer:** Character.AI personas appear in **Settings → Personas** after a Character.AI chat has loaded them; export does not add a new persona to the Character.AI account. Persona exports embed a PNG avatar thumbnail, including Markdown/text exports. An unavailable account picture stops export without replacing the destination file. Older files still import, but an image omitted by an old export cannot be recovered from that file. Only JSON/Markdown/character-card files can be imported; standalone image/card-PNG import and character-card export are not implemented.
 - **Ad-hoc signed, not notarised.** The experimental package has a verifiable local signature, but no Developer ID identity or Apple notarisation. It is not a trusted, notarised distribution.
 - **No automatic updates.** Settings can check GitHub release metadata; it does not install updates.
@@ -242,30 +242,28 @@ Use [GitHub Issues](https://github.com/KodyMorrison3/Veyrin/issues) for reproduc
 
 ## Status
 
-Veyrin is at **v0.1.0**, an early experimental release. The versioned Release build and arm64 DMG have been built and checked locally. This is a first milestone, not a stable release: the app still relies on undocumented Character.AI endpoints and has known feature limitations.
+Veyrin is an early experimental build, not a stable release: it relies on undocumented Character.AI endpoints and has the limitations listed above. What changed in each release is described on the [GitHub Releases](https://github.com/KodyMorrison3/Veyrin/releases) page rather than in this repository.
 
 - **App version:** 0.1.0 (build 1)
 - **Platform:** Apple Silicon, macOS 27 or later
-- **Package:** local build output only; see [GitHub Releases](https://github.com/KodyMorrison3/Veyrin/releases) when publishing is approved
-- **Package signature:** ad-hoc; not notarised
-- **Validation:** offline regression checks and Debug/Release builds pass; persona portability checks pass; the packaged DMG was mounted and verified locally
-- **Distribution:** local testing only; public release blocked on history/privacy review and final release approval
-- **CI:** the existing workflow succeeded on remote commit `09931fb`; the expanded release checks need a new remote run after an approved push
+- **Validation:** offline regression suites and Debug/Release builds pass, including native layout checks for the provider chat, conversation sidebar, library and persona screens
+- **Distribution:** build from source, or use a release you trust — builds are ad-hoc signed unless you sign them with your own certificate
 
 You may need to approve the app under **System Settings → Privacy & Security** the first time you open it. Avoid using an account you cannot afford to lose access to; third-party clients carry account risk under Character.AI's rules.
 
 ### Progress and roadmap
 
-_Last reviewed: 23 October 2026. This is a living snapshot, not a release commitment._
+_Last reviewed: 24 October 2026. This is a living snapshot, not a release commitment._
 
 **Done**
 
 - [x] Native SwiftUI app shell, authentication and Keychain-backed session handling
 - [x] Character.AI conversations, history, characters, candidates, pins and streamed generation
 - [x] Provider chooser with Ollama and OpenAI-compatible text chat, including streaming, cancellation and model discovery
-- [x] Local character library with Discover saving, account-export import, search/filter and Veyrin archive export
+- [x] Local character library with Discover saving, account-export import, search/filter, greeting-bearing Start chat from the provider chat, About/greeting editing and Veyrin archive export
 - [x] Portable personas: export/import for local and cloud chats, character-card import, provider system prompts and offline storage
-- [x] Synthetic-fixture regression suites covering networking, cancellation, rendering, provider and persona paths
+- [x] Durable provider conversations on this Mac with a conversation sidebar, edit/rewind/regenerate/fork and per-character slots
+- [x] Synthetic-fixture regression suites covering networking, cancellation, rendering, provider, persona and library paths
 - [x] Experimental v0.1.0 Release build and locally verified DMG
 
 **Next**
@@ -273,7 +271,7 @@ _Last reviewed: 23 October 2026. This is a living snapshot, not a release commit
 - [ ] Resolve historical screenshot/privacy findings and complete final release approval
 - [ ] Developer ID signing and notarisation
 - [ ] Stable release readiness and broader user testing
-- [ ] Durable local provider conversations and remembered persona-per-provider selection
+- [ ] Remembered persona-per-provider selection
 - [ ] Character-card v2 export so personas also move into local AI front ends that expect that format
 - [ ] Offline-first loading and durable local storage for Character.AI conversations
 
@@ -286,7 +284,7 @@ _Last reviewed: 23 October 2026. This is a living snapshot, not a release commit
 
 The offline regression suite uses synthetic fixtures. It does not establish live authenticated behaviour, battery use, GPU performance, or a measured real-world performance gain. Those still need testing and Instruments profiling before making such claims.
 
-Previous local DMGs remain in the ignored `build/` directory. Release notes and verification results are prepared separately; no tag, upload or public release is created by the packaging script.
+Packaging writes into the ignored `build/` directory and creates no tag, upload or release. Release notes belong on the release page; verification results are reproduced by the offline check suites above.
 
 ## Licence
 

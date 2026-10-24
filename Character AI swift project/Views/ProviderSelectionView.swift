@@ -116,7 +116,11 @@ final class ProviderConnection: ObservableObject {
         error = nil
     }
 
-    func test(_ makeProvider: () throws -> any ChatProvider) {
+    /// `prepare` runs before the provider is asked for models, so a provider that
+    /// lives behind a desktop app (Ollama) can be started first. It must not
+    /// throw: the provider request that follows reports the real failure.
+    func test(prepare: (@MainActor () async -> Void)? = nil,
+              _ makeProvider: () throws -> any ChatProvider) {
         reset()
         do {
             let provider = try makeProvider()
@@ -124,6 +128,7 @@ final class ProviderConnection: ObservableObject {
             let revision = revision
             task = Task { [weak self] in
                 do {
+                    await prepare?()
                     let models = try await provider.models()
                     try Task.checkCancellation()
                     guard let self, self.revision == revision else { return }
@@ -150,13 +155,26 @@ final class ProviderConnection: ObservableObject {
 
 struct LocalProviderSetupView: View {
     @ObservedObject var store: ProviderStore
+    @ObservedObject private var preferences = AppPreferences.shared
     var onStart: ((any ChatProvider, ProviderSelection) -> Void)?
     var embedded = false
     @StateObject private var connection = ProviderConnection()
-    @State private var endpoint = ""
-    @State private var model = ""
+    @State private var endpoint: String
+    @State private var model: String
     @State private var error: String?
     @State private var localOnlyConfirmed = false
+
+    /// Seeded from the store so the field does not change on first appear: that
+    /// change resets the connection, which would cancel the model refresh the
+    /// screen starts when it opens.
+    init(store: ProviderStore, embedded: Bool = false,
+         onStart: ((any ChatProvider, ProviderSelection) -> Void)? = nil) {
+        self.store = store
+        self.embedded = embedded
+        self.onStart = onStart
+        _endpoint = State(initialValue: store.localEndpoint)
+        _model = State(initialValue: store.localModel)
+    }
 
     var body: some View {
         ProviderSetupChrome(
@@ -211,7 +229,7 @@ struct LocalProviderSetupView: View {
                     Link("Ollama installation and model guide", destination: guide)
                 }
                 Divider()
-                Text("Only loopback endpoints are allowed. Testing connects to the address above; it does not automatically launch or install anything.")
+                Text("Only loopback endpoints are allowed. Testing connects to the address above, and opens Ollama first when “Start Ollama automatically” is on in Settings. Veyrin never installs or downloads anything.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text("Ollama can also route requests to cloud models, even through a local address. For local-only chat, disable cloud features in Ollama (OLLAMA_NO_CLOUD=1, then restart Ollama) and use a downloaded model. Veyrin cannot verify the server’s cloud setting.")
@@ -233,7 +251,16 @@ struct LocalProviderSetupView: View {
             }
         }
         .navigationTitle("Local Models")
-        .onAppear { endpoint = store.localEndpoint; model = store.localModel }
+        .onAppear {
+            endpoint = store.localEndpoint
+            model = store.localModel
+            // Loading models is also what starts Ollama, so the saved default
+            // connects on entry instead of sending the user to a cloud provider.
+            // The Settings pane (no onStart) never opens anything on its own.
+            guard onStart != nil, preferences.startOllamaAutomatically,
+                  connection.models.isEmpty else { return }
+            test()
+        }
         .onChange(of: connection.models) {
             if !connection.models.contains(where: { $0.id == model }) {
                 model = endpoint == store.localEndpoint && connection.models.contains(where: { $0.id == store.localModel })
@@ -243,9 +270,24 @@ struct LocalProviderSetupView: View {
         .onDisappear { connection.cancel() }
     }
 
-    private func test() {
+    private func test(endpoint override: String? = nil) {
         error = nil
-        connection.test { try TextChatProvider(localEndpoint: endpoint) }
+        let target = override ?? endpoint
+        let makeProvider: () throws -> any ChatProvider = { try TextChatProvider(localEndpoint: target) }
+        if preferences.startOllamaAutomatically {
+            connection.test(prepare: { await Self.warmUpOllama(endpoint: target) }, makeProvider)
+        } else {
+            connection.test(makeProvider)
+        }
+    }
+
+    /// Best effort, and ignored if it fails: the provider test that follows
+    /// reports whether the endpoint actually answers.
+    @MainActor
+    private static func warmUpOllama(endpoint: String) async {
+        guard let url = URL(string: endpoint),
+              let service = try? LocalOllamaService(baseURL: url, startsApplicationWhenUnavailable: true) else { return }
+        _ = try? await service.models()
     }
 
     private func start() {
@@ -357,14 +399,33 @@ struct CloudProviderSetupView: View {
                         Text(status).font(.callout).foregroundStyle(.secondary)
                     }
                     if !connection.models.isEmpty {
+                        let ready = connection.models.filter(\.isAvailable)
+                        let hidden = connection.models.count - ready.count
                         VStack(alignment: .leading, spacing: 6) {
                             ProviderFieldLabel("Available models")
                             Picker("Available models", selection: $model) {
                                 Text("Choose a model").tag("")
-                                ForEach(connection.models) { Text($0.name).tag($0.id) }
+                                ForEach(ready.isEmpty ? connection.models : ready) { Text($0.name).tag($0.id) }
                             }
                             .labelsHidden()
                             .frame(maxWidth: 320, alignment: .leading)
+                            if hidden > 0 {
+                                Text("\(hidden) model\(hidden == 1 ? "" : "s") hidden: this provider reports no key or an exhausted quota for them right now, so a message to them would fail.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            if let auto = ready.first, auto.id == "auto" {
+                                Text("Auto is first because the router picks a working model and fails over when one is rate-limited.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            if !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                               !connection.models.contains(where: { $0.id == model && $0.isAvailable }) {
+                                Label("The selected model ID is not one this provider currently reports as available. Choose another before starting, or expect the first message to be rejected.",
+                                      systemImage: "exclamationmark.triangle")
+                                    .font(.caption).foregroundStyle(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
                     ProviderFieldLabel("Model ID")
@@ -412,6 +473,13 @@ struct CloudProviderSetupView: View {
         }
         .onDisappear { connection.cancel() }
         .onChange(of: store.configurations) { connection.reset() }
+        .onChange(of: connection.models) {
+            // Preselect the lead model (a router's `auto` when present) so the
+            // first run does not depend on the user guessing a compatible ID.
+            guard model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let first = connection.models.first(where: \.isAvailable) else { return }
+            model = first.id
+        }
     }
 
     private func providerRow(_ configuration: ProviderConfiguration) -> some View {
@@ -493,6 +561,10 @@ private struct CloudProviderEditor: View {
                     .disabled(configuration.kind != .openAICompatible)
                 if let preset = ProviderPreset.freeCloud.first(where: { $0.endpoint == configuration.endpoint }) {
                     Text(preset.note)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if configuration.kind == .openAICompatible {
+                    Text("Public endpoints must be HTTPS. A loopback router is also accepted, such as http://127.0.0.1:3001/v1 for FreeLLMAPI, LM Studio or llama.cpp; its key never leaves this Mac.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

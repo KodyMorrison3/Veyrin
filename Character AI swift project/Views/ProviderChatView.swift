@@ -4,12 +4,21 @@ struct ProviderChatView: View {
     @ObservedObject var viewModel: ProviderChatViewModel
     @ObservedObject var accountPersonas: PersonaStore
     @StateObject private var roleplayPersona: RoleplayPersonaContext
-    @StateObject private var library = LocalCharacterLibrary.shared
     @State private var pendingCharacter: LocalCharacter?
     @State private var confirmingCharacterChange = false
     let onSwitch: () -> Void
     @State private var draft = ""
+    @State private var editingMessageID: UUID?
+    @State private var editedText = ""
+    @State private var pendingRewind: ProviderChatMessage?
+    @State private var pendingFork: ProviderChatMessage?
+    @State private var hoveredMessageID: UUID?
+    @State private var actionsMessageID: UUID?
+    @State private var confirmingNewChat = false
+    @State private var isShowingLibrary = false
     @FocusState private var focused: Bool
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(viewModel: ProviderChatViewModel, accountPersonas: PersonaStore, onSwitch: @escaping () -> Void) {
         self.viewModel = viewModel
@@ -28,6 +37,107 @@ struct ProviderChatView: View {
     }
 
     var body: some View {
+        Group {
+            if isShowingLibrary {
+                // The library the Character.AI window shows, plus Start chat and
+                // Edit, so a character is chosen here rather than from a dropdown.
+                LocalCharacterLibraryView(onStartChat: { chooseCharacter($0) })
+            } else {
+                conversation
+            }
+        }
+        .background { ShellEnvironmentalBackground().ignoresSafeArea() }
+        // The floating pill carries the identity; a title here would duplicate it.
+        .navigationTitle(Text(verbatim: ""))
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button("Switch Provider", systemImage: "arrow.triangle.swap") {
+                    viewModel.cancel()
+                    onSwitch()
+                }
+            }
+            // Saved characters live in the same My Library screen the Character.AI
+            // window uses, so a character is picked from a grid with Start chat and
+            // Edit instead of from a dropdown of names.
+            ToolbarItem(placement: .navigation) {
+                Button("My Library", systemImage: "books.vertical") {
+                    isShowingLibrary.toggle()
+                }
+                .help("Saved characters: start a chat, or edit About and the greeting")
+                .accessibilityAddTraits(isShowingLibrary ? .isSelected : [])
+            }
+            ToolbarItem {
+                Button("New Chat", systemImage: "square.and.pencil") {
+                    if viewModel.messages.contains(where: { $0.role == .user }) {
+                        confirmingNewChat = true
+                    } else {
+                        viewModel.newConversation()
+                    }
+                }
+            }
+            ToolbarItem { SettingsLink { Label("Settings", systemImage: "gearshape") } }
+        }
+        .confirmationDialog("Start a new conversation?",
+                            isPresented: $confirmingNewChat,
+                            titleVisibility: .visible) {
+            Button("Start New Conversation", role: .destructive) { viewModel.newConversation() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This replaces the saved conversation for this provider, model and character. It cannot be undone.")
+        }
+        .confirmationDialog("Rewind conversation?",
+                            isPresented: Binding(
+                                get: { pendingRewind != nil },
+                                set: { if !$0 { pendingRewind = nil } }
+                            ),
+                            titleVisibility: .visible) {
+            Button("Rewind from this message", role: .destructive) {
+                guard let message = pendingRewind else { return }
+                pendingRewind = nil
+                viewModel.rewind(through: message.id)
+            }
+            Button("Cancel", role: .cancel) { pendingRewind = nil }
+        } message: {
+            Text("This message will remain. Every later message is removed from this chat and from its saved transcript, so the removed text cannot be recovered.")
+        }
+        .confirmationDialog("Start a new conversation from here?",
+                            isPresented: Binding(
+                                get: { pendingFork != nil },
+                                set: { if !$0 { pendingFork = nil } }
+                            ),
+                            titleVisibility: .visible) {
+            Button("Start New Conversation") {
+                guard let message = pendingFork else { return }
+                pendingFork = nil
+                viewModel.fork(through: message.id)
+            }
+            Button("Cancel", role: .cancel) { pendingFork = nil }
+        } message: {
+            Text("The conversation continues from this message and every later message is removed from the saved transcript. This cannot be undone.")
+        }
+        .confirmationDialog("Start a new conversation with this character?", isPresented: $confirmingCharacterChange,
+                            titleVisibility: .visible) {
+            Button("Start New Conversation") {
+                viewModel.setCharacter(pendingCharacter)
+                pendingCharacter = nil
+            }
+            Button("Cancel", role: .cancel) { pendingCharacter = nil }
+        } message: {
+            Text("Each character keeps its own saved conversation for this provider and model. This one stays saved; the selected character's chat opens in its place, and nothing is sent until you send a message.")
+        }
+        .onAppear {
+            viewModel.usePersonaContext(roleplayPersona)
+            focused = !isShowingLibrary
+        }
+        .onChange(of: viewModel.character?.id) { roleplayPersona.setCharacter(viewModel.character?.id) }
+        // The composer is off screen behind the library, so it must not hold the
+        // keyboard while a character is being picked.
+        .onChange(of: isShowingLibrary) { focused = !isShowingLibrary }
+        .onDisappear { viewModel.cancel() }
+    }
+
+    /// The chat column, shown unless My Library is open in the same column.
+    private var conversation: some View {
         ZStack(alignment: .top) {
             VStack(spacing: 0) {
                 ScrollViewReader { proxy in
@@ -39,14 +149,14 @@ struct ProviderChatView: View {
 
                             if viewModel.messages.isEmpty {
                                 ContentUnavailableView("Start a Conversation", systemImage: "bubble.left.and.bubble.right",
-                                                       description: Text("Messages go only to \(viewModel.provider.descriptor.name). This chat is kept in memory until you start a new chat, switch providers or close the window."))
+                                                       description: Text("Messages go only to \(viewModel.provider.descriptor.name). This chat is saved on this Mac and resumes when you open the same provider, model and character again."))
                                     .frame(maxWidth: .infinity, minHeight: 280)
                             }
                             ForEach(viewModel.messages) { message in
-                                row(message.content, user: message.role == .user, streaming: false).id(message.id)
+                                row(message.content, message: message, streaming: false).id(message.id)
                             }
                             if viewModel.isGenerating {
-                                row(viewModel.streamingText.isEmpty ? "…" : viewModel.streamingText, user: false, streaming: true)
+                                row(viewModel.streamingText.isEmpty ? "…" : viewModel.streamingText, message: nil, streaming: true)
                             }
                             Color.clear.frame(height: 1).id("bottom")
                         }
@@ -56,10 +166,25 @@ struct ProviderChatView: View {
                         .frame(maxWidth: .infinity)
                     }
                     .scrollEdgeEffectHidden()
-                    .onChange(of: viewModel.messages.count) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    .onChange(of: viewModel.messages.count) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                        // A rewind can remove the row currently being edited.
+                        if let editingMessageID,
+                           !viewModel.messages.contains(where: { $0.id == editingMessageID }) {
+                            self.editingMessageID = nil
+                        }
+                    }
                     .onChange(of: viewModel.streamingText) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
 
+                if let storageError = viewModel.storageErrorMessage {
+                    Label(storageError, systemImage: "externaldrive.badge.exclamationmark")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: min(GlassMetrics.contentWidth, 680), alignment: .leading)
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 4)
+                }
                 if let error = viewModel.errorMessage {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.caption)
@@ -87,63 +212,6 @@ struct ProviderChatView: View {
             floatingHeader
                 .padding(.top, 10)
         }
-        .background { ShellEnvironmentalBackground().ignoresSafeArea() }
-        // The floating pill carries the identity; a title here would duplicate it.
-        .navigationTitle(Text(verbatim: ""))
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button("Switch Provider", systemImage: "arrow.triangle.swap") {
-                    viewModel.cancel()
-                    onSwitch()
-                }
-            }
-            ToolbarItem {
-                Button("New Chat", systemImage: "square.and.pencil") { viewModel.newConversation() }
-            }
-            ToolbarItem {
-                Menu {
-                    Button {
-                        chooseCharacter(nil)
-                    } label: {
-                        if viewModel.character == nil { Label("No Character", systemImage: "checkmark") }
-                        else { Text("No Character") }
-                    }
-                    Section("Saved Characters") {
-                        if library.characters.isEmpty {
-                            Text("Save characters from Character.AI → My Library first.")
-                        }
-                        ForEach(library.characters) { character in
-                            Button { chooseCharacter(character) } label: {
-                                if viewModel.character?.id == character.id {
-                                    Label(character.name, systemImage: "checkmark")
-                                } else { Text(character.name) }
-                            }
-                        }
-                    }
-                } label: {
-                    Label(viewModel.character?.name ?? "Character", systemImage: "theatermasks")
-                }
-                .disabled(viewModel.isGenerating)
-                .help("Choose a saved character and start with its greeting")
-            }
-            ToolbarItem { SettingsLink { Label("Settings", systemImage: "gearshape") } }
-        }
-        .confirmationDialog("Start a new conversation with this character?", isPresented: $confirmingCharacterChange,
-                            titleVisibility: .visible) {
-            Button("Start New Conversation") {
-                viewModel.setCharacter(pendingCharacter)
-                pendingCharacter = nil
-            }
-            Button("Cancel", role: .cancel) { pendingCharacter = nil }
-        } message: {
-            Text("The current in-memory chat will be discarded. Saved local-character history is not changed, and nothing is sent until you send a message.")
-        }
-        .onAppear {
-            viewModel.usePersonaContext(roleplayPersona)
-            focused = true
-        }
-        .onChange(of: viewModel.character?.id) { roleplayPersona.setCharacter(viewModel.character?.id) }
-        .onDisappear { viewModel.cancel() }
     }
 
     private var floatingHeader: some View {
@@ -242,7 +310,9 @@ struct ProviderChatView: View {
         .padding(.bottom, 16)
     }
 
+    /// Also the library's Start chat action and its "without a character" entry.
     private func chooseCharacter(_ character: LocalCharacter?) {
+        isShowingLibrary = false
         guard character?.id != viewModel.character?.id else { return }
         if viewModel.messages.contains(where: { $0.role == .user }) {
             pendingCharacter = character
@@ -260,41 +330,178 @@ struct ProviderChatView: View {
 
     /// Mirrors MessageView: the assistant gets an avatar and name, the user just
     /// gets a right-aligned bubble, and both share the same glass shape.
-    private func row(_ content: String, user: Bool, streaming: Bool) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            if user { Spacer(minLength: 40) }
+    private func row(_ content: String, message: ProviderChatMessage?, streaming: Bool) -> some View {
+        let isUser = message?.role == .user
+        return HStack(alignment: .top, spacing: 10) {
+            if isUser { Spacer(minLength: 40) }
 
-            if !user { avatar }
+            if !isUser { avatar }
 
-            VStack(alignment: .leading, spacing: 4) {
-                if !user {
+            VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
+                if !isUser {
                     Text(displayName)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color.caiText)
                         .padding(.leading, 4)
                 }
-                CharacterMessageFormattingView(content: content, expandsToFill: false, isStreaming: streaming)
-                    .font(.system(size: 14))
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .glassSurface(user ? .userMessage : .characterMessage, cornerRadius: GlassMetrics.messageRadius)
-                    .foregroundStyle(Color.caiText)
-                    .clipShape(RoundedRectangle(cornerRadius: GlassMetrics.messageRadius, style: .continuous))
-                    .contextMenu {
-                        Button("Copy Message", systemImage: "doc.on.doc") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(content, forType: .string)
+
+                if let message, editingMessageID == message.id {
+                    editor(for: message)
+                } else {
+                    // The actions button is an overlay beside the bubble, not a
+                    // row under it, so showing it on hover cannot change this
+                    // message's height and shove the rest of the transcript
+                    // around. Same construction as MessageView in the
+                    // Character.AI chat.
+                    ZStack(alignment: isUser ? .bottomLeading : .bottomTrailing) {
+                        bubble(content, isUser: isUser, streaming: streaming, message: message)
+
+                        if let message, hoveredMessageID == message.id || actionsMessageID == message.id {
+                            actionsButton(message)
+                                // Sit just outside the bubble instead of on top of
+                                // its last words. An offset cannot change layout.
+                                .offset(x: isUser ? -32 : 32)
+                                .transition(.opacity)
                         }
                     }
+                }
             }
-            .frame(maxWidth: user ? 480 : 520, alignment: user ? .trailing : .leading)
+            .frame(maxWidth: isUser ? 480 : 520, alignment: isUser ? .trailing : .leading)
 
-            if !user { Spacer(minLength: 40) }
+            if !isUser { Spacer(minLength: 40) }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 2)
         .transition(.opacity)
+        .onHover { isHovering in
+            guard let id = message?.id else { return }
+            if isHovering {
+                hoveredMessageID = id
+            } else if hoveredMessageID == id {
+                hoveredMessageID = nil
+            }
+        }
+    }
+
+    private func actionsButton(_ message: ProviderChatMessage) -> some View {
+        Button {
+            actionsMessageID = message.id
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.caiMuted)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(ShellEnvironmentalBackground.environmentalSurfaceTint(isDark: colorScheme == .dark)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Message actions")
+        .popover(
+            isPresented: Binding(
+                get: { actionsMessageID == message.id },
+                set: { if !$0 { actionsMessageID = nil } }
+            ),
+            arrowEdge: .top
+        ) {
+            VStack(alignment: .leading, spacing: 2) {
+                messageActions(message)
+            }
+            .padding(8)
+            .frame(width: 260)
+            .presentationBackground(.regularMaterial)
+        }
+        .animation(reduceMotion ? nil : GlassMetrics.interaction, value: actionsMessageID)
+        .padding(4)
+    }
+
+    @ViewBuilder
+    private func bubble(_ content: String, isUser: Bool, streaming: Bool,
+                        message: ProviderChatMessage?) -> some View {
+        let styled = CharacterMessageFormattingView(content: content, expandsToFill: false, isStreaming: streaming)
+            .font(.system(size: 14))
+            .textSelection(.enabled)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .glassSurface(isUser ? .userMessage : .characterMessage, cornerRadius: GlassMetrics.messageRadius)
+            .foregroundStyle(Color.caiText)
+            .clipShape(RoundedRectangle(cornerRadius: GlassMetrics.messageRadius, style: .continuous))
+
+        // The streaming reply is not a transcript message, so it has no actions.
+        if let message {
+            styled.contextMenu { messageActions(message) }
+        } else {
+            styled
+        }
+    }
+
+    /// A provider chat has no candidate list or server copy, so the menu offers
+    /// only actions that can be honoured against the in-memory transcript.
+    @ViewBuilder
+    private func messageActions(_ message: ProviderChatMessage) -> some View {
+        GlassActionRow(title: "Copy message", systemImage: "doc.on.doc") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(message.content, forType: .string)
+        }
+
+        GlassActionRow(title: "Edit message", systemImage: "pencil",
+                       isDisabled: viewModel.isGenerating) {
+            editedText = message.content
+            editingMessageID = message.id
+        }
+
+        if message.role == .assistant {
+            Divider()
+
+            GlassActionRow(title: "Regenerate response", systemImage: "arrow.clockwise",
+                           isDisabled: !viewModel.canRegenerate(message.id)) {
+                viewModel.regenerateMessage(message.id)
+            }
+        }
+
+        Divider()
+
+        GlassActionRow(title: "Rewind from here…", systemImage: "backward.end",
+                       role: .destructive, isDisabled: viewModel.isGenerating) {
+            pendingRewind = message
+        }
+
+        GlassActionRow(title: "Start new conversation from here…", systemImage: "plus.message",
+                       isDisabled: viewModel.isGenerating) {
+            pendingFork = message
+        }
+    }
+
+    private func editor(for message: ProviderChatMessage) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextEditor(text: $editedText)
+                .font(.system(size: 14))
+                .frame(minHeight: 80)
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .background(Color.secondary.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .disabled(viewModel.isGenerating)
+
+            HStack(spacing: 10) {
+                Text("Editing drops every later message.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.caiMuted)
+
+                Spacer(minLength: 8)
+
+                Button("Cancel") { editingMessageID = nil }
+
+                Button("Save") {
+                    guard viewModel.editMessage(message.id, newContent: editedText) else { return }
+                    editingMessageID = nil
+                    editedText = ""
+                }
+                .buttonStyle(GlassProminentButtonStyle())
+                .disabled(editedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(10)
+        .glassSurface(message.role == .user ? .userMessage : .characterMessage,
+                      cornerRadius: GlassMetrics.messageRadius)
     }
 
     private var avatar: some View {
