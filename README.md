@@ -246,7 +246,7 @@ Veyrin is an early experimental build, not a stable release: it relies on undocu
 
 - **App version:** 0.1.0 (build 1)
 - **Platform:** Apple Silicon, macOS 27 or later
-- **Validation:** offline regression suites and Debug/Release builds pass, including native layout checks for the provider chat, conversation sidebar, library and persona screens
+- **Validation:** the signed Debug build and the offline regression suites pass, including native layout checks for the provider chat, conversation sidebar, library and persona screens
 - **Distribution:** build from source, or use a release you trust — builds are ad-hoc signed unless you sign them with your own certificate
 
 You may need to approve the app under **System Settings → Privacy & Security** the first time you open it. Avoid using an account you cannot afford to lose access to; third-party clients carry account risk under Character.AI's rules.
@@ -268,7 +268,7 @@ _Last reviewed: 24 October 2026. This is a living snapshot, not a release commit
 
 **Next**
 
-- [ ] Resolve historical screenshot/privacy findings and complete final release approval
+- [ ] Privacy review of historical captures and final release approval
 - [ ] Developer ID signing and notarisation
 - [ ] Stable release readiness and broader user testing
 - [ ] Remembered persona-per-provider selection
