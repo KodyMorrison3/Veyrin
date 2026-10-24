@@ -114,8 +114,10 @@ SwiftUI views and view models handle presentation and interaction. Service code 
 flowchart TD
     A["SwiftUI Views<br/>Character.AI · Providers · Settings"] --> B["View Models<br/>ChatViewModel · ProviderChatViewModel"]
     B --> C["Character.AI services<br/>Conversations · Turns · Characters"]
-    B --> D["Provider services<br/>ProviderStore · TextChatProvider"]
+    B --> D["Provider services<br/>ProviderStore · TextChatProvider · LocalOllamaLifecycle"]
     B --> P["Persona layer<br/>PersonaStore · LocalPersonaStore · PersonaTransfer"]
+    A --> L["Local character library<br/>LocalCharacterLibrary"]
+    B --> T["Provider transcripts<br/>ProviderTranscriptStore"]
     C --> E["REST<br/>History · Recent chats · Previews"]
     C --> F["WebSocket<br/>Generation · Candidates · Editing"]
     D --> G["Streaming HTTP<br/>Ollama NDJSON · OpenAI/Claude SSE"]
@@ -123,12 +125,14 @@ flowchart TD
     F --> H
     G --> I[("Ollama on this Mac")]
     G --> J[("Configured cloud API")]
+    L --> K[("Application Support/Veyrin<br/>characters.json · provider-chats")]
+    T --> K
     P -.->|active system prompt| B
 ```
 
 Veyrin deliberately keeps two chat paths. Character.AI uses its own REST and WebSocket services because no public third-party API exists; that protocol is based on observing the existing client and is not forced through a generic completion API. Local and cloud chat use the separate `ChatProvider` contract implemented by `TextChatProvider`, which covers model discovery and streamed text over HTTP. Keeping those paths separate preserves Character.AI-specific features such as candidates, pins and edits while keeping provider adapters small, instead of forcing both backends through a lowest-common-denominator conversation API. [PROVIDERS.md](PROVIDERS.md#architecture-and-concurrency) describes that boundary and its extension points.
 
-Personas are shared text rather than a third transport. Account personas come from Character.AI and are cached by `PersonaStore`; imported personas are stored offline by `LocalPersonaStore` and exchanged as JSON or Markdown through `PersonaTransfer`. When a persona is active in a provider chat, `ProviderChatViewModel` prepends its name, title, description and definition as a system message. The transcript is saved on this Mac beside the character's own local conversation, and only the selected endpoint receives the request.
+Personas are shared text rather than a third transport. Account personas come from Character.AI and are cached by `PersonaStore`; imported personas are stored offline by `LocalPersonaStore` and exchanged as JSON or Markdown through `PersonaTransfer`. When a persona is active in a provider chat, `ProviderChatViewModel` prepends its name, title, description and definition as a system message. Each turn is appended to `ProviderTranscriptStore`, which keeps one JSON transcript per provider, model and character under `~/Library/Application Support/Veyrin/provider-chats`; that is what restores the greeting and history when a saved chat is reopened, and only the selected endpoint receives the request.
 
 ## Security and privacy
 
@@ -140,7 +144,7 @@ Personas are shared text rather than a third transport. Account personas come fr
 - Veyrin does not attempt to bypass authentication, CAPTCHA, rate limits, paywalls or other access controls.
 - Never share session credentials, protocol captures or request dumps. Sensitive investigation files should stay out of version control.
 
-The local character catalogue and local-character conversations are saved as **unencrypted JSON** under `~/Library/Application Support/Veyrin`. They remain on disk when you sign out. Character.AI conversations still do not have a durable local database or offline-first mode; Ollama local-character chats are stored separately from Character.AI conversation history. Persona definitions and selections are saved in account-labelled preferences (not encrypted); personas imported for local/cloud chats are saved separately as unencrypted JSON in `local-personas.json`; images may be cached on disk, and custom wallpaper is saved locally. Signing out clears session-owned memory caches, but does not erase those local files, preferences or image files.
+The local character catalogue, local-character conversations and local/cloud chat transcripts are saved as **unencrypted JSON** under `~/Library/Application Support/Veyrin` (`characters.json`, `conversations/`, `provider-chats/`). They remain on disk when you sign out. Character.AI conversations still do not have a durable local database or offline-first mode; Ollama local-character chats are stored separately from Character.AI conversation history. Persona definitions and selections are saved in account-labelled preferences (not encrypted); personas imported for local/cloud chats are saved separately as unencrypted JSON in `local-personas.json`; images may be cached on disk, and custom wallpaper is saved locally. Signing out clears session-owned memory caches, but does not erase those local files, preferences or image files.
 
 The screenshots in this README are redacted. Older captures — including copies that remain in Git history — may still contain account or feed details, so treat any capture you share as public. This is not an independent security certification.
 
