@@ -99,7 +99,8 @@ private struct MainView: View {
         _userProfileViewModel = StateObject(
             wrappedValue: UserProfileViewModel(
                 service: UserProfileService(authStore: authStore),
-                username: authStore.session?.username ?? ""
+                username: authStore.session?.username ?? "",
+                characterService: CharacterService(httpClient: AuthenticatedHTTPClient(authStore: authStore))
             )
         )
     }
@@ -749,7 +750,7 @@ private struct MainView: View {
     @ViewBuilder
     private var detailView: some View {
         if let localConversationCharacter {
-            LocalCharacterChatView(character: localConversationCharacter)
+            LocalCharacterChatView(character: localConversationCharacter, accountPersonas: authStore.personas)
                 .id(localConversationCharacter.id)
         } else if isShowingLocalLibrary {
             LocalCharacterLibraryView { character in

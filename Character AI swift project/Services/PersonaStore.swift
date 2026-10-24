@@ -31,6 +31,7 @@ final class PersonaStore: ObservableObject {
 
     private let defaults: UserDefaults
     private var accountID: String?
+    var ownerID: String? { accountID }
     private var generation = UUID()
     private var loadID: UUID?
     private var selectionID: UUID?

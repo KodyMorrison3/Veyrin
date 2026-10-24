@@ -119,7 +119,20 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
                 : "[]"
             body = "[{\"result\":{\"data\":{\"json\":{\"username\":\"user-\(account)\",\"subscription_type\":\"PLUS\",\"characters\":\(profileCharacters)}}}}]"
         case "character/v1/get_character_info":
-            body = "{\"character\":{\"external_id\":\"character\",\"name\":\"Character\",\"title\":\"Title\",\"visibility\":\"VISIBILITY_PUBLIC\",\"copyable\":true,\"greeting\":\"Hi\",\"description\":\"Description\",\"avatar_file_name\":\"avatar\"}}"
+            var data = request.httpBody ?? Data()
+            if data.isEmpty, let stream = request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    data.append(buffer, count: count)
+                }
+            }
+            let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let id = record?["external_id"] as? String ?? "character"
+            body = "{\"character\":{\"external_id\":\"\(id)\",\"name\":\"Character\",\"title\":\"Title\",\"visibility\":\"VISIBILITY_PUBLIC\",\"copyable\":true,\"greeting\":\"Hi\",\"description\":\"Description\",\"avatar_file_name\":\"avatar\"}}"
         case "chat/chat":
             body = "{\"chat_id\":\"chat\",\"creator_id\":\"account-\(account)\",\"character_id\":\"character\",\"visibility\":\"VISIBILITY_PRIVATE\",\"type\":\"TYPE_ONE_ON_ONE\"}"
         case "turns/chat":
@@ -377,12 +390,14 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
             .appendingPathComponent("Veyrin-own-characters-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: ownCharactersRoot) }
         let ownCharacterLibrary = LocalCharacterLibrary(supportDirectory: ownCharactersRoot)
-        let ownCharacterViewModel = UserProfileViewModel(service: userProfileService, username: "user-a", library: ownCharacterLibrary)
+        let ownCharacterViewModel = UserProfileViewModel(service: userProfileService, username: "user-a", library: ownCharacterLibrary,
+                                                        characterService: CharacterService(httpClient: client))
         await ownCharacterViewModel.load()
-        let savedOwnCharacterCount = try ownCharacterViewModel.savePublicCharactersToLibrary()
+        let savedOwnCharacterCount = try await ownCharacterViewModel.savePublicCharactersToLibrary()
         precondition(savedOwnCharacterCount == 1)
         precondition(ownCharacterLibrary.characters.map(\.id) == ["own-character"])
         precondition(ownCharacterLibrary.characters.first?.sourceName == "Character.AI Discover")
+        precondition(ownCharacterLibrary.characters.first?.greeting == "Hi", "Save all must use the full profile greeting, not summary text")
 
         let accountExportRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("Veyrin-account-export-\(UUID().uuidString)", isDirectory: true)

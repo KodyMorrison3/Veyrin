@@ -1,6 +1,6 @@
 # Veyrin providers
 
-Implemented and checked locally on 23 October 2026. This is an incremental addition to the existing native app, not a replacement for Character.AI's chat stack. No new package dependency, embedded inference runtime or Metal code was added.
+Provider foundation implemented on 23 October 2026; Claude, Responses and character greetings added on 24 October 2026. This is an incremental addition to the existing native app, not a replacement for Character.AI's chat stack. No new package dependency, embedded inference runtime or Metal code was added.
 
 ## Launch and navigation
 
@@ -41,14 +41,42 @@ The new provider chooser never starts Ollama automatically. The older saved-char
 ### Cloud providers
 
 1. Choose **Cloud Providers → Add Provider…**, or open **Settings → Providers → Cloud Providers**.
-2. Choose **OpenAI** for the fixed `https://api.openai.com/v1` base URL, or **OpenAI-compatible Chat Completions** only when the chosen service explicitly documents that API and Bearer authentication.
+2. Choose **Claude · Anthropic Messages** (`https://api.anthropic.com/v1`), **OpenAI · Responses** or **OpenAI · Chat Completions** (both `https://api.openai.com/v1`). Use **OpenAI-compatible Chat Completions** for a custom public HTTPS endpoint only when its service documents that protocol and Bearer authentication. Existing OpenAI configurations keep using Chat Completions; they are not silently migrated.
 3. Supply your own API key in the secure field and confirm that you trust the endpoint. Saving does not make a network request or imply the key works. API billing may be separate from a chat subscription.
-4. Select the saved configuration and test it. Model-list success means the endpoint and credential accepted that request; it does not prove generation access or Chat Completions compatibility for every returned model.
+4. Select the saved configuration and test it. Model-list success means the endpoint and credential accepted that request; it does not prove generation access or compatibility with the selected API type for every returned model.
 5. Select a listed text-chat model or enter a documented model ID. Start chat to send the first message deliberately. Edit and remove controls are on the same management screen. Removing a configuration also removes its Keychain item after confirmation.
 
-The real adapter implements [OpenAI model listing](https://developers.openai.com/api/reference/resources/models/methods/list) and [streamed Chat Completions chunks](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events/). It sends `model`, role/content `messages` and `stream: true`, accepts SSE text deltas and requires the terminal `[DONE]` event. Native OpenAI and compatible endpoints share this limited wire adapter, not a claim of universal API compatibility.
+The Chat Completions adapter implements [OpenAI model listing](https://developers.openai.com/api/reference/resources/models/methods/list) and [streamed Chat Completions chunks](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events/). It sends `model`, role/content `messages` and `stream: true`, accepts SSE text deltas and requires the terminal `[DONE]` event. Native OpenAI and compatible endpoints share this limited wire adapter, not a claim of universal API compatibility.
 
-It does not implement the Responses API, image/audio input, tools/function execution, provider-specific reasoning controls, arbitrary auth schemes or non-streaming fallbacks. Tool/refusal/unsupported-format responses produce an error rather than a fake successful reply. Some model-list entries are not text-chat models. Select one documented for Chat Completions; Veyrin does not hardcode a model that an account may not have.
+The **Responses** option sends streamed `POST /v1/responses` requests with full role/content history and `store: false`, displays only output-text deltas, and requires `response.completed`. Failures, incomplete responses, refusals and unsupported tool output are errors; partial text is kept. See [Responses streaming](https://developers.openai.com/api/docs/guides/streaming-responses). This can use API-accessible Codex-branded text models that support Responses, but does not integrate Codex CLI, app-server or ChatGPT subscription sign-in. API keys and API billing remain separate.
+
+The **Claude** option uses `x-api-key` and `anthropic-version: 2023-06-01`, paginated `GET /v1/models`, and streamed `POST /v1/messages`. System instructions are sent in the top-level `system` field; output is bounded by `max_tokens: 4096`. It displays text blocks, ignores thinking/usage/ping metadata, and requires a supported stop reason followed by `message_stop`. Unsupported tools and server errors are reported safely. When history begins with a character greeting, the wire request adds a short initial user instruction before the assistant greeting to satisfy Anthropic's conversation ordering; this is not an extra visible message. See [Messages](https://platform.claude.com/docs/en/api/messages/create) and [model listing](https://platform.claude.com/docs/en/api/models/list).
+
+No option implements image/audio input, tools/MCP execution, provider-specific reasoning controls, arbitrary auth schemes or non-streaming fallbacks. Tool/refusal/unsupported-format responses produce an error rather than a fake successful reply. Some model-list entries are not text-chat models. Select one documented for the chosen API type; Veyrin does not hardcode a model that an account may not have.
+
+## Saved characters and greetings
+
+Bookmarking a Discover or search character and **Save all** on the account profile now load each character's full profile before saving. The `greeting` is the text shown under **Greeting** in the profile, not a generated reply. Failed profile fetches report an error rather than silently saving an incomplete summary. Account-export and Veyrin-archive imports preserve a greeting when the source supplies it; missing private data is not fabricated.
+
+In local/cloud provider chat, choose **Character → Saved Characters**. Selection shows the saved greeting immediately without an API request, using the existing message formatter. The first request includes the character system prompt, optional persona instructions, assistant greeting and user reply. **New Chat** restores exactly one greeting; choosing another character after user messages requires confirmation. Provider chats remain in memory and do not load or overwrite the separate disk-backed Ollama character conversations. Existing saved local conversations are not rewritten or given duplicate greetings.
+
+Earlier bookmarks missing a greeting are not automatically fetched in the background: remove the bookmark and save it again (existing local conversation files are retained), or re-import an export containing the greeting. Imported files lacking a greeting stay blank. Only the primary greeting is used; additional/dynamic greetings and placeholder expansion are not implemented.
+
+## User roleplay personas
+
+Saved local-character chat has a **No Persona / persona name** control beside the model picker. Local/cloud provider chat has the same control in its toolbar. The active control, choice list and details show persona pictures, with initials when no picture is available. Open it to choose an imported persona or a persona already loaded for the current Character.AI account, and inspect its name, title, description and definition. This is the user's identity, separate from the AI character's roleplay instructions; this control does not edit either identity.
+
+Selections are remembered by saved character ID and shared across the older Ollama character flow and local/cloud provider chats. Chats without a saved character use a temporary selection. Choosing **No Persona** clears that character's remembered choice. Only references (source, persona ID and account owner where applicable) are saved in preferences, not additional copies of persona text. Account personas resolve only for their owning account; deleted/unloaded personas display **Persona unavailable** and send no persona text rather than falling back to another identity. Re-imported persona details are resolved fresh on subsequent requests.
+
+When sending, both paths combine the character roleplay instructions and the selected user's persona instructions in the system prompt, using each provider's existing system-message format. Selecting/inspecting makes no model request, does not update Character.AI server settings and does not rewrite history or greetings. Account avatar display may fetch its public Character.AI image through the existing cache; embedded pictures need no network request. Changing selection is disabled during generation. Import/manage personas through **Settings → Personas**; Character.AI personas must already be loaded from an account chat. A restored persona will be sent to the explicitly selected provider on the next user message, so inspect the active name before sending.
+
+Persona JSON, Markdown/text and library exports include embedded PNG thumbnails. Account images are loaded asynchronously through the existing unauthenticated image cache before export writes its file; if an image cannot be loaded, export reports the failure and preserves the destination. Imports validate embedded image data (4 MiB maximum), downsample to at most 256 pixels and store it with the persona, so it survives reopening and works offline. Personas only render at 48 points, and keeping the stored copies small avoids a multi-megabyte library at launch. Re-importing an updated text-only file keeps the picture already stored for that persona. A hand-written **Avatar** section is treated as prose rather than a broken image. The original account avatar filename is retained in JSON for compatibility; old files without an image, and empty picture fields written by other tools, still import. Pictures are display-only and never included in Ollama, Chat Completions, Responses or Claude text requests. Markdown puts the encoded image in a separate **Avatar** section, not in the persona definition.
+
+### Free providers to try
+
+**Cloud Providers → Free Providers** (or the list shown when no cloud provider exists) pre-fills an OpenAI-compatible configuration for four services with a free allowance: Gemini (Google AI Studio), Groq, OpenRouter's `:free` models, and Cloudflare Workers AI. Each preset supplies only the name, API type and base URL; the key and model ID still come from your account, and the model list is discovered by **Test Connection**. Cloudflare's preset uses `YOUR_ACCOUNT_ID` in the path and must be replaced before saving.
+
+The presets are conveniences, not guarantees. Free quotas, model names and privacy terms change, and the editor shows the matching note next to the endpoint. Gemini's unpaid tier may review or train on prompts; OpenRouter's free models are capped per day; Cloudflare's allowance is a daily Neuron budget. Check the provider's current terms before sending anything private. Provider presets are covered by endpoint-validation checks that assert each base URL resolves to the documented Chat Completions path.
 
 ## Architecture and concurrency
 
@@ -85,6 +113,22 @@ Bounds: model-list bodies 8 MiB; a stream 4 MiB; individual lines/events 256 KiB
 - Existing saved-character catalogue/conversations remain in their separate unencrypted Application Support files; Character.AI's existing account caches/history handling are unchanged. See [README security notes](README.md#security-and-privacy).
 
 ## Verification
+
+### 24 October: Claude, Responses and greetings
+
+The unsigned Debug app build, offline verification suite and performance regression suite pass with the new provider/greeting sources. Logs are in ignored `.build/provider-greetings/`. The performance harness reports an existing captured-variable concurrency warning in `PerformanceChecks/SecurityChecks.swift:31`; the app build reports only the skipped AppIntents metadata extraction warning. Added checks exercise real URLSession request construction through URLProtocol fixtures for both new APIs, byte-split Unicode/CRLF SSE, terminal/error/tool/refusal events, HTTP cancellation, Anthropic pagination and provider configuration persistence. Greeting checks cover fetching a full profile from a summary/search result, failed fetches, import/export round-trips, immediate opening display state without generation, assistant-role request history, New Chat without duplicate greetings, and preservation of existing saved conversations. Native SwiftUI screens are instantiated for layout smoke tests; this is not manual visual approval.
+
+No live Claude/OpenAI generation, paid request, production Keychain mutation or authenticated Character.AI import was performed. API keys must be configured and live compatibility tested in the signed app. Earlier verification results below describe the provider foundation, not a claim that every new feature was live-tested.
+
+### User roleplay persona controls
+
+The shared local/cloud selector, reference persistence and local Ollama prompt path have regression checks for per-character restoration, No Persona removal, character switching, re-import/deletion, account ownership and corrupt-preference preservation. Synthetic HTTP requests cover the older Ollama character path and streamed Ollama, Chat Completions, Responses and Claude system prompts. Native controls receive layout smoke tests, not manual visual approval. No live model generation or account credential changes are part of these checks.
+
+### Persona pictures
+
+The unsigned Debug build and full offline verification suite pass with persona pictures enabled. Image checks exercise a synthetic unauthenticated CDN response, JSON/Markdown/text/library round-trips, preserved pixels and dimensions, disk reload, offline re-export, old files without images, invalid/oversized image rejection, text-only re-import preservation, prose **Avatar** sections, 256-pixel downsampling and destination preservation after a failed download. Local Ollama, Chat Completions, Responses and Claude request fixtures confirm pictures stay out of text requests. The settings pane and narrow toolbar label are rendered offscreen in light and dark appearances for layout review; no live account-image download was performed. Logs are in ignored `.build/persona-images/`.
+
+### Provider foundation
 
 Environment: Apple Silicon macOS, Xcode 27, macOS 27 SDK, Swift 6.4 compiler in the project's Swift 5 language mode, complete concurrency checking and MainActor default isolation. Baseline Debug and final Debug/Release builds succeeded with signing disabled. Final Swift build output had no compiler/concurrency warnings; Xcode reported only skipped AppIntents metadata extraction because the app does not use AppIntents.
 

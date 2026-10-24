@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Portable persona files let a Character.AI persona move into Veyrin's local
@@ -36,10 +37,15 @@ nonisolated extension Persona {
         if let greeting, !greeting.isEmpty {
             lines += ["## Greeting", "", greeting, ""]
         }
+        if let avatarData {
+            lines += ["## Avatar", "", "data:image/png;base64,\(avatarData.base64EncodedString())", ""]
+        } else if let avatarFileName, !avatarFileName.isEmpty {
+            lines += ["## Avatar File Name", "", avatarFileName, ""]
+        }
         return lines.joined(separator: "\n")
     }
 
-    func portableJSON() throws -> Data {
+    var portablePayload: [String: Any] {
         var payload: [String: Any] = [
             "id": externalID,
             "display_name": displayName
@@ -48,10 +54,16 @@ nonisolated extension Persona {
         payload["greeting"] = greeting
         payload["description"] = description
         payload["definition"] = definition
-        return try JSONSerialization.data(withJSONObject: [
+        payload["avatar_file_name"] = avatarFileName
+        payload["avatar_data"] = avatarData?.base64EncodedString()
+        return payload
+    }
+
+    func portableJSON() throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
             "format": "veyrin.persona",
             "version": 1,
-            "persona": payload
+            "persona": portablePayload
         ], options: [.prettyPrinted, .sortedKeys])
     }
 }
@@ -63,29 +75,28 @@ nonisolated enum LocalPersonaArchive {
         try JSONSerialization.data(withJSONObject: [
             "format": "veyrin.persona-library",
             "version": 1,
-            "personas": personas.map { persona in
-                ["id": persona.externalID, "display_name": persona.displayName,
-                 "title": persona.title as Any? ?? NSNull(),
-                 "greeting": persona.greeting as Any? ?? NSNull(),
-                 "description": persona.description as Any? ?? NSNull(),
-                 "definition": persona.definition as Any? ?? NSNull()]
-            }
+            "personas": personas.map(\.portablePayload)
         ], options: [.prettyPrinted, .sortedKeys])
     }
 }
 
 nonisolated enum PersonaTransfer {
+    /// Personas render at most at 48 points, so 256 pixels is plenty on a
+    /// Retina display and keeps the persona library small at launch.
+    static let avatarPixelSize = 256
+
     /// Reads Veyrin persona JSON, character-card JSON, and plain text or
     /// Markdown prompts. A library bundle can contain several personas.
-    static func parseAll(data: Data, filename: String) throws -> [Persona] {
+    /// Decoding runs off the main actor because a library can carry images.
+    @concurrent static func parseAll(data: Data, filename: String) async throws -> [Persona] {
         let fallbackName = defaultName(for: filename)
         if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let rows = root["personas"] as? [[String: Any]] {
-                let personas = rows.compactMap { persona(from: $0, fallbackName: fallbackName) }
+                let personas = try rows.compactMap { try persona(from: $0, fallbackName: fallbackName) }
                 guard !personas.isEmpty else { throw PersonaTransferError.noPersonasFound }
                 return personas
             }
-            guard let persona = persona(from: root, fallbackName: fallbackName) else {
+            guard let persona = try persona(from: root, fallbackName: fallbackName) else {
                 throw PersonaTransferError.unsupportedFile
             }
             return [persona]
@@ -94,10 +105,10 @@ nonisolated enum PersonaTransfer {
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw PersonaTransferError.unsupportedFile
         }
-        return [markdown(text, fallbackName: fallbackName)]
+        return [try markdown(text, fallbackName: fallbackName)]
     }
 
-    static func persona(from root: [String: Any], fallbackName: String) -> Persona? {
+    static func persona(from root: [String: Any], fallbackName: String) throws -> Persona? {
         var record = root
         if let nested = root["persona"] as? [String: Any] {
             record = nested
@@ -133,12 +144,13 @@ nonisolated enum PersonaTransfer {
             greeting: string(record, keys: ["greeting", "first_mes"]),
             description: description,
             definition: definition.isEmpty ? nil : definition,
-            avatarFileName: nil,
+            avatarFileName: string(record, keys: ["avatar_file_name", "avatarFileName"]),
+            avatarData: try avatarData(record["avatar_data"]),
             isDefaultUser: false
         )
     }
 
-    static func markdown(_ text: String, fallbackName: String) -> Persona {
+    static func markdown(_ text: String, fallbackName: String) throws -> Persona {
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
         let lines = normalized.components(separatedBy: "\n")
         var name = fallbackName
@@ -199,9 +211,52 @@ nonisolated enum PersonaTransfer {
             description: description,
             definition: definition?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
                 ? definition : nil,
-            avatarFileName: nil,
+            avatarFileName: section(["avatar file name"]),
+            avatarData: try avatarData(section(["avatar"]), lenient: true),
             isDefaultUser: false
         )
+    }
+
+    static func avatarPNG(from image: NSImage) throws -> Data {
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:]) else {
+            throw PersonaTransferError.invalidAvatar
+        }
+        return png
+    }
+
+    private static func avatarData(_ value: Any?, lenient: Bool = false) throws -> Data? {
+        guard let value, !(value is NSNull) else { return nil }
+        guard let text = value as? String else {
+            if lenient { return nil }
+            throw PersonaTransferError.invalidAvatar
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Files written by other tools often use an empty field for "no picture".
+        if trimmed.isEmpty { return nil }
+        guard let encoded = embeddedBase64(trimmed) else {
+            // A hand-written "## Avatar" note is prose, not a broken picture.
+            if lenient { return nil }
+            throw PersonaTransferError.invalidAvatar
+        }
+        guard encoded.utf8.count <= 6 * 1024 * 1024,
+              let data = Data(base64Encoded: encoded), data.count <= 4 * 1024 * 1024,
+              let image = ImageProcessing.thumbnail(from: data, maxPixelSize: avatarPixelSize) else {
+            if lenient { return nil }
+            throw PersonaTransferError.invalidAvatar
+        }
+        return try avatarPNG(from: image)
+    }
+
+    private static func embeddedBase64(_ text: String) -> String? {
+        if text.hasPrefix("data:image/"), let comma = text.firstIndex(of: ","),
+           text[..<comma].hasSuffix(";base64") {
+            return String(text[text.index(after: comma)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let alphabet = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+        guard text.count >= 64, text.allSatisfy({ alphabet.contains($0) }) else { return nil }
+        return text
     }
 
     private static func string(_ record: [String: Any], keys: [String]) -> String? {
@@ -228,6 +283,8 @@ nonisolated enum PersonaTransfer {
 nonisolated enum PersonaTransferError: LocalizedError, Equatable {
     case unsupportedFile
     case noPersonasFound
+    case invalidAvatar
+    case avatarUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -235,6 +292,10 @@ nonisolated enum PersonaTransferError: LocalizedError, Equatable {
             "This file is not a Veyrin persona, a character-card JSON, or a text prompt."
         case .noPersonasFound:
             "No personas were found in this file."
+        case .invalidAvatar:
+            "The persona image is invalid or larger than 4 MiB. Existing personas have not been changed."
+        case .avatarUnavailable:
+            "The persona image could not be loaded. Connect to the internet and retry the export; the destination file has not been changed."
         }
     }
 }

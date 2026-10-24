@@ -35,7 +35,6 @@ struct CharacterAIApp: App {
                 authStore: authStore
             )
         }
-        .windowBackgroundDragBehavior(.enabled)
     }
 }
 

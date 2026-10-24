@@ -11,6 +11,7 @@ nonisolated struct Persona: Identifiable, Codable, Equatable, Hashable, Sendable
     var description: String?
     var definition: String?
     var avatarFileName: String?
+    var avatarData: Data?
     var isDefaultUser: Bool
 
     var avatarURL: URL? {
@@ -27,6 +28,7 @@ nonisolated struct Persona: Identifiable, Codable, Equatable, Hashable, Sendable
         case description
         case definition
         case avatarFileName = "avatar_file_name"
+        case avatarData = "avatar_data"
         case isDefaultUser = "is_default_user"
     }
 
@@ -39,6 +41,7 @@ nonisolated struct Persona: Identifiable, Codable, Equatable, Hashable, Sendable
         description: String? = nil,
         definition: String? = nil,
         avatarFileName: String? = nil,
+        avatarData: Data? = nil,
         isDefaultUser: Bool = false
     ) {
         self.id = id
@@ -49,6 +52,7 @@ nonisolated struct Persona: Identifiable, Codable, Equatable, Hashable, Sendable
         self.description = description
         self.definition = definition
         self.avatarFileName = avatarFileName
+        self.avatarData = avatarData
         self.isDefaultUser = isDefaultUser
     }
 
@@ -62,6 +66,7 @@ nonisolated struct Persona: Identifiable, Codable, Equatable, Hashable, Sendable
         self.description = try container.decodeIfPresent(String.self, forKey: .description)
         self.definition = try container.decodeIfPresent(String.self, forKey: .definition)
         self.avatarFileName = try container.decodeIfPresent(String.self, forKey: .avatarFileName)
+        self.avatarData = try container.decodeIfPresent(Data.self, forKey: .avatarData)
         self.isDefaultUser = try container.decodeIfPresent(Bool.self, forKey: .isDefaultUser) ?? false
     }
 

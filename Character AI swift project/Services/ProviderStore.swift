@@ -95,7 +95,7 @@ final class ProviderStore: ObservableObject {
     func provider(for selection: ProviderSelection) throws -> any ChatProvider {
         switch selection.kind {
         case .ollama: return try TextChatProvider(localEndpoint: localEndpoint)
-        case .openAI, .openAICompatible:
+        case .openAI, .openAICompatible, .openAIResponses, .anthropic:
             guard let configuration = configurations.first(where: { $0.id == selection.configurationID }) else {
                 throw ProviderError.invalidConfiguration
             }

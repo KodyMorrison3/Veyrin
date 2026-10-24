@@ -64,17 +64,19 @@ Veyrin is an **unofficial** macOS client for [Character.AI](https://character.ai
 - Native provider chooser at launch: **Character.AI**, **Local Models**, **Cloud Providers**
 - Switch providers without restarting; Character.AI keeps its existing sign-in, history and character features
 - Ollama connection testing, installed-model selection and streamed text responses through a configurable loopback endpoint
-- OpenAI Chat Completions and explicitly configured OpenAI-compatible text endpoints, with add/edit/test/remove controls and Keychain-backed API keys
+- Claude (Anthropic Messages), OpenAI Responses, OpenAI Chat Completions and explicitly configured OpenAI-compatible Chat Completions endpoints, with add/edit/test/remove controls and Keychain-backed API keys
 - **Remember my last provider** is off by default. Enabling it restores the last selected provider/model after connection checks where supported; disabling it does not sign out or remove keys
 - New local/cloud text chats are kept only in memory. Switching providers starts a separate conversation; context is never transferred automatically
+- **Free Providers** presets prefill Gemini, Groq, OpenRouter and Cloudflare Workers AI endpoints; keys and model IDs still come from your own account, and each provider's quota and privacy terms still apply
 
 See [Provider setup and architecture](PROVIDERS.md) for setup, privacy boundaries, verification results and limitations. Connection tests use model listing; they do **not** prove that a model permits chat generation. No live AI connection was verified during implementation.
 
 ### Personas
 - Export Character.AI personas as portable JSON or a paste-ready Markdown prompt, and import them into a local library for local/cloud chats
 - Import Veyrin persona JSON, character-card JSON (v1/v2) or plain-text/Markdown prompts; import merges by persona ID rather than duplicating an existing copy
-- Attach a loaded Character.AI persona or an imported local persona to Ollama or a cloud provider from the chat toolbar. Its name, title, description and definition are sent as a system prompt only while it is active
-- Exported JSON is lossless inside Veyrin; Markdown is intended for pasting into another AI. Avatar images are not included
+- Select and inspect a user roleplay persona in saved local-character chat beside the model picker, or in the local/cloud provider toolbar. Both show its picture, active name and read-only title, description and definition
+- Imported personas and currently loaded Character.AI account personas are supported. The choice is remembered per saved character across local/cloud chats, while chats without a character keep a temporary selection. Details are sent with the character instructions only when you send a message; selecting a persona sends nothing
+- JSON, Markdown/text and Export All include embedded persona pictures. Account pictures are downloaded through the existing image cache during export; imported copies keep their picture offline. Pictures are shown in the picker, details and Settings, not sent to text models. Markdown keeps its picture in a separate Avatar section; paste only the text sections into another AI. Re-importing a text-only update keeps the stored picture, and a hand-written Avatar section is treated as ordinary prose
 - Character.AI account personas remain read-only. Imported copies live in `local-personas.json`, work offline and remain after sign-out
 
 ### Conversations
@@ -85,7 +87,8 @@ See [Provider setup and architecture](PROVIDERS.md) for setup, privacy boundarie
 - Create and hide conversations
 
 ### Local character library
-- Save Discover characters with their bookmark button, press it again to remove the saved copy, and import characters from a Character.AI account export
+- Save Discover/search characters with their bookmark button, fetching the full profile greeting; press it again to remove the saved copy, or import characters and greetings from a Character.AI account export
+- Choose a saved character from the **Character** menu in local/cloud provider chats. Its greeting appears immediately as the first assistant message and becomes part of the model's history when you send a message; **New Chat** restores one greeting. Changing characters after chatting requires confirmation and starts a separate transcript
 - Search and filter saved characters, remove a character and its local chat history after confirmation, and export the library as a Veyrin archive
 - Chat with saved characters using Ollama; its configurable endpoint defaults to loopback HTTP at `127.0.0.1:11434`. The existing local-character flow can optionally launch Ollama when needed; the new provider chooser does not launch it or download models
 - For local-only inference, use downloaded models and disable Ollama cloud features. A loopback address alone does not prove local inference; see [Ollama privacy/setup](PROVIDERS.md#ollama)
@@ -115,7 +118,7 @@ flowchart TD
     B --> P["Persona layer<br/>PersonaStore · LocalPersonaStore · PersonaTransfer"]
     C --> E["REST<br/>History · Recent chats · Previews"]
     C --> F["WebSocket<br/>Generation · Candidates · Editing"]
-    D --> G["Streaming HTTP<br/>Ollama NDJSON · OpenAI SSE"]
+    D --> G["Streaming HTTP<br/>Ollama NDJSON · OpenAI/Claude SSE"]
     E --> H[("Character.AI backend")]
     F --> H
     G --> I[("Ollama on this Mac")]
@@ -146,9 +149,9 @@ The release preparation audit found account/profile and feed captures in deleted
 - **Character search needs a web session cookie.** Character.AI's search-results endpoint does not accept the app's session token. You can paste the `web-next-auth` cookie (or the whole `Cookie` header) from a signed-in browser in the login window or **Preferences → Account**. Veyrin stores it in the Keychain and sends it only to `character.ai`; it does not obtain, refresh or share the cookie itself. Without it, suggestions, Discover and Similar Characters still work.
 - **No offline use for Character.AI conversations.** They depend on access to Character.AI; offline-first loading is planned, not implemented. The local character library can be used with Ollama running on this Mac.
 - **Character.AI compatibility can break at any time** because that integration depends on undocumented backend behaviour.
-- **Cloud compatibility is deliberately narrow.** The adapter supports Bearer-authenticated model listing and streamed text Chat Completions, not every OpenAI model, the Responses API, tools, images or arbitrary vendor APIs. A successful model-list request is not a successful chat test.
-- **New provider text chats are not saved.** They are separate from the existing disk-backed local-character conversations. No local-to-cloud context migration is performed. The selected persona is also session-only, so choosing one does not persist it for the next chat.
-- **Persona transfer is text-first.** Character.AI personas appear in **Settings → Personas** after a Character.AI chat has loaded them; export does not add a new persona to the Character.AI account. Avatar images are excluded, and only JSON/Markdown/character-card files can be imported. Character-card export is not implemented yet.
+- **Cloud support is text-only.** Choose Anthropic Messages, OpenAI Responses or Chat Completions to match the model. Custom endpoints must document OpenAI-compatible Chat Completions and Bearer authentication. Tools/MCP, images, Codex/ChatGPT subscription sign-in and arbitrary vendor protocols are not implemented. A successful model-list request is not a successful chat test.
+- **New provider text chats are not saved.** They are separate from the existing disk-backed local-character conversations. No local-to-cloud context migration is performed. Persona references are remembered per saved character; selection in a chat without a character is temporary. Deleted/unavailable personas are shown as unavailable and their details are not sent.
+- **Persona transfer:** Character.AI personas appear in **Settings → Personas** after a Character.AI chat has loaded them; export does not add a new persona to the Character.AI account. Persona exports embed a PNG avatar thumbnail, including Markdown/text exports. An unavailable account picture stops export without replacing the destination file. Older files still import, but an image omitted by an old export cannot be recovered from that file. Only JSON/Markdown/character-card files can be imported; standalone image/card-PNG import and character-card export are not implemented.
 - **Ad-hoc signed, not notarised.** The experimental package has a verifiable local signature, but no Developer ID identity or Apple notarisation. It is not a trusted, notarised distribution.
 - **No automatic updates.** Settings can check GitHub release metadata; it does not install updates.
 

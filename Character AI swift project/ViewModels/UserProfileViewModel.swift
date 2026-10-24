@@ -23,13 +23,16 @@ final class UserProfileViewModel: ObservableObject {
 
     private let service: UserProfileService
     private let library: LocalCharacterLibrary
+    private let characterService: CharacterService
     /// The signed-in username (typed session metadata - never the token).
     let username: String
 
-    init(service: UserProfileService, username: String, library: LocalCharacterLibrary = .shared) {
+    init(service: UserProfileService, username: String, library: LocalCharacterLibrary = .shared,
+         characterService: CharacterService) {
         self.service = service
         self.username = username
         self.library = library
+        self.characterService = characterService
     }
 
     func load() async {
@@ -45,7 +48,7 @@ final class UserProfileViewModel: ObservableObject {
         }
     }
 
-    func savePublicCharactersToLibrary() throws -> Int {
+    func savePublicCharactersToLibrary() async throws -> Int {
         guard case .loaded(let profile) = state else {
             throw LocalCharacterLibraryError.profileUnavailable
         }
@@ -53,6 +56,6 @@ final class UserProfileViewModel: ObservableObject {
             guard let id = character.externalID else { return false }
             return !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        return try library.saveFromDiscover(characters)
+        return try await library.saveFromDiscover(characters, service: characterService)
     }
 }

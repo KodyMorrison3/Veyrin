@@ -108,6 +108,7 @@ struct UserProfileDetailView: View {
     @ObservedObject private var preferences = AppPreferences.shared
     @Environment(\.openSettings) private var openSettings
     @State private var libraryNotice: String?
+    @State private var isSavingCharacters = false
     let onSelectCharacter: (String) -> Void
 
     var body: some View {
@@ -193,14 +194,19 @@ struct UserProfileDetailView: View {
                             .font(.headline)
                         Spacer()
                         Button("Save all", systemImage: "bookmark") {
-                            do {
-                                let count = try viewModel.savePublicCharactersToLibrary()
-                                libraryNotice = "Saved \(count) of your public characters to My Library."
-                            } catch {
-                                libraryNotice = error.localizedDescription
+                            isSavingCharacters = true
+                            Task {
+                                defer { isSavingCharacters = false }
+                                do {
+                                    let count = try await viewModel.savePublicCharactersToLibrary()
+                                    libraryNotice = "Saved \(count) of your public characters to My Library."
+                                } catch {
+                                    libraryNotice = error.localizedDescription
+                                }
                             }
                         }
                         .buttonStyle(.bordered)
+                        .disabled(isSavingCharacters)
                     }
                     if let libraryNotice {
                         if libraryNotice.hasPrefix("Saved ") {

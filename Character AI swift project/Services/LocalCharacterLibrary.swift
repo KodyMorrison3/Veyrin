@@ -32,7 +32,8 @@ struct LocalCharacter: Codable, Identifiable, Sendable {
 
     var isGenerated: Bool { sourcePlatform == "synthetic" }
 
-    init(discoverCharacter: DiscoverFeedCharacter, existing: LocalCharacter? = nil) throws {
+    init(discoverCharacter: DiscoverFeedCharacter, existing: LocalCharacter? = nil,
+         profile: CharacterProfile? = nil) throws {
         guard let id = discoverCharacter.externalID, !id.isEmpty,
               let name = [discoverCharacter.name, discoverCharacter.participantName, discoverCharacter.title]
                 .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
@@ -44,7 +45,7 @@ struct LocalCharacter: Codable, Identifiable, Sendable {
         tagline = discoverCharacter.title.flatMap { $0.isEmpty ? nil : $0 } ?? existing?.tagline ?? ""
         description = discoverCharacter.description.flatMap { $0.isEmpty ? nil : $0 } ?? existing?.description ?? ""
         definition = existing?.definition ?? ""
-        greeting = discoverCharacter.greeting.flatMap { $0.isEmpty ? nil : $0 } ?? existing?.greeting ?? ""
+        greeting = profile?.greeting ?? discoverCharacter.greeting.flatMap { $0.isEmpty ? nil : $0 } ?? existing?.greeting ?? ""
         examples = existing?.examples ?? []
         tags = existing?.tags ?? []
         sourcePlatform = existing?.sourcePlatform ?? "character.ai"
@@ -122,7 +123,8 @@ struct LocalCharacter: Codable, Identifiable, Sendable {
         return nil
     }
 
-    init(searchResult: CharacterSearchResult, existing: LocalCharacter? = nil) throws {
+    init(searchResult: CharacterSearchResult, existing: LocalCharacter? = nil,
+         profile: CharacterProfile? = nil) throws {
         try self.init(discoverCharacter: DiscoverFeedCharacter(
             externalID: searchResult.externalID,
             name: searchResult.name,
@@ -135,7 +137,7 @@ struct LocalCharacter: Codable, Identifiable, Sendable {
             avatarFileName: searchResult.avatarFileName,
             username: searchResult.creatorUsername,
             shortHash: nil
-        ), existing: existing)
+        ), existing: existing, profile: profile)
     }
 
     init(record: [String: Any]) throws {
@@ -299,6 +301,50 @@ final class LocalCharacterLibrary: ObservableObject {
         let existing = characters.first { $0.id == searchResult.externalID }
         let character = try LocalCharacter(searchResult: searchResult, existing: existing)
         try save(character)
+    }
+
+    /// Fetch the full profile before committing a bookmark: summary/search
+    /// payloads often omit the greeting shown on the Character.AI profile.
+    func saveFromDiscover(_ character: DiscoverFeedCharacter, service: CharacterService) async throws {
+        guard let id = character.externalID else { throw LocalCharacterLibraryError.invalidCharacter }
+        let profile = try await service.loadProfile(externalID: id)
+        try Task.checkCancellation()
+        guard profile.externalID == id else { throw LocalCharacterLibraryError.invalidCharacter }
+        try save(LocalCharacter(discoverCharacter: character,
+                                existing: characters.first { $0.id == id }, profile: profile))
+    }
+
+    func saveFromDiscover(_ result: CharacterSearchResult, service: CharacterService) async throws {
+        guard let id = result.externalID else { throw LocalCharacterLibraryError.invalidCharacter }
+        let profile = try await service.loadProfile(externalID: id)
+        try Task.checkCancellation()
+        guard profile.externalID == id else { throw LocalCharacterLibraryError.invalidCharacter }
+        try save(LocalCharacter(searchResult: result,
+                                existing: characters.first { $0.id == id }, profile: profile))
+    }
+
+    @discardableResult
+    func saveFromDiscover(_ summaries: [DiscoverFeedCharacter], service: CharacterService) async throws -> Int {
+        let session = service.sessionGeneration
+        var loaded: [LocalCharacter] = []
+        for summary in summaries {
+            guard let id = summary.externalID else { throw LocalCharacterLibraryError.invalidCharacter }
+            let profile = try await service.loadProfile(externalID: id)
+            try Task.checkCancellation()
+            guard profile.externalID == id else { throw LocalCharacterLibraryError.invalidCharacter }
+            loaded.append(try LocalCharacter(discoverCharacter: summary,
+                                             existing: characters.first { $0.id == id }, profile: profile))
+        }
+        guard service.sessionGeneration == session else { throw CancellationError() }
+        guard catalogueIsAvailable else { throw LocalCharacterLibraryError.catalogueUnavailable }
+        var merged = Dictionary(characters.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        for character in loaded { merged[character.id] = character }
+        let previous = characters
+        characters = merged.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        do { try saveCatalogue() }
+        catch { characters = previous; throw error }
+        errorMessage = nil
+        return loaded.count
     }
 
     @discardableResult

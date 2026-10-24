@@ -281,6 +281,13 @@ struct CloudProviderSetupView: View {
                 HStack {
                     Text("Configured providers").font(.headline)
                     Spacer()
+                    Menu("Free Providers", systemImage: "sparkles") {
+                        ForEach(ProviderPreset.freeCloud) { preset in
+                            Button(preset.name) { editing = preset.configuration }
+                        }
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
                     Button("Add Provider…", systemImage: "plus") {
                         editing = ProviderConfiguration(name: "OpenAI", kind: .openAI, endpoint: ProviderEndpoint.defaultOpenAI)
                     }
@@ -292,10 +299,32 @@ struct CloudProviderSetupView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if store.configurations.isEmpty {
-                    Text("No cloud providers configured. Add OpenAI or a service that explicitly documents Chat Completions compatibility.")
+                    Text("No cloud providers configured. Add Claude, OpenAI, or an OpenAI-compatible Chat Completions service.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(ProviderPreset.freeCloud) { preset in
+                            Button {
+                                editing = preset.configuration
+                            } label: {
+                                HStack(alignment: .top, spacing: 8) {
+                                    Image(systemName: "sparkles")
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 16)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(preset.name).font(.callout.weight(.medium))
+                                        Text(preset.note).font(.caption).foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.top, 4)
                 } else {
                     VStack(spacing: 0) {
                         ForEach(store.configurations) { configuration in
@@ -342,7 +371,7 @@ struct CloudProviderSetupView: View {
                     TextField("Model ID", text: $model)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Model ID")
-                    Text("A successful model-list request tests the connection and key, not chat access. Some listed models do not support Chat Completions. You can enter a documented text-chat model ID if discovery is unsupported.")
+                    Text("A successful model-list request tests the connection and key, not chat access. Some listed models do not support the selected API type. You can enter a documented text-chat model ID if discovery is unsupported.")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     if let error = error ?? connection.error {
@@ -450,7 +479,9 @@ private struct CloudProviderEditor: View {
                     .accessibilityLabel("Name")
                 ProviderFieldLabel("API type")
                 Picker("API type", selection: $configuration.kind) {
-                    Text("OpenAI").tag(ProviderKind.openAI)
+                    Text("OpenAI · Chat Completions").tag(ProviderKind.openAI)
+                    Text("OpenAI · Responses").tag(ProviderKind.openAIResponses)
+                    Text("Claude · Anthropic Messages").tag(ProviderKind.anthropic)
                     Text("OpenAI-compatible Chat Completions").tag(ProviderKind.openAICompatible)
                 }
                 .labelsHidden()
@@ -459,7 +490,12 @@ private struct CloudProviderEditor: View {
                 TextField("API base URL", text: $configuration.endpoint)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel("API base URL")
-                    .disabled(configuration.kind == .openAI)
+                    .disabled(configuration.kind != .openAICompatible)
+                if let preset = ProviderPreset.freeCloud.first(where: { $0.endpoint == configuration.endpoint }) {
+                    Text(preset.note)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 ProviderFieldLabel("API key", hint: "Leave blank to keep existing")
                 SecureField("Leave blank to keep existing", text: $apiKey)
                     .textFieldStyle(.roundedBorder)
@@ -469,7 +505,7 @@ private struct CloudProviderEditor: View {
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel("Model ID")
             }
-            Text("Keys are stored in macOS Keychain, not preferences. Changing the endpoint requires re-entering the key. Compatibility is limited to text Chat Completions and model listing, not tools, images or every provider API.")
+            Text("Keys are stored in macOS Keychain, not preferences. Changing the endpoint requires re-entering the key. Choose the API type supported by your model. Claude uses Messages; Responses supports additional OpenAI text models. API keys are separate from ChatGPT/Codex subscriptions. Text only; no tools or images.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Toggle("I trust this endpoint to receive my API key and messages.", isOn: $consent)
@@ -500,7 +536,12 @@ private struct CloudProviderEditor: View {
         .frame(width: 560)
         .background { ShellEnvironmentalBackground(vignetteStrength: 0.7) }
         .onChange(of: configuration.kind) {
-            if configuration.kind == .openAI { configuration.endpoint = ProviderEndpoint.defaultOpenAI }
+            if configuration.kind == .anthropic {
+                configuration.endpoint = ProviderEndpoint.defaultAnthropic
+            } else if configuration.kind == .openAI || configuration.kind == .openAIResponses {
+                configuration.endpoint = ProviderEndpoint.defaultOpenAI
+            }
+            configuration.model = ""
             consent = false
         }
         .onChange(of: configuration.endpoint) { consent = false }

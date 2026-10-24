@@ -1,13 +1,15 @@
 import Foundation
 
 nonisolated enum ProviderKind: String, Codable, CaseIterable, Sendable {
-    case characterAI, ollama, openAI, openAICompatible
+    case characterAI, ollama, openAI, openAICompatible, openAIResponses, anthropic
 
     var title: String {
         switch self {
         case .characterAI: "Character.AI"
         case .ollama: "Local Models"
-        case .openAI: "OpenAI"
+        case .openAI: "OpenAI · Chat Completions"
+        case .openAIResponses: "OpenAI · Responses"
+        case .anthropic: "Claude · Anthropic Messages"
         case .openAICompatible: "OpenAI-compatible"
         }
     }
@@ -40,13 +42,43 @@ nonisolated struct ProviderConfiguration: Codable, Identifiable, Equatable, Send
     var model: String = ""
 
     func validated() throws -> Self {
-        guard kind == .openAI || kind == .openAICompatible,
+        guard [.openAI, .openAICompatible, .openAIResponses, .anthropic].contains(kind),
               !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               name.count <= 80, model.count <= 200,
               !model.contains(where: { $0.isWhitespace || $0.isNewline }) else { throw ProviderError.invalidConfiguration }
         _ = try ProviderEndpoint.cloud(endpoint, kind: kind)
         return self
     }
+}
+
+/// Free or free-tier endpoints worth testing. They all use the
+/// OpenAI-compatible Chat Completions API because that is the only kind that
+/// accepts a custom base URL. Free quotas and privacy terms change, so the
+/// note is shown next to the endpoint rather than treated as a promise.
+nonisolated struct ProviderPreset: Identifiable, Sendable {
+    let id: String
+    let name: String
+    let endpoint: String
+    let note: String
+
+    var configuration: ProviderConfiguration {
+        ProviderConfiguration(name: name, kind: .openAICompatible, endpoint: endpoint)
+    }
+
+    static let freeCloud: [ProviderPreset] = [
+        ProviderPreset(id: "gemini", name: "Gemini · free tier",
+                       endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/",
+                       note: "Free tokens on selected Flash models. Unpaid prompts may be reviewed or used to improve Google’s models."),
+        ProviderPreset(id: "groq", name: "Groq · free tier",
+                       endpoint: "https://api.groq.com/openai/v1",
+                       note: "Fast free tier. Limits vary by account; check the Limits page in the Groq console."),
+        ProviderPreset(id: "openrouter", name: "OpenRouter · free models",
+                       endpoint: "https://openrouter.ai/api/v1",
+                       note: "Pick a model whose ID ends in :free. Around 50 free requests a day until you buy credit."),
+        ProviderPreset(id: "cloudflare", name: "Cloudflare Workers AI",
+                       endpoint: "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1",
+                       note: "Replace YOUR_ACCOUNT_ID with the ID from the Cloudflare dashboard. 10,000 Neurons a day.")
+    ]
 }
 
 nonisolated struct ModelDescriptor: Identifiable, Equatable, Sendable {
@@ -81,6 +113,7 @@ nonisolated protocol ChatProvider: Sendable {
 nonisolated enum ProviderEndpoint {
     static let defaultOllama = "http://127.0.0.1:11434"
     static let defaultOpenAI = "https://api.openai.com/v1"
+    static let defaultAnthropic = "https://api.anthropic.com/v1"
 
     static func local(_ text: String) throws -> URL {
         let url = try base(text)
@@ -97,8 +130,9 @@ nonisolated enum ProviderEndpoint {
               !host.hasSuffix("."), host.contains("."), !host.hasSuffix(".local"), !host.hasSuffix(".localhost"),
               !host.hasSuffix(".internal"), !host.contains(":"),
               host.contains(where: \.isLetter) else { throw ProviderError.invalidCloudEndpoint }
-        if kind == .openAI {
-            guard url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == defaultOpenAI else {
+        if [.openAI, .openAIResponses, .anthropic].contains(kind) {
+            let expected = kind == .anthropic ? defaultAnthropic : defaultOpenAI
+            guard url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == expected else {
                 throw ProviderError.invalidCloudEndpoint
             }
         } else if kind != .openAICompatible { throw ProviderError.invalidConfiguration }
@@ -126,7 +160,7 @@ nonisolated enum ProviderError: LocalizedError, Equatable {
         switch self {
         case .invalidEndpoint: "Enter a URL without a username, password, query or fragment."
         case .invalidLocalEndpoint: "Use an HTTP or HTTPS Ollama address on this Mac (localhost, 127.0.0.1 or ::1), without a path."
-        case .invalidCloudEndpoint: "Use a public HTTPS API base URL. OpenAI uses https://api.openai.com/v1."
+        case .invalidCloudEndpoint: "Use a public HTTPS API base URL. Native OpenAI and Claude configurations use their fixed official endpoints."
         case .invalidConfiguration: "Enter a provider name and a valid model identifier."
         case .missingCredential: "Add an API key in Providers settings before connecting."
         case .credentialStorage: "The API key could not be read or saved in Keychain. Try again."

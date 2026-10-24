@@ -10,6 +10,7 @@
 //  Notifications, Privacy & Security). No fake controls.
 //
 
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -138,10 +139,15 @@ struct SettingsView: View {
                 reduceTransparency: reduceTransparency
             )
         }
-        // A root WindowDragGesture competes with the pane ScrollViews and can
-        // let scrolling fall through to the window behind Settings. The scene’s
-        // windowBackgroundDragBehavior keeps background window dragging.
+        // Neither a root WindowDragGesture nor window-background dragging is
+        // installed here: both compete with the pane ScrollViews. Settings is
+        // dragged by its title bar instead.
         .contentShape(Rectangle())
+        // A visible Settings window is not always the key window (for example
+        // after clicking the main window). In that state macOS sends scroll
+        // events to the key window, so the Library list behind Settings moves.
+        // Claim the scroll for Settings instead of letting it pass through.
+        .background { SettingsScrollIsolation() }
     }
 
     // MARK: - Shared presentation
@@ -682,6 +688,60 @@ struct SettingsView: View {
                 preferences.resetToDefaults()
             }
             Button("Cancel", role: .cancel) {}
+        }
+    }
+}
+
+/// Keeps scroll-wheel and trackpad gestures over the Settings window from
+/// scrolling the key window behind it. If Settings is visible but not key
+/// (for example after clicking the main window), the first scroll claims the
+/// gesture and makes Settings key. Subsequent scrolls reach the pane normally.
+/// It must never claim a scroll that belongs to a window in front of Settings:
+/// making Settings key would dismiss an open popover, which is what made the
+/// roleplay persona popover vanish when Settings was left open behind it.
+private struct SettingsScrollIsolation: NSViewRepresentable {
+    func makeNSView(context: Context) -> ScrollIsolationAnchor {
+        ScrollIsolationAnchor()
+    }
+
+    func updateNSView(_ nsView: ScrollIsolationAnchor, context: Context) {}
+
+    final class ScrollIsolationAnchor: NSView {
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            removeMonitor()
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self, let window = self.window,
+                      window.isVisible, !window.isKeyWindow,
+                      NSApp.modalWindow == nil, window.attachedSheet == nil else {
+                    return event
+                }
+                let pointer = NSEvent.mouseLocation
+                guard window.frame.contains(pointer) else { return event }
+                // Only take the scroll when Settings is the frontmost window
+                // under the pointer. A popover, sheet or the main window in
+                // front keeps its own scrolling and focus.
+                guard let frontmost = NSApp.orderedWindows.first(where: {
+                    $0.isVisible && $0.alphaValue > 0 && $0.frame.contains(pointer)
+                }), frontmost === window else { return event }
+                window.makeKey()
+                return nil
+            }
+        }
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            if newWindow == nil { removeMonitor() }
+            super.viewWillMove(toWindow: newWindow)
+        }
+
+        private func removeMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
         }
     }
 }

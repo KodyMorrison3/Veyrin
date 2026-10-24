@@ -10,7 +10,13 @@ final class ProviderChatViewModel: ObservableObject {
     @Published private(set) var wasInterrupted = false
     /// Persona attached to subsequent requests. Changing it does not rewrite
     /// the visible transcript.
-    @Published private(set) var persona: Persona?
+    @Published private var transientPersona: Persona?
+    private var roleplayPersona: RoleplayPersonaContext?
+    var persona: Persona? {
+        if let roleplayPersona { return roleplayPersona.persona }
+        return transientPersona
+    }
+    @Published private(set) var character: LocalCharacter?
     let provider: any ChatProvider
     let model: String
     private var generation: Task<Void, Never>?
@@ -19,14 +25,35 @@ final class ProviderChatViewModel: ObservableObject {
     private var publication: Task<Void, Never>?
     private var retryMessage: String?
 
-    init(provider: any ChatProvider, model: String, persona: Persona? = nil) {
+    init(provider: any ChatProvider, model: String, persona: Persona? = nil, character: LocalCharacter? = nil) {
         self.provider = provider
         self.model = model
-        self.persona = persona
+        self.transientPersona = persona
+        self.character = character
+        seedGreeting()
+    }
+
+    /// A different character always starts a separate conversation. The view
+    /// confirms discarding an existing transcript before calling this method.
+    func setCharacter(_ character: LocalCharacter?) {
+        self.character = character
+        roleplayPersona?.setCharacter(character?.id)
+        newConversation()
+    }
+
+    private func seedGreeting() {
+        guard let greeting = character?.greeting,
+              !greeting.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        messages = [ProviderChatMessage(role: .assistant, content: greeting)]
     }
 
     func setPersona(_ persona: Persona?) {
-        self.persona = persona
+        self.transientPersona = persona
+    }
+
+    func usePersonaContext(_ context: RoleplayPersonaContext) {
+        roleplayPersona = context
+        context.setCharacter(character?.id)
     }
 
     func send(_ text: String) {
@@ -51,9 +78,9 @@ final class ProviderChatViewModel: ObservableObject {
         streamingText = ""
         pendingText = ""
         isGenerating = true
-        let history = persona.map {
-            [ProviderChatMessage(role: .system, content: $0.portableSystemPrompt)] + messages
-        } ?? messages
+        let prompts = [character?.characterPrompt, persona?.portableSystemPrompt].compactMap { $0 }
+        let history = prompts.isEmpty ? messages
+            : [ProviderChatMessage(role: .system, content: prompts.joined(separator: "\n\n"))] + messages
         let provider = provider
         let model = model
         generation = Task { [weak self] in
@@ -117,6 +144,7 @@ final class ProviderChatViewModel: ObservableObject {
     func newConversation() {
         cancel()
         messages = []
+        seedGreeting()
         errorMessage = nil
         wasInterrupted = false
         retryMessage = nil

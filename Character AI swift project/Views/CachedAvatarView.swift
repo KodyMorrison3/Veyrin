@@ -31,6 +31,49 @@ struct CachedAvatarView<Placeholder: View>: View {
     }
 }
 
+/// Imported images take priority over the account URL so portable personas
+/// still have their picture when Character.AI is unavailable.
+struct PersonaAvatarView: View {
+    let persona: Persona
+    var size: CGFloat = 26
+    @State private var embeddedImage: NSImage?
+    @State private var loadedData: Data?
+
+    var body: some View {
+        Group {
+            if let data = persona.avatarData {
+                Group {
+                    if let embeddedImage, loadedData == data {
+                        Image(nsImage: embeddedImage).resizable().scaledToFill()
+                    } else { placeholder }
+                }
+                .task(id: data) {
+                    embeddedImage = nil
+                    loadedData = nil
+                    let image = await ImageProcessing.decodedThumbnail(from: data, maxPixelSize: 160)
+                    guard !Task.isCancelled else { return }
+                    loadedData = data
+                    embeddedImage = image
+                }
+            } else {
+                CachedAvatarView(url: persona.avatarURL) { placeholder }
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .accessibilityHidden(true)
+    }
+
+    private var placeholder: some View {
+        ZStack {
+            Circle().fill(Color.caiPrimary.opacity(0.28))
+            Text(persona.displayName.prefix(1).uppercased())
+                .font(.system(size: size * 0.45, weight: .bold))
+                .foregroundStyle(Color.caiText)
+        }
+    }
+}
+
 /// Feed and Discover media through ImageCacheService, decoded at `maxPixelSize`.
 /// Keeps loading and failure as separate states so each can show its own content.
 struct CachedRemoteImage<Content: View, Placeholder: View, Failure: View>: View {

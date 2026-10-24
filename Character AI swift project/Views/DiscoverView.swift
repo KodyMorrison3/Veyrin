@@ -6,12 +6,15 @@ struct DiscoverView: View {
     @ObservedObject private var preferences = AppPreferences.shared
     @Environment(\.openSettings) private var openSettings
     let onSelectCharacter: (String) -> Void
+    private let characterService: CharacterService
+    @State private var savingCharacters = Set<String>()
 
     init(
         authStore: AuthStore,
         onSelectCharacter: @escaping (String) -> Void
     ) {
         self.onSelectCharacter = onSelectCharacter
+        characterService = CharacterService(httpClient: AuthenticatedHTTPClient(authStore: authStore))
         _viewModel = StateObject(wrappedValue: DiscoverViewModel(
             service: DiscoverService(authStore: authStore),
             searchService: CharacterSearchService(authStore: authStore),
@@ -382,13 +385,14 @@ struct DiscoverView: View {
     private func saveButton(_ character: DiscoverFeedCharacter) -> some View {
         let isSaved = library.containsCharacter(character.externalID)
         return Button {
-            do {
-                if isSaved, let id = character.externalID {
-                    try library.remove(id)
-                } else {
-                    try library.saveFromDiscover(character)
-                }
-            } catch { library.errorMessage = error.localizedDescription }
+            guard let id = character.externalID, savingCharacters.insert(id).inserted else { return }
+            Task {
+                defer { savingCharacters.remove(id) }
+                do {
+                    if isSaved { try library.remove(id) }
+                    else { try await library.saveFromDiscover(character, service: characterService) }
+                } catch { library.errorMessage = error.localizedDescription }
+            }
         } label: {
             Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
                 .font(.callout.weight(.semibold))
@@ -397,6 +401,7 @@ struct DiscoverView: View {
         }
         .buttonStyle(.bordered)
         .clipShape(Circle())
+        .disabled(savingCharacters.contains(character.externalID ?? ""))
         .help(isSaved ? "Remove from My Library" : "Save character to My Library")
         .accessibilityLabel(isSaved ? "Remove from My Library" : "Save character to My Library")
     }
@@ -404,13 +409,14 @@ struct DiscoverView: View {
     private func saveButton(_ result: CharacterSearchResult) -> some View {
         let isSaved = library.containsCharacter(result.externalID)
         return Button {
-            do {
-                if isSaved, let id = result.externalID {
-                    try library.remove(id)
-                } else {
-                    try library.saveFromDiscover(result)
-                }
-            } catch { library.errorMessage = error.localizedDescription }
+            guard let id = result.externalID, savingCharacters.insert(id).inserted else { return }
+            Task {
+                defer { savingCharacters.remove(id) }
+                do {
+                    if isSaved { try library.remove(id) }
+                    else { try await library.saveFromDiscover(result, service: characterService) }
+                } catch { library.errorMessage = error.localizedDescription }
+            }
         } label: {
             Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
                 .font(.callout.weight(.semibold))
@@ -419,6 +425,7 @@ struct DiscoverView: View {
         }
         .buttonStyle(.bordered)
         .clipShape(Circle())
+        .disabled(savingCharacters.contains(result.externalID ?? ""))
         .help(isSaved ? "Remove from My Library" : "Save character to My Library")
         .accessibilityLabel(isSaved ? "Remove from My Library" : "Save character to My Library")
     }

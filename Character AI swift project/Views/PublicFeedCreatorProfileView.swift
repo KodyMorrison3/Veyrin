@@ -8,7 +8,8 @@ struct PublicFeedCreatorProfileView: View {
         self.username = username
         _viewModel = StateObject(wrappedValue: UserProfileViewModel(
             service: UserProfileService(authStore: authStore),
-            username: username
+            username: username,
+            characterService: CharacterService(httpClient: AuthenticatedHTTPClient(authStore: authStore))
         ))
     }
 

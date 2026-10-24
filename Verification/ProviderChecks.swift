@@ -129,6 +129,168 @@ private func expectProviderError(_ expected: ProviderError, _ operation: () asyn
     catch let error as ProviderError { precondition(error == expected, "Expected \(expected), got \(error)") }
 }
 
+private actor PagedModelsTransport: ProviderHTTPTransport {
+    var requests: [URLRequest] = []
+    func consume(_ request: URLRequest, receive: @escaping @Sendable (Data) async throws -> Void) async throws {
+        requests.append(request)
+        let body = requests.count == 1
+            ? #"{"data":[{"id":"page-one"}],"has_more":true,"last_id":"page-one"}"#
+            : #"{"data":[{"id":"page-two"}],"has_more":false,"last_id":"page-two"}"#
+        try await receive(Data(body.utf8))
+    }
+}
+
+@MainActor
+private func runExtendedProviderChecks(transport: any ProviderHTTPTransport) async throws {
+    let claudeConfiguration = ProviderConfiguration(name: "Claude fixture", kind: .anthropic,
+                                                   endpoint: ProviderEndpoint.defaultAnthropic)
+    let responsesConfiguration = ProviderConfiguration(name: "Responses fixture", kind: .openAIResponses,
+                                                       endpoint: ProviderEndpoint.defaultOpenAI)
+    let claude = try TextChatProvider(configuration: claudeConfiguration, apiKey: "CLAUDE_FIXTURE", transport: transport)
+    let responses = try TextChatProvider(configuration: responsesConfiguration, apiKey: "OPENAI_FIXTURE", transport: transport)
+    let claudeSSE = """
+    event: message_start
+    data: {"type":"message_start","message":{"role":"assistant","content":[]}}
+
+    event: content_block_start
+    data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+    data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello 👋"}}
+
+    data: {"type":"ping"}
+
+    data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}
+
+    data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}
+
+    data: {"type":"message_stop"}
+
+
+    """
+    let responsesSSE = """
+    event: response.created
+    data: {"type":"response.created","response":{"status":"in_progress","output":[]}}
+
+    data: {"type":"response.output_item.added","item":{"type":"reasoning"}}
+
+    data: {"type":"response.reasoning_summary_text.delta","delta":"Not a visible reply"}
+
+    data: {"type":"response.output_item.added","item":{"type":"message"}}
+
+    data: {"type":"response.output_text.delta","delta":"Hello 👋"}
+
+    data: {"type":"response.output_text.delta","delta":" world"}
+
+    data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"reasoning"},{"type":"message"}]}}
+
+
+    """
+    let history = [ProviderChatMessage(role: .system, content: "Character instructions"),
+                   ProviderChatMessage(role: .assistant, content: "*An opening scene.*\n\nHello, {{user}}!"),
+                   ProviderChatMessage(role: .user, content: "Continue")]
+    for (provider, fixture) in [(claude, claudeSSE), (responses, responsesSSE)] {
+        let kind = provider.descriptor.kind
+        let events = ProviderEvents()
+        let parser = ProviderStreamParser(kind: kind) { await events.append($0) }
+        for byte in fixture.replacingOccurrences(of: "\n", with: "\r\n").utf8 {
+            try await parser.consume(Data([byte]))
+        }
+        try await parser.finish()
+        let values = await events.values
+        precondition(values == [.text("Hello 👋"), .text(" world"), .finished])
+        ProviderStubHTTP.configure(fixture)
+        let actualEvents = ProviderEvents()
+        try await provider.stream(model: "fixture-model", messages: history) { await actualEvents.append($0) }
+        let actual = await actualEvents.values
+        precondition(actual == values)
+        let request = ProviderStubHTTP.state.withLock { $0.requests[0] }
+        let body = ProviderStubHTTP.state.withLock { $0.bodies[0] }
+        let wire = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+        precondition(request.httpMethod == "POST" && wire["stream"] as? Bool == true)
+        if kind == .anthropic {
+            precondition(request.url?.absoluteString == "https://api.anthropic.com/v1/messages")
+            precondition(request.value(forHTTPHeaderField: "x-api-key") == "CLAUDE_FIXTURE")
+            precondition(request.value(forHTTPHeaderField: "Authorization") == nil)
+            precondition(request.value(forHTTPHeaderField: "anthropic-version") == "2023-06-01")
+            precondition(wire["system"] as? String == "Character instructions" && wire["max_tokens"] as? Int == 4096)
+            let turns = wire["messages"] as! [[String: String]]
+            precondition(turns.count == 3 && turns[0]["role"] == "user")
+            precondition(turns[1] == ["role": "assistant", "content": history[1].content])
+            precondition(turns[2] == ["role": "user", "content": "Continue"])
+        } else {
+            precondition(request.url?.absoluteString == "https://api.openai.com/v1/responses")
+            precondition(request.value(forHTTPHeaderField: "Authorization") == "Bearer OPENAI_FIXTURE")
+            precondition(wire["store"] as? Bool == false && wire["messages"] == nil)
+            let input = wire["input"] as! [[String: String]]
+            precondition(input == history.map { ["role": $0.role.rawValue, "content": $0.content] })
+        }
+        ProviderStubHTTP.configure(#"{"data":[{"id":"fixture-model"}],"has_more":false}"#)
+        let models = try await provider.models()
+        precondition(models.map(\.id) == ["fixture-model"])
+        for (status, error) in [(401, ProviderError.authentication), (403, .forbidden), (429, .rateLimited)] {
+            ProviderStubHTTP.configure("PRIVATE_KEY", status: status)
+            try await expectProviderError(error) { _ = try await provider.models() }
+        }
+        ProviderStubHTTP.configure(hold: true)
+        let task = Task { try await provider.stream(model: "fixture-model", messages: history) { _ in } }
+        try await providerEventually("Native provider request never started") { ProviderStubHTTP.state.withLock { !$0.requests.isEmpty } }
+        task.cancel()
+        do { try await task.value; preconditionFailure("Native stream cancellation lost") }
+        catch is CancellationError {}
+        try await providerEventually("Native HTTP task was not cancelled") { ProviderStubHTTP.state.withLock { $0.cancellations > 0 } }
+    }
+    let failures: [(ProviderKind, String, ProviderError)] = [
+        (.anthropic, #"{"type":"error","error":{"message":"PRIVATE"}}"#, .streamFailed),
+        (.anthropic, #"{"type":"content_block_start","content_block":{"type":"tool_use"}}"#, .unsupportedModel),
+        (.anthropic, #"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#, .unsupportedModel),
+        (.anthropic, #"{"type":"message_stop"}"#, .interrupted),
+        (.anthropic, #"{"type":"content_block_delta","delta":{"type":"text_delta","text":"partial"}}"#, .interrupted),
+        (.openAIResponses, #"{"type":"response.failed"}"#, .streamFailed),
+        (.openAIResponses, #"{"type":"response.incomplete"}"#, .interrupted),
+        (.openAIResponses, #"{"type":"response.refusal.delta","delta":"No"}"#, .streamFailed),
+        (.openAIResponses, #"{"type":"response.output_item.added","item":{"type":"function_call"}}"#, .unsupportedModel),
+        (.openAIResponses, #"{"type":"response.output_text.delta","delta":"partial"}"#, .interrupted),
+        (.openAIResponses, #"{"type":"response.completed","response":{"status":"completed","output":[]}}"#, .emptyResponse)
+    ]
+    for (kind, event, error) in failures {
+        let parser = ProviderStreamParser(kind: kind) { _ in }
+        try await expectProviderError(error) {
+            try await parser.consume(Data("data: \(event)\n\n".utf8))
+            try await parser.finish()
+        }
+    }
+    for kind in [ProviderKind.anthropic, .openAIResponses] {
+        let parser = ProviderStreamParser(kind: kind) { _ in }
+        try await expectProviderError(.invalidResponse) { try await parser.consume(Data("data: broken\n\n".utf8)) }
+        try await expectProviderError(.invalidCloudEndpoint) {
+            _ = try ProviderEndpoint.cloud("https://other.example.com/v1", kind: kind)
+        }
+    }
+    let pagedTransport = PagedModelsTransport()
+    let paged = try TextChatProvider(configuration: claudeConfiguration, apiKey: "FIXTURE", transport: pagedTransport)
+    let pagedModels = try await paged.models()
+    precondition(pagedModels.map(\.id) == ["page-one", "page-two"])
+    let pageRequests = await pagedTransport.requests
+    precondition(pageRequests.count == 2)
+    let query = URLComponents(url: pageRequests[1].url!, resolvingAgainstBaseURL: false)?.queryItems
+    precondition(query?.contains(URLQueryItem(name: "after_id", value: "page-one")) == true)
+
+    let suite = "NativeProviders.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let storage = ProviderTestStorage()
+    let store = ProviderStore(defaults: defaults, credentials: storage)
+    for configuration in [claudeConfiguration, responsesConfiguration] {
+        try store.save(configuration, newKey: "SYNTHETIC_KEY")
+        let restored = ProviderStore(defaults: defaults, credentials: storage)
+        let selected = ProviderSelection(kind: configuration.kind, configurationID: configuration.id, model: "fixture-model")
+        let provider = try restored.provider(for: selected)
+        precondition(provider.descriptor.kind == configuration.kind)
+        precondition(restored.configurations.contains(configuration))
+    }
+    print("Claude/Responses request contracts, typed SSE, errors, cancellation, model pagination and configuration persistence passed")
+}
+
 @MainActor
 func runProviderChecks() async throws {
     let transport = ProviderHTTPClient {
@@ -155,6 +317,20 @@ func runProviderChecks() async throws {
         catch is ProviderError {}
     }
     _ = try ProviderEndpoint.cloud("https://api.example.com/v1", kind: .openAICompatible)
+    let presetPaths = [
+        "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "groq": "https://api.groq.com/openai/v1/chat/completions",
+        "openrouter": "https://openrouter.ai/api/v1/chat/completions",
+        "cloudflare": "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1/chat/completions"
+    ]
+    precondition(ProviderPreset.freeCloud.count == presetPaths.count)
+    for preset in ProviderPreset.freeCloud {
+        let value = try preset.configuration.validated()
+        precondition(value.kind == .openAICompatible && value.model.isEmpty && !preset.note.isEmpty)
+        let base = try ProviderEndpoint.cloud(preset.endpoint, kind: value.kind)
+        precondition(base.appendingPathComponent("chat/completions").absoluteString == presetPaths[preset.id],
+                     "Preset \(preset.id) must hit its documented Chat Completions URL")
+    }
     try await expectProviderError(.invalidCloudEndpoint) {
         _ = try ProviderEndpoint.cloud("https://other.example.com/v1", kind: .openAI)
     }
@@ -413,5 +589,6 @@ func runProviderChecks() async throws {
             }
         }
     }
+    try await runExtendedProviderChecks(transport: transport)
     print("Provider endpoints, credentials, model discovery, NDJSON/SSE framing/errors, HTTP cancellation, selection/restoration, session gates, switching/retry and native layout checks passed")
 }

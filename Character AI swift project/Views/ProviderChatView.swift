@@ -3,10 +3,21 @@ import SwiftUI
 struct ProviderChatView: View {
     @ObservedObject var viewModel: ProviderChatViewModel
     @ObservedObject var accountPersonas: PersonaStore
-    @StateObject private var localPersonas = LocalPersonaStore.shared
+    @StateObject private var roleplayPersona: RoleplayPersonaContext
+    @StateObject private var library = LocalCharacterLibrary.shared
+    @State private var pendingCharacter: LocalCharacter?
+    @State private var confirmingCharacterChange = false
     let onSwitch: () -> Void
     @State private var draft = ""
     @FocusState private var focused: Bool
+
+    init(viewModel: ProviderChatViewModel, accountPersonas: PersonaStore, onSwitch: @escaping () -> Void) {
+        self.viewModel = viewModel
+        self.accountPersonas = accountPersonas
+        self.onSwitch = onSwitch
+        _roleplayPersona = StateObject(wrappedValue: RoleplayPersonaContext(characterID: viewModel.character?.id,
+                                                                          account: accountPersonas))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -63,7 +74,7 @@ struct ProviderChatView: View {
             .padding(20)
         }
         .background { ShellEnvironmentalBackground().ignoresSafeArea() }
-        .navigationTitle(viewModel.provider.descriptor.name)
+        .navigationTitle(viewModel.character?.name ?? viewModel.provider.descriptor.name)
         .navigationSubtitle(viewModel.model)
         .toolbar {
             ToolbarItem(placement: .navigation) {
@@ -78,51 +89,59 @@ struct ProviderChatView: View {
             ToolbarItem {
                 Menu {
                     Button {
-                        viewModel.setPersona(nil)
+                        chooseCharacter(nil)
                     } label: {
-                        if viewModel.persona == nil {
-                            Label("No Persona", systemImage: "checkmark")
-                        } else {
-                            Text("No Persona")
-                        }
+                        if viewModel.character == nil { Label("No Character", systemImage: "checkmark") }
+                        else { Text("No Character") }
                     }
-                    if !localPersonas.personas.isEmpty {
-                        Section("Imported") {
-                            ForEach(localPersonas.personas) { persona in
-                                personaButton(persona)
+                    Section("Saved Characters") {
+                        if library.characters.isEmpty {
+                            Text("Save characters from Character.AI → My Library first.")
+                        }
+                        ForEach(library.characters) { character in
+                            Button { chooseCharacter(character) } label: {
+                                if viewModel.character?.id == character.id {
+                                    Label(character.name, systemImage: "checkmark")
+                                } else { Text(character.name) }
                             }
                         }
                     }
-                    if !accountPersonas.personas.isEmpty {
-                        Section("Character.AI") {
-                            ForEach(accountPersonas.personas) { persona in
-                                personaButton(persona)
-                            }
-                        }
-                    }
-                    Divider()
-                    SettingsLink { Label("Manage Personas…", systemImage: "gearshape") }
                 } label: {
-                    Label(viewModel.persona?.displayName ?? "Persona",
-                          systemImage: viewModel.persona == nil ? "person.crop.rectangle" : "person.crop.rectangle.fill")
+                    Label(viewModel.character?.name ?? "Character", systemImage: "theatermasks")
                 }
-                .help(viewModel.persona.map { "Persona: \($0.displayName)" } ?? "Attach a persona")
+                .disabled(viewModel.isGenerating)
+                .help("Choose a saved character and start with its greeting")
+            }
+            ToolbarItem {
+                RoleplayPersonaControl(context: roleplayPersona, isGenerating: viewModel.isGenerating)
             }
             ToolbarItem { SettingsLink { Label("Settings", systemImage: "gearshape") } }
         }
-        .onAppear { focused = true }
+        .confirmationDialog("Start a new conversation with this character?", isPresented: $confirmingCharacterChange,
+                            titleVisibility: .visible) {
+            Button("Start New Conversation") {
+                viewModel.setCharacter(pendingCharacter)
+                pendingCharacter = nil
+            }
+            Button("Cancel", role: .cancel) { pendingCharacter = nil }
+        } message: {
+            Text("The current in-memory chat will be discarded. Saved local-character history is not changed, and nothing is sent until you send a message.")
+        }
+        .onAppear {
+            viewModel.usePersonaContext(roleplayPersona)
+            focused = true
+        }
+        .onChange(of: viewModel.character?.id) { roleplayPersona.setCharacter(viewModel.character?.id) }
         .onDisappear { viewModel.cancel() }
     }
 
-    private func personaButton(_ persona: Persona) -> some View {
-        Button {
-            viewModel.setPersona(persona)
-        } label: {
-            if viewModel.persona?.id == persona.id {
-                Label(persona.displayName, systemImage: "checkmark")
-            } else {
-                Text(persona.displayName)
-            }
+    private func chooseCharacter(_ character: LocalCharacter?) {
+        guard character?.id != viewModel.character?.id else { return }
+        if viewModel.messages.contains(where: { $0.role == .user }) {
+            pendingCharacter = character
+            confirmingCharacterChange = true
+        } else {
+            viewModel.setCharacter(character)
         }
     }
 
@@ -136,7 +155,7 @@ struct ProviderChatView: View {
         HStack(alignment: .top) {
             if user { Spacer(minLength: 40) }
             VStack(alignment: .leading, spacing: 5) {
-                Text(user ? "You" : viewModel.provider.descriptor.name).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text(user ? "You" : (viewModel.character?.name ?? viewModel.provider.descriptor.name)).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 CharacterMessageFormattingView(content: content, expandsToFill: false, isStreaming: streaming)
                     .textSelection(.enabled)
                     .padding(.horizontal, 16).padding(.vertical, 12)

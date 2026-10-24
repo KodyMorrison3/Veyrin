@@ -98,13 +98,13 @@ struct LocalOllamaService {
         }
     }
 
-    func reply(model: String, character: LocalCharacter, messages: [LocalChatMessage]) async throws -> String {
+    func reply(model: String, character: LocalCharacter, messages: [LocalChatMessage], persona: Persona? = nil) async throws -> String {
         let history = messages.suffix(24).map { message in
             OllamaMessage(role: message.role, content: message.content)
         }
         let body = OllamaChatRequest(
             model: model,
-            messages: [OllamaMessage(role: "system", content: character.characterPrompt)] + history,
+            messages: [OllamaMessage(role: "system", content: [character.characterPrompt, persona?.portableSystemPrompt].compactMap { $0 }.joined(separator: "\n\n"))] + history,
             stream: false
         )
         var request = URLRequest(url: baseURL.appendingPathComponent("api/chat"))

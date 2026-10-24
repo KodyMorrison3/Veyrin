@@ -13,6 +13,7 @@ struct LocalCharacterChatView: View {
     @State private var generationTask: Task<Void, Never>?
     @State private var modelsTask: Task<Void, Never>?
     @FocusState private var composerFocused: Bool
+    @StateObject private var roleplayPersona: RoleplayPersonaContext
     @ObservedObject private var environmentalPaletteStore = EnvironmentalPaletteStore.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -20,6 +21,11 @@ struct LocalCharacterChatView: View {
     private var isDark: Bool { colorScheme == .dark }
 
     let character: LocalCharacter
+
+    init(character: LocalCharacter, accountPersonas: PersonaStore) {
+        self.character = character
+        _roleplayPersona = StateObject(wrappedValue: RoleplayPersonaContext(characterID: character.id, account: accountPersonas))
+    }
 
     private func ollama() throws -> LocalOllamaService {
         try LocalOllamaService(startsApplicationWhenUnavailable: preferences.startOllamaAutomatically)
@@ -86,6 +92,7 @@ struct LocalCharacterChatView: View {
             catch { errorMessage = error.localizedDescription }
             await loadModels()
         }
+        .onChange(of: character.id) { roleplayPersona.setCharacter(character.id) }
         .onDisappear {
             generationTask?.cancel()
             modelsTask?.cancel()
@@ -255,6 +262,9 @@ struct LocalCharacterChatView: View {
             .help(models.isEmpty ? "Retry local Ollama" : "Model: \(selectedModel)")
             .accessibilityLabel(models.isEmpty ? "Retry Ollama" : "Select local model, currently \(selectedModel)")
 
+            RoleplayPersonaControl(context: roleplayPersona, isGenerating: isGenerating)
+                .buttonStyle(.borderless)
+
             if isGenerating {
                 HStack(spacing: 8) {
                     ProgressView()
@@ -338,7 +348,8 @@ struct LocalCharacterChatView: View {
             conversation = current
             isGenerating = true
             defer { isGenerating = false }
-            let answer = try await ollama().reply(model: selectedModel, character: character, messages: current.messages)
+            let answer = try await ollama().reply(model: selectedModel, character: character, messages: current.messages,
+                                                  persona: roleplayPersona.persona)
             try Task.checkCancellation()
             try library.append(LocalChatMessage(role: "assistant", content: answer), characterID: character.id)
             conversation = library.conversations[character.id]

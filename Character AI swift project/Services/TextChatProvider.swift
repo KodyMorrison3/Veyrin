@@ -27,10 +27,37 @@ nonisolated struct TextChatProvider: ChatProvider {
     }
 
     func models() async throws -> [ModelDescriptor] {
-        var request = request(path: descriptor.kind == .ollama ? "api/tags" : "models")
-        request.timeoutInterval = descriptor.kind == .ollama ? 5 : 20
-        let data = try await transport.data(request)
-        return try await Self.decodeModels(data, local: descriptor.kind == .ollama)
+        var names: [ModelDescriptor] = []
+        var cursor: String?
+        var seenCursors = Set<String>()
+        for _ in 0..<20 {
+            var request = request(path: descriptor.kind == .ollama ? "api/tags" : "models")
+            if descriptor.kind == .anthropic {
+                guard let url = request.url,
+                      var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                    throw ProviderError.invalidEndpoint
+                }
+                components.queryItems = [URLQueryItem(name: "limit", value: "100")]
+                    + (cursor.map { [URLQueryItem(name: "after_id", value: $0)] } ?? [])
+                request.url = components.url
+            }
+            request.timeoutInterval = descriptor.kind == .ollama ? 5 : 20
+            let data = try await transport.data(request)
+            names += try await Self.decodeModels(data, local: descriptor.kind == .ollama)
+            guard names.count <= 2000 else { throw ProviderError.responseTooLarge }
+            if descriptor.kind != .anthropic { return names }
+            let page: CloudModels
+            do { page = try JSONDecoder().decode(CloudModels.self, from: data) }
+            catch { throw ProviderError.invalidResponse }
+            if page.has_more != true {
+                return Set(names.map(\.id)).sorted().map { ModelDescriptor(id: $0) }
+            }
+            guard let next = page.last_id, !next.isEmpty, seenCursors.insert(next).inserted else {
+                throw ProviderError.invalidResponse
+            }
+            cursor = next
+        }
+        throw ProviderError.responseTooLarge
     }
 
     @concurrent private static func decodeModels(_ data: Data, local: Bool) async throws -> [ModelDescriptor] {
@@ -52,13 +79,20 @@ nonisolated struct TextChatProvider: ChatProvider {
               messages.reduce(0, { $0 + $1.content.utf8.count }) <= 2 * 1024 * 1024 else {
             throw ProviderError.responseTooLarge
         }
-        let local = descriptor.kind == .ollama
-        var request = request(path: local ? "api/chat" : "chat/completions")
+        let kind = descriptor.kind
+        let local = kind == .ollama
+        let path = switch kind {
+        case .ollama: "api/chat"
+        case .anthropic: "messages"
+        case .openAIResponses: "responses"
+        default: "chat/completions"
+        }
+        var request = request(path: path)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(local ? "application/x-ndjson" : "text/event-stream", forHTTPHeaderField: "Accept")
-        request.httpBody = try await Self.encode(model: model, messages: messages)
-        let parser = ProviderStreamParser(local: local, receive: receive)
+        request.httpBody = try await Self.encode(model: model, messages: messages, kind: kind)
+        let parser = ProviderStreamParser(kind: kind, receive: receive)
         try await transport.consume(request) { try await parser.consume($0) }
         try await parser.finish()
     }
@@ -67,28 +101,67 @@ nonisolated struct TextChatProvider: ChatProvider {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.timeoutInterval = descriptor.kind == .ollama ? 180 : 60
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let apiKey { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+        if let apiKey {
+            if descriptor.kind == .anthropic {
+                request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            } else {
+                request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            }
+        }
         return request
     }
 
-    @concurrent private static func encode(model: String, messages: [ProviderChatMessage]) async throws -> Data {
-        try JSONEncoder().encode(ChatRequest(model: model, messages: messages.map {
-            WireMessage(role: $0.role.rawValue, content: $0.content)
-        }, stream: true))
+    @concurrent private static func encode(model: String, messages: [ProviderChatMessage], kind: ProviderKind) async throws -> Data {
+        let wire = messages.map { WireMessage(role: $0.role.rawValue, content: $0.content) }
+        if kind == .openAIResponses {
+            return try JSONEncoder().encode(ResponsesRequest(model: model, input: wire))
+        }
+        if kind == .anthropic {
+            let system = messages.filter { $0.role == .system }.map(\.content).joined(separator: "\n\n")
+            var turns = wire.filter { $0.role != "system" }
+            // Anthropic conversations start with a user turn. Preserve a saved
+            // character's greeting as assistant history rather than system text.
+            if turns.first?.role == "assistant" {
+                turns.insert(WireMessage(role: "user", content: "Begin with the supplied character opening message."), at: 0)
+            }
+            return try JSONEncoder().encode(AnthropicRequest(model: model, messages: turns,
+                                                             system: system.isEmpty ? nil : system))
+        }
+        return try JSONEncoder().encode(ChatRequest(model: model, messages: wire, stream: true))
     }
 
     private struct LocalModels: Decodable { let models: [LocalModel] }
     private struct LocalModel: Decodable { let name: String }
-    private struct CloudModels: Decodable { let data: [CloudModel] }
+    private struct CloudModels: Decodable {
+        let data: [CloudModel]
+        let has_more: Bool?
+        let last_id: String?
+    }
     private struct CloudModel: Decodable { let id: String }
     private struct WireMessage: Encodable { let role: String; let content: String }
     private struct ChatRequest: Encodable { let model: String; let messages: [WireMessage]; let stream: Bool }
+    private struct ResponsesRequest: Encodable {
+        let model: String
+        let input: [WireMessage]
+        let stream = true
+        let store = false
+    }
+    private struct AnthropicRequest: Encodable {
+        let model: String
+        let messages: [WireMessage]
+        let system: String?
+        let max_tokens = 4096
+        let stream = true
+    }
 }
 
 /// Bytes are framed before UTF-8 decoding so split Unicode and CRLF boundaries
 /// cannot corrupt text. EOF is never silently treated as successful generation.
 actor ProviderStreamParser {
-    private let local: Bool
+    private let kind: ProviderKind
+    private var local: Bool { kind == .ollama }
+    private var anthropicStopped = false
     private let receive: @Sendable (ChatStreamEvent) async throws -> Void
     private var line = Data()
     private var eventData: [String] = []
@@ -99,7 +172,12 @@ actor ProviderStreamParser {
     private var bytes = 0
 
     init(local: Bool, receive: @escaping @Sendable (ChatStreamEvent) async throws -> Void) {
-        self.local = local
+        self.kind = local ? .ollama : .openAI
+        self.receive = receive
+    }
+
+    init(kind: ProviderKind, receive: @escaping @Sendable (ChatStreamEvent) async throws -> Void) {
+        self.kind = kind
         self.receive = receive
     }
 
@@ -149,6 +227,10 @@ actor ProviderStreamParser {
             let event = eventData.joined(separator: "\n")
             eventData.removeAll(keepingCapacity: true)
             eventBytes = 0
+            if kind == .anthropic || kind == .openAIResponses {
+                try await processNativeEvent(event)
+                return
+            }
             if event == "[DONE]" { try await complete(); return }
             let value: CloudChunk
             do { value = try JSONDecoder().decode(CloudChunk.self, from: Data(event.utf8)) }
@@ -176,6 +258,88 @@ actor ProviderStreamParser {
             eventBytes += value.utf8.count
             guard eventBytes <= 256 * 1024 else { throw ProviderError.responseTooLarge }
             eventData.append(value)
+        }
+    }
+
+    private func processNativeEvent(_ event: String) async throws {
+        let value: NativeEvent
+        do { value = try JSONDecoder().decode(NativeEvent.self, from: Data(event.utf8)) }
+        catch { throw ProviderError.invalidResponse }
+        if value.type == "error" { throw ProviderError.streamFailed }
+        if kind == .anthropic {
+            switch value.type {
+            case "content_block_start":
+                guard let block = value.content_block else { throw ProviderError.invalidResponse }
+                guard ["text", "thinking", "redacted_thinking"].contains(block.type) else { throw ProviderError.unsupportedModel }
+                if block.type == "text", let text = block.text { try await emitText(text) }
+            case "content_block_delta":
+                guard let delta = value.delta else { throw ProviderError.invalidResponse }
+                if delta.type == "text_delta" {
+                    guard let text = delta.text else { throw ProviderError.invalidResponse }
+                    try await emitText(text)
+                } else if !["thinking_delta", "signature_delta", "citations_delta"].contains(delta.type) {
+                    throw ProviderError.unsupportedModel
+                }
+            case "message_delta":
+                guard let reason = value.delta?.stop_reason else { throw ProviderError.invalidResponse }
+                guard ["end_turn", "max_tokens", "stop_sequence"].contains(reason) else { throw ProviderError.unsupportedModel }
+                anthropicStopped = true
+            case "message_stop":
+                guard anthropicStopped else { throw ProviderError.interrupted }
+                try await complete()
+            default: break // Lifecycle, usage and ping events are not reply text.
+            }
+        } else {
+            switch value.type {
+            case "response.output_text.delta":
+                guard let text = value.textDelta else { throw ProviderError.invalidResponse }
+                try await emitText(text)
+            case "response.output_item.added", "response.output_item.done":
+                guard let item = value.item else { throw ProviderError.invalidResponse }
+                guard ["message", "reasoning"].contains(item.type) else { throw ProviderError.unsupportedModel }
+            case "response.refusal.delta", "response.refusal.done", "response.failed":
+                throw ProviderError.streamFailed
+            case "response.incomplete": throw ProviderError.interrupted
+            case "response.completed":
+                guard let response = value.response, response.status == "completed" else { throw ProviderError.invalidResponse }
+                guard response.output.allSatisfy({ ["message", "reasoning"].contains($0.type) }) else {
+                    throw ProviderError.unsupportedModel
+                }
+                try await complete()
+            default: break // Reasoning/lifecycle metadata is not visible text.
+            }
+        }
+    }
+
+    private func emitText(_ text: String) async throws {
+        if !text.isEmpty { sawText = true; try await receive(.text(text)) }
+    }
+
+    private struct NativeEvent: Decodable {
+        struct Block: Decodable { let type: String; let text: String? }
+        struct Delta: Decodable { let type: String?; let text: String?; let stop_reason: String? }
+        struct Response: Decodable { let status: String; let output: [Block] }
+        let type: String
+        let content_block: Block?
+        let item: Block?
+        let response: Response?
+        let delta: Delta?
+        let textDelta: String?
+
+        enum CodingKeys: String, CodingKey { case type, content_block, item, response, delta }
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            type = try container.decode(String.self, forKey: .type)
+            content_block = try container.decodeIfPresent(Block.self, forKey: .content_block)
+            item = try container.decodeIfPresent(Block.self, forKey: .item)
+            response = try container.decodeIfPresent(Response.self, forKey: .response)
+            if type == "response.output_text.delta" {
+                textDelta = try container.decode(String.self, forKey: .delta)
+                delta = nil
+            } else {
+                textDelta = nil
+                delta = type.hasPrefix("response.") ? nil : try container.decodeIfPresent(Delta.self, forKey: .delta)
+            }
         }
     }
 
