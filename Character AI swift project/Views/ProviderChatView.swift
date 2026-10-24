@@ -19,63 +19,77 @@ struct ProviderChatView: View {
                                                                           account: accountPersonas))
     }
 
+    private var displayName: String {
+        viewModel.character?.name ?? viewModel.provider.descriptor.name
+    }
+
+    private var isSendDisabled: Bool {
+        viewModel.isGenerating || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 18) {
-                        if viewModel.messages.isEmpty {
-                            ContentUnavailableView("Start a Conversation", systemImage: "bubble.left.and.bubble.right",
-                                                   description: Text("Messages go only to \(viewModel.provider.descriptor.name). This chat is kept in memory until you start a new chat, switch providers or close the window."))
-                                .frame(maxWidth: .infinity, minHeight: 280)
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 16) {
+                            // Clear spacer so the first message scrolls under the floating header.
+                            Color.clear
+                                .frame(height: 52)
+
+                            if viewModel.messages.isEmpty {
+                                ContentUnavailableView("Start a Conversation", systemImage: "bubble.left.and.bubble.right",
+                                                       description: Text("Messages go only to \(viewModel.provider.descriptor.name). This chat is kept in memory until you start a new chat, switch providers or close the window."))
+                                    .frame(maxWidth: .infinity, minHeight: 280)
+                            }
+                            ForEach(viewModel.messages) { message in
+                                row(message.content, user: message.role == .user, streaming: false).id(message.id)
+                            }
+                            if viewModel.isGenerating {
+                                row(viewModel.streamingText.isEmpty ? "…" : viewModel.streamingText, user: false, streaming: true)
+                            }
+                            Color.clear.frame(height: 1).id("bottom")
                         }
-                        ForEach(viewModel.messages) { message in
-                            row(message.content, user: message.role == .user, streaming: false).id(message.id)
-                        }
-                        if viewModel.isGenerating {
-                            row(viewModel.streamingText.isEmpty ? "…" : viewModel.streamingText, user: false, streaming: true)
-                        }
-                        Color.clear.frame(height: 1).id("bottom")
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 16)
+                        .frame(maxWidth: GlassMetrics.contentWidth)
+                        .frame(maxWidth: .infinity)
                     }
-                    .padding(24)
-                    .frame(maxWidth: GlassMetrics.contentWidth)
-                    .frame(maxWidth: .infinity)
+                    .scrollEdgeEffectHidden()
+                    .onChange(of: viewModel.messages.count) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    .onChange(of: viewModel.streamingText) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
-                .onChange(of: viewModel.messages.count) { proxy.scrollTo("bottom", anchor: .bottom) }
-                .onChange(of: viewModel.streamingText) { proxy.scrollTo("bottom", anchor: .bottom) }
-            }
-            if let error = viewModel.errorMessage {
-                Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red).padding(.horizontal, 24)
-            }
-            if viewModel.wasInterrupted {
-                HStack {
-                    Text("Response interrupted. Partial text has been kept.").font(.caption).foregroundStyle(.secondary)
-                    Button("Retry Response") { viewModel.retry() }.disabled(viewModel.isGenerating)
-                }.padding(8)
-            }
-            HStack(alignment: .bottom, spacing: 12) {
-                TextField("Message \(viewModel.provider.descriptor.name)…", text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...6)
-                    .focused($focused)
-                    .disabled(viewModel.isGenerating)
-                    .onSubmit(send)
-                if viewModel.isGenerating {
-                    Button("Stop", systemImage: "stop.fill") { viewModel.cancel() }
-                        .keyboardShortcut(".", modifiers: .command)
-                } else {
-                    Button("Send", systemImage: "arrow.up") { send() }
-                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                if let error = viewModel.errorMessage {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: min(GlassMetrics.contentWidth, 680), alignment: .leading)
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 4)
                 }
+                if viewModel.wasInterrupted {
+                    HStack(spacing: 8) {
+                        Text("Response interrupted. Partial text has been kept.")
+                            .font(.caption)
+                            .foregroundStyle(Color.caiMuted)
+                        Button("Retry Response") { viewModel.retry() }
+                            .disabled(viewModel.isGenerating)
+                    }
+                    .frame(maxWidth: min(GlassMetrics.contentWidth, 680), alignment: .leading)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 4)
+                }
+
+                composer
             }
-            .padding(14)
-            .glassSurface(.characterHeader, cornerRadius: GlassMetrics.composerRadius, isFocused: focused)
-            .frame(maxWidth: min(GlassMetrics.contentWidth, 680))
-            .padding(20)
+
+            floatingHeader
+                .padding(.top, 10)
         }
         .background { ShellEnvironmentalBackground().ignoresSafeArea() }
-        .navigationTitle(viewModel.character?.name ?? viewModel.provider.descriptor.name)
-        .navigationSubtitle(viewModel.model)
+        // The floating pill carries the identity; a title here would duplicate it.
+        .navigationTitle(Text(verbatim: ""))
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button("Switch Provider", systemImage: "arrow.triangle.swap") {
@@ -112,9 +126,6 @@ struct ProviderChatView: View {
                 .disabled(viewModel.isGenerating)
                 .help("Choose a saved character and start with its greeting")
             }
-            ToolbarItem {
-                RoleplayPersonaControl(context: roleplayPersona, isGenerating: viewModel.isGenerating)
-            }
             ToolbarItem { SettingsLink { Label("Settings", systemImage: "gearshape") } }
         }
         .confirmationDialog("Start a new conversation with this character?", isPresented: $confirmingCharacterChange,
@@ -135,6 +146,102 @@ struct ProviderChatView: View {
         .onDisappear { viewModel.cancel() }
     }
 
+    private var floatingHeader: some View {
+        HStack(spacing: 10) {
+            headerAvatar
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(displayName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.caiText)
+                    .lineLimit(1)
+                Text(viewModel.model)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.caiMuted)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 10)
+        .padding(.vertical, 6)
+        .frame(height: 44)
+        // The pill hugs the identity instead of stretching across the window.
+        .fixedSize(horizontal: true, vertical: false)
+        .glassSurface(.characterHeader, cornerRadius: 22)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(displayName), \(viewModel.model)")
+    }
+
+    private var headerAvatar: some View {
+        Group {
+            if let fileName = viewModel.character?.avatarFileName,
+               let url = CharacterImageURL.makeURL(avatarFileName: fileName) {
+                CachedAvatarView(url: url) { headerFallbackAvatar }
+            } else {
+                headerFallbackAvatar
+            }
+        }
+        .frame(width: 28, height: 28)
+        .clipShape(Circle())
+        .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
+    }
+
+    private var headerFallbackAvatar: some View {
+        ZStack {
+            Circle().fill(Color.caiPrimary.opacity(0.28))
+            Image(systemName: viewModel.character == nil ? "cloud" : "person.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.caiText)
+        }
+    }
+
+    private var composer: some View {
+        HStack(alignment: .center, spacing: 8) {
+            RoleplayPersonaControl(context: roleplayPersona, isGenerating: viewModel.isGenerating)
+                .buttonStyle(.borderless)
+
+            TextField("Message \(displayName)…", text: $draft, axis: .vertical)
+                .lineLimit(1...4)
+                .font(.system(size: 14))
+                .textFieldStyle(.plain)
+                .foregroundStyle(Color.caiText)
+                .focused($focused)
+                .disabled(viewModel.isGenerating)
+                .onSubmit(send)
+
+            if viewModel.isGenerating {
+                Button { viewModel.cancel() } label: {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: GlassMetrics.sendDiameter, height: GlassMetrics.sendDiameter)
+                }
+                .buttonStyle(SendCircleButtonStyle())
+                .keyboardShortcut(".", modifiers: .command)
+                .accessibilityLabel("Stop generating")
+            } else {
+                Button { send() } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: GlassMetrics.sendDiameter, height: GlassMetrics.sendDiameter)
+                }
+                .buttonStyle(SendCircleButtonStyle())
+                .disabled(isSendDisabled)
+                .keyboardShortcut(.return, modifiers: [])
+                .accessibilityLabel("Send message")
+                .opacity(isSendDisabled ? 0.40 : 1)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(minHeight: GlassMetrics.composerHeight)
+        .glassSurface(.characterHeader, cornerRadius: GlassMetrics.composerRadius, isFocused: focused)
+        .frame(maxWidth: min(GlassMetrics.contentWidth, 680))
+        .padding(.horizontal, 24)
+        .padding(.top, 4)
+        .padding(.bottom, 16)
+    }
+
     private func chooseCharacter(_ character: LocalCharacter?) {
         guard character?.id != viewModel.character?.id else { return }
         if viewModel.messages.contains(where: { $0.role == .user }) {
@@ -146,23 +253,70 @@ struct ProviderChatView: View {
     }
 
     private func send() {
-        guard !viewModel.isGenerating, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !isSendDisabled else { return }
         viewModel.send(draft)
         draft = ""
     }
 
+    /// Mirrors MessageView: the assistant gets an avatar and name, the user just
+    /// gets a right-aligned bubble, and both share the same glass shape.
     private func row(_ content: String, user: Bool, streaming: Bool) -> some View {
-        HStack(alignment: .top) {
+        HStack(alignment: .top, spacing: 10) {
             if user { Spacer(minLength: 40) }
-            VStack(alignment: .leading, spacing: 5) {
-                Text(user ? "You" : (viewModel.character?.name ?? viewModel.provider.descriptor.name)).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+
+            if !user { avatar }
+
+            VStack(alignment: .leading, spacing: 4) {
+                if !user {
+                    Text(displayName)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.caiText)
+                        .padding(.leading, 4)
+                }
                 CharacterMessageFormattingView(content: content, expandsToFill: false, isStreaming: streaming)
+                    .font(.system(size: 14))
                     .textSelection(.enabled)
-                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
                     .glassSurface(user ? .userMessage : .characterMessage, cornerRadius: GlassMetrics.messageRadius)
+                    .foregroundStyle(Color.caiText)
+                    .clipShape(RoundedRectangle(cornerRadius: GlassMetrics.messageRadius, style: .continuous))
+                    .contextMenu {
+                        Button("Copy Message", systemImage: "doc.on.doc") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(content, forType: .string)
+                        }
+                    }
             }
-            .frame(maxWidth: 560, alignment: user ? .trailing : .leading)
+            .frame(maxWidth: user ? 480 : 520, alignment: user ? .trailing : .leading)
+
             if !user { Spacer(minLength: 40) }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2)
+        .transition(.opacity)
+    }
+
+    private var avatar: some View {
+        Group {
+            if let fileName = viewModel.character?.avatarFileName,
+               let url = CharacterImageURL.makeURL(avatarFileName: fileName) {
+                CachedAvatarView(url: url) { fallbackAvatar }
+            } else {
+                fallbackAvatar
+            }
+        }
+        .frame(width: 32, height: 32)
+        .clipShape(Circle())
+        .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
+    }
+
+    private var fallbackAvatar: some View {
+        ZStack {
+            Circle().fill(Color.caiPrimary.opacity(0.28))
+            Text(displayName.prefix(1).uppercased())
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.caiText)
         }
     }
 }
