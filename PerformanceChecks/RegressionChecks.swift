@@ -281,6 +281,27 @@ nonisolated final class CheckProtocol: URLProtocol, @unchecked Sendable {
         precondition(values.0 == values.1 && loads.value == 1)
         print("PASS cache freshness/stale distinction, invalidation, concurrent deduplication")
 
+        let bounded = ResourceCache(countLimit: 2, costLimit: 10, now: { clock })
+        bounded.insert("one", for: "one", ttl: 10, cost: 4)
+        bounded.insert("two", for: "two", ttl: 10, cost: 4)
+        precondition(bounded.cached("one", as: String.self) == "one")
+        bounded.insert("three", for: "three", ttl: 10, cost: 4)
+        precondition(bounded.count == 2 && bounded.totalCost == 8)
+        precondition(bounded.cached("two", as: String.self) == nil,
+                     "The least recently used entry must go first")
+        bounded.insert("too large", for: "oversized", ttl: 10, cost: 11)
+        precondition(bounded.count == 2 && bounded.cached("oversized", as: String.self) == nil)
+        bounded.update("one", as: String.self, cost: { _ in 11 }) { $0 + " updated" }
+        precondition(bounded.cached("one", as: String.self) == nil && bounded.totalCost == 4)
+        clock.addTimeInterval(11)
+        precondition(bounded.cached("three", as: String.self, requireFresh: true) == nil)
+        precondition(bounded.cached("three", as: String.self) == "three")
+        clock.addTimeInterval(300)
+        precondition(bounded.cached("three", as: String.self) == nil && bounded.totalCost == 0)
+        bounded.clear()
+        precondition(bounded.count == 0 && bounded.pendingCount == 0 && bounded.totalCost == 0)
+        print("PASS cache LRU/count/cost eviction, oversized bypass/update, expiry and clear accounting")
+
         // Discovery, feed, curated lists, and profile caching checks
         CheckProtocol.reset()
         let discoverService = DiscoverService(session: transport, authStore: auth)

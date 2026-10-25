@@ -15,10 +15,15 @@ final class LocalPersonaStore: ObservableObject {
     private let catalogueURL: URL
     private let imageCache: ImageCacheService
     private var storageIsAvailable = true
+    private var mutationInProgress = false
+    private var mutationWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(supportDirectory: URL? = nil, imageCache: ImageCacheService = .shared) {
         self.imageCache = imageCache
+        let environmentRoot = ProcessInfo.processInfo.environment["VEYRIN_SUPPORT_DIRECTORY"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
         let support = supportDirectory
+            ?? environmentRoot
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
                 .appendingPathComponent("Veyrin", isDirectory: true)
             ?? FileManager.default.homeDirectoryForCurrentUser
@@ -36,6 +41,8 @@ final class LocalPersonaStore: ObservableObject {
         let data = try Data(contentsOf: url)
         // Image decoding happens off the main actor; a whole library can be slow.
         let parsed = try await PersonaTransfer.parseAll(data: data, filename: url.lastPathComponent)
+        try await acquireMutation()
+        defer { releaseMutation() }
         var merged = Dictionary(personas.map { ($0.externalID, $0) }, uniquingKeysWith: { _, last in last })
         for persona in parsed {
             var updated = persona
@@ -57,6 +64,8 @@ final class LocalPersonaStore: ObservableObject {
 
     func delete(_ persona: Persona) async throws {
         guard storageIsAvailable else { throw LocalPersonaStoreError.storageUnavailable }
+        try await acquireMutation()
+        defer { releaseMutation() }
         let next = personas.filter { $0.externalID != persona.externalID }
         try await write(next)
         personas = next
@@ -123,6 +132,24 @@ final class LocalPersonaStore: ObservableObject {
             storageIsAvailable = false
             errorMessage = LocalPersonaStoreError.storageUnavailable.localizedDescription
         }
+    }
+
+    // MainActor can re-enter while the file is encoded off-main. Hold the
+    // mutation slot through publication so the next caller sees committed data.
+    private func acquireMutation() async throws {
+        try Task.checkCancellation()
+        if mutationInProgress {
+            await withCheckedContinuation { mutationWaiters.append($0) }
+        } else {
+            mutationInProgress = true
+        }
+        do { try Task.checkCancellation() }
+        catch { releaseMutation(); throw error }
+    }
+
+    private func releaseMutation() {
+        if mutationWaiters.isEmpty { mutationInProgress = false }
+        else { mutationWaiters.removeFirst().resume() }
     }
 
     private func write(_ values: [Persona]) async throws {

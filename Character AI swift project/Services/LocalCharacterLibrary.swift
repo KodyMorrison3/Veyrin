@@ -163,7 +163,8 @@ struct LocalCharacter: Codable, Identifiable, Sendable {
         creatorName = record["creator_name"] as? String ?? ""
         licence = source["licence"] as? String ?? "Not stated"
         importedAt = record["imported_at"] as? String ?? ""
-        origin = metadata["generation_version"] == nil ? "Imported" : "Generated"
+        origin = sourcePlatform == "synthetic" || metadata["generation_version"] != nil || metadata["generation"] != nil
+            ? "Generated" : "Imported"
         avatarFileName = record["avatar_reference"] as? String
         visibility = record["visibility"] as? String
         interactionCount = metadata["interaction_count"] as? Int
@@ -250,7 +251,10 @@ final class LocalCharacterLibrary: ObservableObject {
     private var catalogueIsAvailable = true
 
     init(supportDirectory: URL? = nil) {
+        let environmentRoot = ProcessInfo.processInfo.environment["VEYRIN_SUPPORT_DIRECTORY"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
         let support = supportDirectory
+            ?? environmentRoot
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
                 .appendingPathComponent("Veyrin", isDirectory: true)
             ?? FileManager.default.homeDirectoryForCurrentUser

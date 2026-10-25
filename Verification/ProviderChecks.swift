@@ -569,6 +569,22 @@ func runProviderChecks() async throws {
     for _ in 0..<10 { await Task.yield() }
     precondition(obsolete.screen == .cloud && obsolete.chat == nil)
 
+    // Dropping the owner must stop its HTTP work, even without a view callback.
+    for _ in 0..<5 {
+        ProviderStubHTTP.configure(hold: true)
+        var releasedChat: ProviderChatViewModel? = ProviderChatViewModel(provider: local, model: "fixture-model")
+        let chatWasReleased = { [weak releasedChat] in releasedChat == nil }
+        releasedChat?.send("Synthetic lifecycle check")
+        try await providerEventually("Released chat never started HTTP") {
+            ProviderStubHTTP.state.withLock { !$0.requests.isEmpty }
+        }
+        releasedChat = nil
+        precondition(chatWasReleased(), "The stream must not retain its view model")
+        try await providerEventually("Releasing the chat did not cancel HTTP") {
+            ProviderStubHTTP.state.withLock { $0.cancellations > 0 }
+        }
+    }
+
     let generationGate = ProviderGate()
     coordinator.start(provider: GatedProvider(gate: generationGate), selection: selection, store: store)
     guard let oldChat = coordinator.chat else { preconditionFailure("Chat not created") }
@@ -681,6 +697,14 @@ func runProviderChecks() async throws {
     precondition(ProviderChatViewModel(provider: local, model: "fixture-model", transcripts: transcriptStore).messages.isEmpty,
                  "New Chat replaces the saved conversation")
 
+    let generatedCharacter = try LocalCharacter(record: [
+        "archive_id": UUID().uuidString, "name": "Generated Guide",
+        "source": ["source_platform": "synthetic"],
+        "source_metadata": ["generation": ["prompt_version": "fixture"]]
+    ])
+    precondition(generatedCharacter.origin == "Generated" && generatedCharacter.isGenerated,
+                 "Current generation metadata must not label originals as imported")
+
     let greetingCharacter = try LocalCharacter(accountExportRecord: ["external_id": "saved-greeting",
                                                                    "name": "Guide",
                                                                    "greeting": "Welcome back."])
@@ -706,6 +730,89 @@ func runProviderChecks() async throws {
     try await providerEventually("Blocked save chat did not finish") { !blockedChat.isGenerating }
     precondition(blockedChat.storageErrorMessage != nil, "A failed save must be reported, not swallowed")
 
+    // A failed read must never turn into an empty chat that overwrites history.
+    let unreadableRoot = transcriptRoot.appendingPathComponent("unreadable")
+    let unreadableStore = ProviderTranscriptStore(supportDirectory: unreadableRoot)
+    let unreadableKey = ProviderTranscriptKey(providerID: local.descriptor.id, kind: .ollama,
+                                             model: "fixture-model", characterID: nil)
+    try unreadableStore.save([ProviderChatMessage(role: .user, content: "Preserve me")], for: unreadableKey)
+    let unreadableFolder = unreadableRoot.appendingPathComponent("provider-chats")
+    let unreadableFile = try FileManager.default.contentsOfDirectory(at: unreadableFolder,
+                                                                    includingPropertiesForKeys: nil)[0]
+    let corruptBytes = Data("{unfinished transcript".utf8)
+    try corruptBytes.write(to: unreadableFile)
+    let unreadableChat = ProviderChatViewModel(provider: local, model: "fixture-model", transcripts: unreadableStore)
+    precondition(unreadableChat.storageErrorMessage != nil && unreadableChat.messages.isEmpty)
+    unreadableChat.send("Must not replace the damaged history")
+    unreadableChat.newConversation()
+    precondition(!unreadableChat.isGenerating && unreadableChat.messages.isEmpty)
+    do {
+        try unreadableStore.save([], for: unreadableKey)
+        preconditionFailure("A corrupt transcript must not be overwritten")
+    } catch is ProviderTranscriptError { }
+    let preservedBytes = try Data(contentsOf: unreadableFile)
+    precondition(preservedBytes == corruptBytes)
+
+    // A valid JSON transcript under the wrong identity is just as unsafe.
+    let mismatched = ProviderTranscript(key: ProviderTranscriptKey(providerID: "another-provider", kind: .ollama,
+                                                                  model: "fixture-model", characterID: nil), messages: [])
+    let mismatchedBytes = try JSONEncoder().encode(mismatched)
+    try mismatchedBytes.write(to: unreadableFile)
+    do {
+        _ = try unreadableStore.load(unreadableKey)
+        preconditionFailure("A mismatched transcript must fail closed")
+    } catch is ProviderTranscriptError { }
+    do {
+        try unreadableStore.save([], for: unreadableKey)
+        preconditionFailure("A mismatched transcript must not be overwritten")
+    } catch is ProviderTranscriptError { }
+    let stillMismatched = try Data(contentsOf: unreadableFile)
+    precondition(stillMismatched == mismatchedBytes)
+
+    // Reopened sidebar rows must agree with saves, reject damaged message
+    // identities, and pick up repaired files rather than stale summaries.
+    let projectionRoot = transcriptRoot.appendingPathComponent("summary-projection")
+    let projectionStore = ProviderTranscriptStore(supportDirectory: projectionRoot)
+    let projectionKey = ProviderTranscriptKey(providerID: "synthetic", kind: .openAICompatible,
+                                              model: "projection-fixture", characterID: "synthetic-character")
+    let projectionMessages = [
+        ProviderChatMessage(role: .system, content: "Synthetic instruction"),
+        ProviderChatMessage(role: .user, content: "Unicode 👋 question"),
+        ProviderChatMessage(role: .assistant, content: "**Synthetic** answer\nNext line"),
+        ProviderChatMessage(role: .system, content: "Not a sidebar preview")
+    ]
+    try projectionStore.save(projectionMessages, for: projectionKey, characterName: "Synthetic character",
+                             avatarFileName: "synthetic-avatar.png", providerName: "Synthetic provider")
+    precondition(ProviderTranscriptStore(supportDirectory: projectionRoot).summaries == projectionStore.summaries)
+    let projectionFolder = projectionRoot.appendingPathComponent("provider-chats")
+    let projectionFile = try FileManager.default.contentsOfDirectory(at: projectionFolder, includingPropertiesForKeys: nil)[0]
+    let originalProjection = try Data(contentsOf: projectionFile)
+    var malformedProjection = try JSONSerialization.jsonObject(with: originalProjection) as! [String: Any]
+    var malformedMessages = malformedProjection["messages"] as! [[String: Any]]
+    malformedMessages[0]["id"] = "not-a-uuid"
+    malformedProjection["messages"] = malformedMessages
+    try JSONSerialization.data(withJSONObject: malformedProjection).write(to: projectionFile)
+    precondition(ProviderTranscriptStore(supportDirectory: projectionRoot).summaries.isEmpty)
+    try originalProjection.write(to: projectionFile)
+    precondition(ProviderTranscriptStore(supportDirectory: projectionRoot).summaries.count == 1,
+                 "Reopening must read repaired files rather than stale summaries")
+    try projectionStore.save([ProviderChatMessage(role: .assistant, content: "Greeting only")], for: projectionKey)
+    precondition(projectionStore.summaries.isEmpty && ProviderTranscriptStore(supportDirectory: projectionRoot).summaries.isEmpty)
+    try projectionStore.remove(projectionKey)
+    precondition(ProviderTranscriptStore(supportDirectory: projectionRoot).summaries.isEmpty)
+
+    // A failed deletion must keep both the row and the visible conversation.
+    try FileManager.default.removeItem(at: unreadableFile)
+    try unreadableStore.save([ProviderChatMessage(role: .user, content: "Keep visible")], for: unreadableKey)
+    let deletionChat = ProviderChatViewModel(provider: local, model: "fixture-model", transcripts: unreadableStore)
+    // A regular file in place of the parent fails without relying on permissions.
+    try FileManager.default.removeItem(at: unreadableFolder)
+    try Data("not a directory".utf8).write(to: unreadableFolder)
+    deletionChat.newConversation()
+    precondition(deletionChat.messages.map(\.content) == ["Keep visible"])
+    precondition(deletionChat.storageErrorMessage != nil)
+    precondition(unreadableStore.summaries.contains { $0.key == unreadableKey })
+
     // Sidebar summaries: newest first, Markdown flattened, and only real
     // conversations (a greeting on its own is not a saved chat yet).
     let sidebarKey = ProviderTranscriptKey(providerID: "ollama", kind: .ollama,
@@ -726,7 +833,7 @@ func runProviderChecks() async throws {
                              for: greetingOnlyKey, characterName: "Guide")
     precondition(!transcriptStore.summaries.contains { $0.key == greetingOnlyKey },
                  "A chat with no user message has no sidebar row")
-    transcriptStore.remove(sidebarKey)
+    try transcriptStore.remove(sidebarKey)
     precondition(!transcriptStore.summaries.contains { $0.key == sidebarKey },
                  "Removing a chat removes its sidebar row")
 
@@ -751,7 +858,31 @@ func runProviderChecks() async throws {
         lastMessage: nil, updatedAt: Date())
     precondition(legacyCloudRow.title == "Cloud chat" && legacyCloudRow.title != legacyLocalRow.title,
                  "A local chat and a cloud chat never share a title")
-    transcriptStore.remove(providerTitledKey)
+    try transcriptStore.remove(providerTitledKey)
+
+    // A deleted character must not redirect its sidebar row to the unrelated
+    // no-character slot. The current chat and both saved files stay untouched.
+    let missingLibrary = LocalCharacterLibrary(supportDirectory: transcriptRoot.appendingPathComponent("missing-character"))
+    let missingCharacterSummary = ProviderTranscriptSummary(
+        key: ProviderTranscriptKey(providerID: "ollama", kind: .ollama, model: "fixture-model", characterID: "removed-character"),
+        characterName: "Removed fixture", avatarFileName: nil, lastMessage: nil, updatedAt: Date())
+    let existingScreen = coordinator.screen
+    let existingChat = coordinator.chat
+    coordinator.open(missingCharacterSummary, store: store, library: missingLibrary)
+    precondition(coordinator.screen == existingScreen && coordinator.chat === existingChat)
+    precondition(coordinator.errorMessage?.contains("character is no longer") == true)
+
+    if let supportRoot = ProcessInfo.processInfo.environment["VEYRIN_SUPPORT_DIRECTORY"] {
+        let isolatedCharacter = try LocalCharacter(record: ["archive_id": UUID().uuidString, "name": "Isolated fixture"])
+        let envelope: [String: Any] = ["format": "veyrin.local-character-library", "characters": [["archive_id": isolatedCharacter.id, "name": isolatedCharacter.name]]]
+        let input = transcriptRoot.appendingPathComponent("isolated-character.json")
+        try JSONSerialization.data(withJSONObject: envelope).write(to: input)
+        let defaultLibrary = LocalCharacterLibrary()
+        _ = try defaultLibrary.importArchive(from: input)
+        let isolatedURL = URL(fileURLWithPath: supportRoot).appendingPathComponent("characters.json")
+        precondition(FileManager.default.fileExists(atPath: isolatedURL.path))
+        precondition(LocalCharacterLibrary(supportDirectory: URL(fileURLWithPath: supportRoot)).containsCharacter(isolatedCharacter.id))
+    }
 
     // The Local screen runs its prepare step before asking for models: that step
     // is what starts Ollama on demand, so a screen that skipped it would report

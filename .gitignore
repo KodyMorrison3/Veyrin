@@ -57,6 +57,7 @@ __pycache__/
 *.tmp
 *.temp
 *.log
+*.pid
 *.bak
 *.swp
 *.swo
@@ -67,13 +68,17 @@ __pycache__/
 .env.*
 !.env.example
 
-# Credentials / authentication material
-*credentials*
-*credential*
-*secret*
-*secrets*
-*token*
-*tokens*
+# Credential and key material, scoped to data files on purpose. Bare
+# *token* / *secret* globs also hide source such as SessionTokenStore.swift,
+# and an ignored source file is invisible to Git instead of showing as untracked.
+*.p8
+*.p12
+*.mobileprovision
+*credential*.json
+*credential*.txt
+*secret*.json
+*token*.json
+*token*.csv
 
 # Character.AI investigation material
 *.har
@@ -99,4 +104,21 @@ captures/
 *.db
 FIXES_PROGRESS.md
 CharacterSearchAuthDiagnostic.swift
+
+# Audit and diagnostic output: timings, traces, probe dumps and snapshots.
+# These are regenerated locally and never belong in the repository.
+*.trace
+*.jsonl
+*.profraw
+*.patch
+*.orig
+*.rej
+/audit-*/
+*-audit/
+/measurements/
+
+# Audit reports stay on this machine. They record unfixed security and
+# privacy gaps, which does not belong in the published repository.
+# Covers AUDIT.md, PERFORMANCE_AUDIT.md and LOADING_AND_CACHE_AUDIT.md.
+/*AUDIT*.md
 

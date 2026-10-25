@@ -3,6 +3,14 @@ import CryptoKit
 import Foundation
 import OSLog
 
+nonisolated enum ProviderTranscriptError: LocalizedError {
+    case unavailable
+
+    var errorDescription: String? {
+        "This saved conversation could not be read. Its file has been left unchanged. Restore it from a backup before continuing."
+    }
+}
+
 /// Identity of a resumable provider conversation. `TextChatProvider` already
 /// carries the saved configuration ID as its descriptor ID, so a cloud chat is
 /// keyed by the configuration, not by its editable name or endpoint.
@@ -127,15 +135,16 @@ final class ProviderTranscriptStore: ObservableObject {
     }
 
     /// Returns the saved messages, or nil when this chat has not been saved yet.
-    /// An unreadable file is reported as absent and left untouched rather than
-    /// overwritten, matching the library's handling of its own files.
-    func load(_ key: ProviderTranscriptKey) -> [ProviderChatMessage]? {
-        readTranscript(key)?.messages
+    /// An unreadable file is not an empty conversation. Callers must surface
+    /// the failure, and save checks again before replacing an existing file.
+    func load(_ key: ProviderTranscriptKey) throws -> [ProviderChatMessage]? {
+        try readTranscript(key)?.messages
     }
 
     func save(_ messages: [ProviderChatMessage], for key: ProviderTranscriptKey,
               characterName: String? = nil, avatarFileName: String? = nil,
               providerName: String? = nil) throws {
+        _ = try readTranscript(key)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let transcript = ProviderTranscript(key: key, messages: messages,
                                             characterName: characterName, avatarFileName: avatarFileName,
@@ -146,25 +155,25 @@ final class ProviderTranscriptStore: ObservableObject {
         upsert(transcript.summary, hasUserMessage: messages.contains { $0.role == .user })
     }
 
-    func remove(_ key: ProviderTranscriptKey) {
-        try? FileManager.default.removeItem(at: fileURL(key))
+    func remove(_ key: ProviderTranscriptKey) throws {
+        do { try FileManager.default.removeItem(at: fileURL(key)) }
+        catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile { }
         summaries.removeAll { $0.key == key }
     }
 
-    private func readTranscript(_ key: ProviderTranscriptKey) -> ProviderTranscript? {
+    private func readTranscript(_ key: ProviderTranscriptKey) throws -> ProviderTranscript? {
         do {
             let data = try Data(contentsOf: fileURL(key))
             let transcript = try JSONDecoder().decode(ProviderTranscript.self, from: data)
             guard transcript.matches(key) else {
-                logger.error("Ignoring a provider transcript saved for a different chat")
-                return nil
+                throw ProviderTranscriptError.unavailable
             }
             return transcript
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
             return nil
         } catch {
             logger.error("Provider transcript could not be read; it has been left in place")
-            return nil
+            throw ProviderTranscriptError.unavailable
         }
     }
 

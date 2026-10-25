@@ -257,7 +257,9 @@ You may need to approve the app under **System Settings → Privacy & Security**
 
 ### Progress and roadmap
 
-_Last reviewed: 24 October 2026. This is a living snapshot, not a release commitment._
+_Last reviewed: 25 October 2026. This is a living snapshot, not a release commitment._
+
+Provider “fork” currently truncates the same saved slot rather than preserving an independent branch; durable non-destructive branches remain unfinished.
 
 **Done**
 
@@ -266,7 +268,7 @@ _Last reviewed: 24 October 2026. This is a living snapshot, not a release commit
 - [x] Provider chooser with Ollama and OpenAI-compatible text chat, including streaming, cancellation and model discovery
 - [x] Local character library with Discover saving, account-export import, search/filter, greeting-bearing Start chat from the provider chat, About/greeting editing and Veyrin archive export
 - [x] Portable personas: export/import for local and cloud chats, character-card import, provider system prompts and offline storage
-- [x] Durable provider conversations on this Mac with a conversation sidebar, edit/rewind/regenerate/fork and per-character slots
+- [x] Durable provider conversations on this Mac with a conversation sidebar, edit/rewind/regenerate and per-character slots; “start from here” truncates that slot, not a separate preserved branch
 - [x] Synthetic-fixture regression suites covering networking, cancellation, rendering, provider, persona and library paths
 - [x] Experimental v0.1.0 Release build and locally verified DMG
 

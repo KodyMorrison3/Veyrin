@@ -440,6 +440,46 @@ func runPersonaChecks() async throws {
     try await library.delete(library.personas[0])
     precondition(library.personas.isEmpty)
 
+    // Both mutations must see the preceding committed state, not competing
+    // snapshots taken before the background encoder returns.
+    let concurrentRoot = folder.appendingPathComponent("concurrent")
+    let concurrent = LocalPersonaStore(supportDirectory: concurrentRoot)
+    let one = Persona(id: "one", displayName: "One", definition: "Synthetic persona one")
+    let two = Persona(id: "two", displayName: "Two", definition: "Synthetic persona two")
+    let pairFile = archiveFolder.appendingPathComponent("pair.json")
+    try LocalPersonaArchive.encode([one, two]).write(to: pairFile)
+    _ = try await concurrent.importPersonas(from: pairFile)
+    async let deleteOne: Void = concurrent.delete(one)
+    async let deleteTwo: Void = concurrent.delete(two)
+    _ = try await (deleteOne, deleteTwo)
+    precondition(concurrent.personas.isEmpty, "Concurrent deletes must not resurrect either persona")
+    precondition(LocalPersonaStore(supportDirectory: concurrentRoot).personas.isEmpty)
+
+    let oneFile = archiveFolder.appendingPathComponent("one.json")
+    let twoFile = archiveFolder.appendingPathComponent("two.json")
+    try one.portableJSON().write(to: oneFile)
+    try two.portableJSON().write(to: twoFile)
+    async let importOne = concurrent.importPersonas(from: oneFile)
+    async let importTwo = concurrent.importPersonas(from: twoFile)
+    _ = try await (importOne, importTwo)
+    precondition(Set(concurrent.personas.map(\.externalID)) == ["one", "two"])
+    precondition(Set(LocalPersonaStore(supportDirectory: concurrentRoot).personas.map(\.externalID)) == ["one", "two"])
+
+    // Cancellation before committing leaves the current catalogue alone.
+    let cancelledDelete = Task { try await concurrent.delete(one) }
+    cancelledDelete.cancel()
+    do { try await cancelledDelete.value; preconditionFailure("Cancelled deletion committed") }
+    catch is CancellationError { }
+    precondition(concurrent.personas.count == 2)
+
+    if let supportRoot = ProcessInfo.processInfo.environment["VEYRIN_SUPPORT_DIRECTORY"] {
+        let defaultStore = LocalPersonaStore()
+        _ = try await defaultStore.importPersonas(from: oneFile)
+        let isolatedURL = URL(fileURLWithPath: supportRoot).appendingPathComponent("local-personas.json")
+        precondition(FileManager.default.fileExists(atPath: isolatedURL.path))
+        precondition(LocalPersonaStore(supportDirectory: URL(fileURLWithPath: supportRoot)).personas.contains { $0.externalID == "one" })
+    }
+
     let log = PersonaMessageLog()
     let chat = ProviderChatViewModel(provider: PersonaPromptProvider(log: log), model: "fixture-model")
     chat.setPersona(source)

@@ -33,6 +33,7 @@ final class ProviderChatViewModel: ObservableObject {
     private var pendingText = ""
     private var publication: Task<Void, Never>?
     private var retryMessage: String?
+    private var transcriptIsAvailable = true
 
     init(provider: any ChatProvider, model: String, persona: Persona? = nil,
          character: LocalCharacter? = nil,
@@ -71,8 +72,16 @@ final class ProviderChatViewModel: ObservableObject {
     }
 
     private func restoreTranscript() {
-        messages = transcripts?.load(transcriptKey) ?? []
-        seedGreeting()
+        do {
+            messages = try transcripts?.load(transcriptKey) ?? []
+            transcriptIsAvailable = true
+            storageErrorMessage = nil
+            seedGreeting()
+        } catch {
+            messages = []
+            transcriptIsAvailable = false
+            storageErrorMessage = ProviderTranscriptError.unavailable.localizedDescription
+        }
     }
 
     private func seedGreeting() {
@@ -109,7 +118,7 @@ final class ProviderChatViewModel: ObservableObject {
 
     func send(_ text: String) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isGenerating else { return }
+        guard !text.isEmpty, !isGenerating, transcriptIsAvailable else { return }
         retryMessage = text
         messages.append(ProviderChatMessage(role: .user, content: text))
         persist()
@@ -268,14 +277,24 @@ final class ProviderChatViewModel: ObservableObject {
     /// Starts an empty conversation in the same slot, so the saved transcript
     /// for this provider, model and character is replaced rather than appended.
     func newConversation() {
+        guard transcriptIsAvailable else { return }
         cancel()
-        transcripts?.remove(transcriptKey)
+        do { try transcripts?.remove(transcriptKey) }
+        catch {
+            storageErrorMessage = "This conversation could not be removed from this Mac. Its visible messages have been kept."
+            return
+        }
         messages = []
         seedGreeting()
         errorMessage = nil
         wasInterrupted = false
         retryMessage = nil
         storageErrorMessage = nil
+    }
+
+    deinit {
+        generation?.cancel()
+        publication?.cancel()
     }
 }
 
@@ -313,14 +332,19 @@ final class ProviderCoordinator: ObservableObject {
 
     /// Reopens a saved chat from the sidebar. Its provider must still be
     /// configured; a removed configuration is reported rather than guessed at.
-    func open(_ summary: ProviderTranscriptSummary, store: ProviderStore) {
+    func open(_ summary: ProviderTranscriptSummary, store: ProviderStore,
+              library: LocalCharacterLibrary = .shared) {
         if summary.key.kind != .ollama, UUID(uuidString: summary.key.providerID) != nil,
            !store.configurations.contains(where: { $0.id.uuidString == summary.key.providerID }) {
             errorMessage = "That chat's provider has been removed. Add it again to reopen the conversation."
             return
         }
         let character = summary.key.characterID.flatMap { id in
-            LocalCharacterLibrary.shared.characters.first { $0.id == id }
+            library.characters.first { $0.id == id }
+        }
+        guard summary.key.characterID == nil || character != nil else {
+            errorMessage = "That chat's character is no longer in your library. Import it again to reopen the saved conversation."
+            return
         }
         let selection = ProviderSelection(
             kind: summary.key.kind,
