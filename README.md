@@ -69,7 +69,7 @@ Veyrin is an **unofficial** macOS client for [Character.AI](https://character.ai
 - New local/cloud text chats are saved per provider, model and character under `Application Support/Veyrin/provider-chats`, and resume when reopened; **New Chat** replaces the saved conversation after confirmation. Switching providers starts a separate conversation; context is never transferred automatically. Chats are listed in a conversation sidebar beside the chat, and every mutation (edit, rewind, regenerate, fork) rewrites the saved turns
 - **Free Providers** presets prefill FreeLLMAPI (a router on this Mac), Gemini, Groq, OpenRouter and Cloudflare Workers AI endpoints; keys and model IDs still come from your own account, and each provider's quota and privacy terms still apply
 
-See [Provider setup and architecture](PROVIDERS.md) for setup, privacy boundaries, verification results and limitations. Connection tests use model listing; they do **not** prove that a model permits chat generation. No live AI connection was verified during implementation.
+See [Provider setup and architecture](PROVIDERS.md) for setup, privacy boundaries, verification results and limitations. Connection tests use model listing; they do **not** prove that a model permits chat generation. Live chats have since been confirmed against FreeLLMAPI and the Gemini free tier; the remaining providers are still unverified beyond model listing.
 
 ### Personas
 - Export Character.AI personas as portable JSON or a paste-ready Markdown prompt, and import them into a local library for local/cloud chats
@@ -168,7 +168,7 @@ The screenshots in this README are redacted. Older captures — including copies
 - Xcode 27 with the macOS 27 SDK and Swift 6.4 toolchain
 - A Character.AI account for Character.AI features, Ollama with a downloaded model for local chat, or your own cloud API key for cloud chat; none is required to build or run offline tests
 
-The deployment target is macOS 27.0, the bundle identifier is `com.kodymorrison.veyrin`, and the app is version 0.1.0 (build 1). The Swift 6.4 compiler runs in Swift 5 language mode with complete concurrency checking. The app uses the third-party Swift Package Manager dependencies ZipArchive and SystemPackage.
+The deployment target is macOS 27.0, the bundle identifier is `com.kodymorrison.veyrin`, and the app is version 0.2.0 (build 3). The Swift 6.4 compiler runs in Swift 5 language mode with complete concurrency checking. The app uses the third-party Swift Package Manager dependencies ZipArchive and SystemPackage.
 
 ### Build and run
 
@@ -217,7 +217,7 @@ Before importing a character archive/account export or exporting the library, Ve
 bash Scripts/package-dmg.sh --ad-hoc
 ```
 
-This writes `build/Veyrin-0.1.0.dmg` and `build/Veyrin-0.1.0.dmg.sha256`. Existing files are never overwritten; use `--output-dir build/another-candidate` for another build. The image contains `Veyrin.app`, an `Applications` shortcut, installation notes and the GPL licence—not your local app data.
+This writes `build/Veyrin-0.2.0.dmg` and `build/Veyrin-0.2.0.dmg.sha256`. Existing files are never overwritten; use `--output-dir build/another-candidate` for another build. The image contains `Veyrin.app`, an `Applications` shortcut, installation notes and the GPL licence—not your local app data.
 
 With a Developer ID Application certificate and an existing local notarytool Keychain profile:
 
@@ -235,7 +235,7 @@ The certificate/profile must already be configured outside this repository. Appl
 When a release is published, download the DMG and its checksum from [GitHub Releases](https://github.com/KodyMorrison3/Veyrin/releases). In their download directory, run:
 
 ```bash
-shasum -a 256 -c Veyrin-0.1.0.dmg.sha256
+shasum -a 256 -c Veyrin-0.2.0.dmg.sha256
 ```
 
 Open the DMG, drag **Veyrin.app** onto **Applications**, eject the image, then open Veyrin from Applications. For an unnotarised build, only if you trust the source and verified download, use **System Settings → Privacy & Security → Open Anyway** after the blocked launch. Do not disable Gatekeeper globally, strip quarantine as an installation step, or ignore malware/damaged-app warnings. See [Apple's installation guidance](https://support.apple.com/en-us/102445).
@@ -248,7 +248,7 @@ Use [GitHub Issues](https://github.com/KodyMorrison3/Veyrin/issues) for reproduc
 
 Veyrin is an early experimental build, not a stable release: it relies on undocumented Character.AI endpoints and has the limitations listed above. What changed in each release is described on the [GitHub Releases](https://github.com/KodyMorrison3/Veyrin/releases) page rather than in this repository.
 
-- **App version:** 0.1.0 (build 1)
+- **App version:** 0.2.0 (build 3)
 - **Platform:** Apple Silicon, macOS 27 or later
 - **Validation:** the signed Debug build and the offline regression suites pass, including native layout checks for the provider chat, conversation sidebar, library and persona screens
 - **Distribution:** build from source, or use a release you trust — builds are ad-hoc signed unless you sign them with your own certificate
@@ -270,7 +270,7 @@ Provider “fork” currently truncates the same saved slot rather than preservi
 - [x] Portable personas: export/import for local and cloud chats, character-card import, provider system prompts and offline storage
 - [x] Durable provider conversations on this Mac with a conversation sidebar, edit/rewind/regenerate and per-character slots; “start from here” truncates that slot, not a separate preserved branch
 - [x] Synthetic-fixture regression suites covering networking, cancellation, rendering, provider, persona and library paths
-- [x] Experimental v0.1.0 Release build and locally verified DMG
+- [x] Experimental v0.2.0 Release build and locally verified DMG
 
 **Next**
 

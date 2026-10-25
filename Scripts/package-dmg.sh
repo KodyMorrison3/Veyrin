@@ -37,7 +37,12 @@ sdk=$(xcrun --sdk macosx --show-sdk-version)
 [ "${sdk%%.*}" -ge 27 ] || fail "macOS 27 SDK required"
 mkdir -p "$output"
 output=$(cd "$output" && pwd)
-[ ! -e "$output/Veyrin-0.1.1.dmg" ] && [ ! -e "$output/Veyrin-0.1.1.dmg.sha256" ] || fail "output already exists; choose a new --output-dir"
+# Read the intended version from the project so this guard keeps pace with it.
+# Hardcoding the number here is what left the check pointing at an old DMG long
+# after the app had moved on, which then failed to protect the real output.
+projectVersion=$(grep -m1 'MARKETING_VERSION = ' "Character AI swift project.xcodeproj/project.pbxproj" | sed -E 's/.*= ([^;]+);/\1/')
+[ -n "$projectVersion" ] || fail "cannot read MARKETING_VERSION from the project"
+[ ! -e "$output/Veyrin-$projectVersion.dmg" ] && [ ! -e "$output/Veyrin-$projectVersion.dmg.sha256" ] || fail "output already exists; choose a new --output-dir"
 work=$(mktemp -d "$output/.package.XXXXXX")
 mount="$work/mounted"
 mounted=""
@@ -60,8 +65,12 @@ xcodebuild -quiet build \
 app="$work/DerivedData/Build/Products/Release/Veyrin.app"
 [ -s "$app/Contents/MacOS/Veyrin" ] || fail "missing app executable"
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
-[ "$version" = 0.1.1 ] || fail "expected version 0.1.1, got $version"
-[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" = 2 ] || fail "expected build 2"
+build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")
+# The version comes from the project, so check its shape rather than pinning a
+# literal that has to be edited for every release.
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "unexpected version string: $version"
+[[ "$version" = "$projectVersion" ]] || fail "built $version, project says $projectVersion"
+[[ "$build" =~ ^[0-9]+$ ]] || fail "unexpected build number: $build"
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = com.kodymorrison.veyrin ] || fail "wrong bundle identifier"
 [ "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")" = 27.0 ] || fail "wrong deployment target"
 [ "$(xcrun lipo -archs "$app/Contents/MacOS/Veyrin")" = arm64 ] || fail "wrong architecture"
@@ -100,8 +109,9 @@ mkdir "$stage"
 ditto --norsrc --noextattr "$app" "$stage/Veyrin.app"
 ln -s /Applications "$stage/Applications"
 cp LICENSE "$stage/LICENSE.txt"
-cat > "$stage/Install.txt" <<'EOF'
-Veyrin v0.1.1 — experimental, unofficial Character.AI client
+# Interpolated so the header carries the version actually packaged.
+cat > "$stage/Install.txt" <<EOF
+Veyrin v$version — experimental, unofficial Character.AI client
 Requires macOS 27 or later and Apple Silicon.
 Drag Veyrin.app to Applications, eject this image, then open Veyrin from Applications.
 Verify the published SHA-256 checksum before installation.
