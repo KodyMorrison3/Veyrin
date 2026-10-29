@@ -46,6 +46,10 @@ final class ChatViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var isGenerating = false
     @Published var errorMessage: String?
+    @Published private(set) var historyNotice: String?
+    @Published private(set) var isHistoryReadOnly = false
+    private var historySummary: ConversationSummary?
+    private let historyStore: CharacterAIHistoryStore
     @Published private(set) var pinningTurnIDs: Set<String> = []
     @Published var pinErrorMessage: String?
     @Published var rewindErrorMessage: String?
@@ -157,10 +161,23 @@ final class ChatViewModel: ObservableObject {
     func checkFilteredHistory(chatID: String) { chatsAwaitingFilteredHistory.insert(chatID) }
     #endif
 
-    private func beginMutation(chatID: String) {
+    private func beginMutation(chatID: String) -> Bool {
+        guard !isHistoryReadOnly, !authStore.isOfflineReading, !isLoading else {
+            errorMessage = "Refresh this conversation before making changes."
+            return false
+        }
+        if let accountID = authStore.session?.userID {
+            do { try historyStore.markNeedsRefresh(accountID: accountID, chatID: chatID) }
+            catch {
+                // A corrupt cache is not authoritative. Leave it unchanged and
+                // let online chat continue; it cannot be shown as a valid copy.
+                historyNotice = "The saved reading copy could not be updated and was left unchanged."
+            }
+        }
         historyLoadID = nil
         isLoading = false
         conversationService.beginMutation(chatID: chatID)
+        return true
     }
 
     let authStore: AuthStore
@@ -172,8 +189,10 @@ final class ChatViewModel: ObservableObject {
     init(
         authStore: AuthStore,
         conversationService: ConversationService? = nil,
-        webSocketRouter: WebSocketRouter? = nil
+        webSocketRouter: WebSocketRouter? = nil,
+        historyStore: CharacterAIHistoryStore? = nil
     ) {
+        self.historyStore = historyStore ?? .shared
         self.webSocketRouter = webSocketRouter ?? WebSocketRouter()
         self.authStore = authStore
         let client = AuthenticatedHTTPClient(authStore: authStore)
@@ -252,10 +271,52 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    func loadConversationHistory(chatID: String, characterID: String) async {
-        await loadCharacter(externalID: characterID)
-        guard !Task.isCancelled, character?.externalID == characterID else { return }
-        await loadRealTurns(chatID: chatID)
+    func loadConversationHistory(chatID: String, characterID: String, summary: ConversationSummary? = nil) async {
+        historySummary = summary
+        let accountID = authStore.session?.userID ?? authStore.offlineAccountID
+        if activeChatID != chatID {
+            historyLoadID = nil
+            webSocketRouter.disconnect()
+            replaceTurns([])
+            isHistoryReadOnly = false
+            historyNotice = nil
+        }
+        if let accountID {
+            do {
+                if let snapshot = try historyStore.load(accountID: accountID, chatID: chatID),
+                   snapshot.summary.characterID == characterID {
+                    activeChatID = chatID
+                    mergeTurns(snapshot.turns, removeMissing: true, isServerConfirmed: false)
+                    isHistoryReadOnly = true
+                    historyNotice = snapshot.needsRefresh
+                        ? "Saved reading copy. A previous change needs verification; it may be out of date."
+                        : "Saved reading copy from \(snapshot.savedAt.formatted()). Refreshing requires a connection."
+                }
+            } catch { historyNotice = "A saved reading copy could not be read; the file was left unchanged." }
+        }
+        guard !authStore.isOfflineReading else {
+            isHistoryReadOnly = true
+            if turnStates.isEmpty && historyNotice == nil { historyNotice = "No saved reading copy is available for this conversation." }
+            return
+        }
+        if isHistoryReadOnly {
+            async let characterLoad: Void = loadCharacter(externalID: characterID)
+            await loadRealTurns(chatID: chatID, characterID: characterID)
+            await characterLoad
+            if historyNotice == "Conversation refreshed, but character details are unavailable. Reopen it when connected.",
+               character?.externalID == characterID {
+                isHistoryReadOnly = false
+                historyNotice = nil
+            }
+        } else {
+            await loadCharacter(externalID: characterID)
+            guard !Task.isCancelled, character?.externalID == characterID else { return }
+            await loadRealTurns(chatID: chatID)
+        }
+        if character?.externalID != characterID, isHistoryReadOnly {
+            errorMessage = nil
+            if historyNotice == nil { historyNotice = "Character details could not be refreshed." }
+        }
     }
 
     func loadCharacter(externalID: String) async {
@@ -373,18 +434,21 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    func loadRealTurns(chatID: String, forceRefresh: Bool = false) async {
-        guard rewindingFromTurnID == nil, !isGenerating, let character else { return }
+    func loadRealTurns(chatID: String, forceRefresh: Bool = false, characterID: String? = nil) async {
+        guard rewindingFromTurnID == nil, !isGenerating,
+              let characterID = characterID ?? character?.externalID else { return }
         if activeChatID != chatID {
             webSocketRouter.disconnect()
             replaceTurns([])
+            isHistoryReadOnly = false
+            historyNotice = nil
         }
         activeChatID = chatID
         let loadID = UUID()
         let session = authStore.sessionGeneration
         historyLoadID = loadID
-        let cached = conversationService.cachedHistory(chatID: chatID)
-        if let cached, cached.characterID == character.externalID {
+        let cached = isHistoryReadOnly ? nil : conversationService.cachedHistory(chatID: chatID)
+        if let cached, cached.characterID == characterID {
             // An incomplete cached snapshot (for example page one of a history
             // whose pagination was cancelled) must union with the visible turns,
             // never replace them.
@@ -403,7 +467,7 @@ final class ChatViewModel: ObservableObject {
         do {
             var verifiedCount = 0
             try await conversationService.loadHistoryPages(
-                chatID: chatID, characterID: character.externalID, forceRefresh: forceRefresh
+                chatID: chatID, characterID: characterID, forceRefresh: forceRefresh || isHistoryReadOnly
             ) { page, isFirst, isComplete in
                 guard self.historyLoadID == loadID, self.activeChatID == chatID,
                       self.authStore.sessionGeneration == session, !Task.isCancelled else { throw CancellationError() }
@@ -418,12 +482,32 @@ final class ChatViewModel: ObservableObject {
                     }
                 }
             }
-        } catch is CancellationError { return }
+            guard historyLoadID == loadID, authStore.sessionGeneration == session, !Task.isCancelled else { return }
+            let serverComplete = conversationService.cachedHistory(chatID: chatID)?.isComplete == true
+            if chatsAwaitingFilteredHistory.contains(chatID) {
+                isHistoryReadOnly = true
+                historyNotice = "Character.AI has not confirmed the filtered response yet. The saved copy was not replaced."
+            } else {
+                isHistoryReadOnly = character?.externalID != characterID
+                historyNotice = isHistoryReadOnly ? "Conversation refreshed, but character details are unavailable. Reopen it when connected." : nil
+            }
+            if let summary = historySummary, let accountID = authStore.session?.userID,
+               serverComplete,
+               !chatsAwaitingFilteredHistory.contains(chatID) {
+                do { try historyStore.save(accountID: accountID, summary: summary, turns: turns) }
+                catch { historyNotice = "Could not save an offline reading copy. The previous file was left unchanged." }
+            }
+        } catch is CancellationError {
+            if historyLoadID == loadID, !Task.isCancelled, isHistoryReadOnly {
+                historyNotice = "Refresh was interrupted by another change. Retry before making changes."
+            }
+            return
+        }
         catch {
             guard historyLoadID == loadID, authStore.sessionGeneration == session else { return }
-            // Stale content stays usable on a network failure; an explicit
-            // refresh/cold load surfaces the existing error affordance.
-            if cached == nil || forceRefresh { errorMessage = error.localizedDescription }
+            if isHistoryReadOnly {
+                historyNotice = "Showing a saved reading copy. Refresh failed; it may be out of date."
+            } else if cached == nil || forceRefresh { errorMessage = error.localizedDescription }
         }
     }
 
@@ -458,7 +542,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        beginMutation(chatID: chatID)
+        guard beginMutation(chatID: chatID) else { return }
         let sessionGeneration = authStore.sessionGeneration
         isGenerating = true
         errorMessage = nil
@@ -580,7 +664,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        beginMutation(chatID: chatID)
+        guard beginMutation(chatID: chatID) else { return }
         let sessionGeneration = authStore.sessionGeneration
         isGenerating = true
         errorMessage = nil
@@ -695,7 +779,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        beginMutation(chatID: chatID)
+        guard beginMutation(chatID: chatID) else { return }
         let sessionGeneration = authStore.sessionGeneration
         isGenerating = true
         errorMessage = nil
@@ -966,6 +1050,11 @@ final class ChatViewModel: ObservableObject {
             // A selected latest turn has no successors; no API removal is
             // needed and the local history already matches that result.
             if !turnIDsToRemove.isEmpty {
+                guard beginMutation(chatID: chatID) else {
+                    rewindErrorMessage = errorMessage
+                    errorMessage = nil
+                    return
+                }
                 try await conversationService.removeTurns(
                     chatID: chatID,
                     turnIDs: turnIDsToRemove
@@ -1004,7 +1093,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        beginMutation(chatID: chatID)
+        guard beginMutation(chatID: chatID) else { return }
         let sessionGeneration = authStore.sessionGeneration
         let isPinned = !turn.isPinned
         pinningTurnIDs.insert(turnID)
@@ -1102,6 +1191,21 @@ final class ChatViewModel: ObservableObject {
         let loadID = UUID()
         let session = authStore.sessionGeneration
         recentChatsLoadID = loadID
+        let accountID = authStore.session?.userID ?? authStore.offlineAccountID
+        if let accountID {
+            let saved = historyStore.list(accountID: accountID)
+            if !saved.snapshots.isEmpty, recentChats.isEmpty {
+                recentChats = saved.snapshots.map(\.summary)
+                historyNotice = "Showing saved conversations; they may be out of date."
+            }
+            if saved.unreadable > 0 { historyNotice = "Some saved conversations could not be read and were left unchanged." }
+        }
+        if authStore.isOfflineReading {
+            recentChatsLoadID = nil
+            isLoading = false
+            if recentChats.isEmpty && historyNotice == nil { historyNotice = "No saved conversations are available for offline reading yet." }
+            return
+        }
         isLoading = true
         errorMessage = nil
         defer { if recentChatsLoadID == loadID { isLoading = false; recentChatsLoadID = nil } }
@@ -1109,12 +1213,14 @@ final class ChatViewModel: ObservableObject {
             let loaded = try await conversationService.loadRecentChats(forceRefresh: forceRefresh)
             guard recentChatsLoadID == loadID, authStore.sessionGeneration == session, !Task.isCancelled else { return }
             recentChats = loaded
+            historyNotice = nil
             recentChatsSession = session
             recentPreviewGeneration = UUID()
         } catch is CancellationError { return }
         catch {
             guard recentChatsLoadID == loadID, authStore.sessionGeneration == session, !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
+            if recentChats.isEmpty { errorMessage = error.localizedDescription }
+            else { historyNotice = "Showing saved conversations; refresh failed and they may be out of date." }
             chatLogger.error("Recent conversations request failed: \(error.localizedDescription, privacy: .private)")
         }
     }

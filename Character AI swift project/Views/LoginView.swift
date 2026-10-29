@@ -147,6 +147,16 @@ struct LoginView: View {
                 .accessibilityLabel("Sign in with session token")
                 .padding(.bottom, 16)
 
+                if authStore.offlineAccountID != nil {
+                    Button("Read saved conversations offline") { authStore.enterOfflineReading() }
+                        .buttonStyle(.bordered)
+                        .padding(.bottom, 12)
+                    Text("Only previously saved conversations are available. Sign in again when connected to refresh them.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.bottom, 12)
+                }
+
                 Label("Session token is stored in your macOS Keychain.", systemImage: "lock.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)

@@ -504,49 +504,80 @@ struct SendCircleButtonStyle: ButtonStyle {
 /// Configures NSWindow.isOpaque = false and NSWindow.backgroundColor = .clear
 /// when Window Transparency > 0, allowing the real desktop to show through
 /// the softened wallpaper and Liquid Glass. Respects macOS Reduce Transparency.
+///
+/// `keepsOwnSurface` opts a window out of the preference and holds an opaque
+/// backing at every transparency level. Settings needs it: it overlaps the
+/// main window, and two clear-backed windows composite into what looks like a
+/// single surface, so a click reads as belonging to the window underneath and
+/// Settings drops behind it, taking the scroll routing with it.
 struct WindowTransparencyBridge: NSViewRepresentable {
     var transparency: Double
     var reduceTransparency: Bool
+    var keepsOwnSurface: Bool = false
 
     func makeNSView(context: Context) -> TransparencyAnchor {
         TransparencyAnchor()
     }
 
     func updateNSView(_ nsView: TransparencyAnchor, context: Context) {
-        nsView.update(transparency: transparency, reduceTransparency: reduceTransparency)
+        nsView.update(
+            transparency: transparency,
+            reduceTransparency: reduceTransparency,
+            keepsOwnSurface: keepsOwnSurface
+        )
     }
 
     final class TransparencyAnchor: NSView {
         private var currentTransparency: Double = 0
         private var currentReduceTransparency: Bool = false
+        private var currentKeepsOwnSurface: Bool = false
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             apply()
         }
 
-        func update(transparency: Double, reduceTransparency: Bool) {
+        func update(transparency: Double, reduceTransparency: Bool, keepsOwnSurface: Bool) {
             self.currentTransparency = transparency
             self.currentReduceTransparency = reduceTransparency
+            self.currentKeepsOwnSurface = keepsOwnSurface
             apply()
         }
 
         private func apply() {
             DispatchQueue.main.async { [weak self] in
                 guard let self, let window = self.window else { return }
-                let shouldBeTransparent = self.currentTransparency > 0.001 && !self.currentReduceTransparency
-                if shouldBeTransparent {
-                    if window.isOpaque { window.isOpaque = false }
-                    // Clear backing lets the shell’s environmentVisibility composite over the desktop.
-                    // AppKit has only opaque/clear backing here; alphaValue is avoided so text stays crisp.
-                    if window.backgroundColor != .clear { window.backgroundColor = .clear }
-                    window.hasShadow = true
-                } else {
-                    if !window.isOpaque { window.isOpaque = true }
-                    if window.backgroundColor != .windowBackgroundColor { window.backgroundColor = .windowBackgroundColor }
-                }
-                window.invalidateShadow()
+                Self.configure(
+                    window,
+                    transparency: self.currentTransparency,
+                    reduceTransparency: self.currentReduceTransparency,
+                    keepsOwnSurface: self.currentKeepsOwnSurface
+                )
             }
+        }
+
+        /// The whole window-backing policy, split out so verification can drive
+        /// it against a throwaway window without waiting on a main-queue hop.
+        static func configure(
+            _ window: NSWindow,
+            transparency: Double,
+            reduceTransparency: Bool,
+            keepsOwnSurface: Bool
+        ) {
+            let shouldBeTransparent = !keepsOwnSurface
+                && transparency > 0.001
+                && !reduceTransparency
+            if shouldBeTransparent {
+                if window.isOpaque { window.isOpaque = false }
+                // Clear backing lets the shell’s environmentVisibility composite over the desktop.
+                // AppKit has only opaque/clear backing here; alphaValue is avoided so text stays crisp.
+                if window.backgroundColor != .clear { window.backgroundColor = .clear }
+                window.hasShadow = true
+            } else {
+                if !window.isOpaque { window.isOpaque = true }
+                if window.backgroundColor != .windowBackgroundColor { window.backgroundColor = .windowBackgroundColor }
+            }
+            window.invalidateShadow()
         }
     }
 }

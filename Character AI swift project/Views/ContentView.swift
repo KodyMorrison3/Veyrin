@@ -83,7 +83,7 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var characterAI: some View {
-        if authStore.isAuthenticated {
+        if authStore.isAuthenticated || authStore.isOfflineReading {
             MainView(authStore: authStore)
                 .id(authStore.sessionGeneration)
                 .onAppear { coordinator.enteredCharacterAI(store: providers) }
@@ -198,6 +198,11 @@ private struct MainView: View {
         .task {
             await viewModel.loadRecentChats()
         }
+        .safeAreaInset(edge: .top) {
+            if let notice = viewModel.historyNotice {
+                Text(notice).font(.caption).foregroundStyle(.secondary).padding(6)
+            }
+        }
         // macOS sheets are modal and cannot be dismissed by clicking outside, so the
         // profile uses a transient popover, which is dismissed by an outside click.
         .sheet(isPresented: $isShowingFeedCreatorProfile) {
@@ -310,7 +315,7 @@ private struct MainView: View {
                     }
                 }
             }
-            .disabled(isCreatingFreshConversation || selectedConversation == nil)
+            .disabled(authStore.isOfflineReading || isCreatingFreshConversation || selectedConversation == nil)
             .help("New Conversation")
         }
 
@@ -469,6 +474,12 @@ private struct MainView: View {
         .navigationTitle("Conversations")
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 6) {
+                if authStore.isOfflineReading {
+                    Text("Offline reading only")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Return to sign in") { authStore.exitOfflineReading() }
+                        .font(.caption)
+                } else {
                 Button {
                     guard let selectedConversation else { return }
                     Task {
@@ -498,10 +509,11 @@ private struct MainView: View {
                     .glassSurface(.characterHeader, cornerRadius: 10)
                 }
                 .buttonStyle(QuietHoverButtonStyle())
-                .disabled(isCreatingFreshConversation || selectedConversation == nil)
+                .disabled(authStore.isOfflineReading || isCreatingFreshConversation || selectedConversation == nil)
                 .padding(.horizontal, 10)
 
                 userProfileControl
+                }
             }
         }
         .glassSurface(.navigation, cornerRadius: 14)
@@ -808,6 +820,7 @@ private struct MainView: View {
                 characterID: selectedChat.characterID,
                 avatarFileName: selectedChat.characterAvatarURI,
                 authStore: authStore,
+                summary: selectedChat,
                 onConversationCreated: { newChatID in
                     pendingCopiedConversation = ConversationSummary(
                         id: newChatID,

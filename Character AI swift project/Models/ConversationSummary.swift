@@ -7,7 +7,7 @@
 
 import Foundation
 
-nonisolated struct ConversationSummary: Identifiable, Sendable {
+nonisolated struct ConversationSummary: Codable, Identifiable, Sendable {
     let id: String
     let chatID: String
     let characterID: String

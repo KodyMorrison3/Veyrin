@@ -16,6 +16,7 @@ struct ChatView: View {
     @State private var activeChatModelType: String?
     @State private var isShowingMemory = false
     @State private var personaSelectionErrorMessage: String?
+    @State private var hasStartedHistoryLoad = false
     @ObservedObject private var environmentalPaletteStore = EnvironmentalPaletteStore.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -25,6 +26,7 @@ struct ChatView: View {
     let chatID: String
     let characterID: String
     let avatarFileName: String?
+    let summary: ConversationSummary?
     let onConversationCreated: ((String) -> Void)?
     let onSelectHistoryChat: ((ChatPreview) -> Void)?
 
@@ -33,12 +35,14 @@ struct ChatView: View {
         characterID: String,
         avatarFileName: String? = nil,
         authStore: AuthStore,
+        summary: ConversationSummary? = nil,
         onConversationCreated: ((String) -> Void)? = nil,
         onSelectHistoryChat: ((ChatPreview) -> Void)? = nil
     ) {
         self.chatID = chatID
         self.characterID = characterID
         self.avatarFileName = avatarFileName
+        self.summary = summary
         self.onConversationCreated = onConversationCreated
         self.onSelectHistoryChat = onSelectHistoryChat
 
@@ -74,6 +78,16 @@ struct ChatView: View {
                     }
                 }
 
+                if let notice = viewModel.historyNotice {
+                    HStack {
+                        Text(notice).font(.caption).foregroundStyle(.secondary)
+                        if viewModel.isHistoryReadOnly && !viewModel.authStore.isOfflineReading {
+                            Button("Retry") {
+                                Task { await viewModel.loadConversationHistory(chatID: chatID, characterID: characterID, summary: summary) }
+                            }.font(.caption)
+                        }
+                    }.padding(8)
+                }
                 attachmentTray
 
                 composer
@@ -177,11 +191,18 @@ struct ChatView: View {
             Text(viewModel.pinErrorMessage ?? "Please try again.")
         }
         .task(id: "\(chatID):\(viewModel.authStore.sessionGeneration)") {
+            hasStartedHistoryLoad = true
             isLoadingPersonaControls = true
             defer { isLoadingPersonaControls = false }
-            // Start independent metadata reads without waiting for the character.
-            // Only history needs its identity to distinguish human and AI turns.
-            async let historyLoad: Void = viewModel.loadConversationHistory(chatID: chatID, characterID: characterID)
+            if viewModel.authStore.isOfflineReading {
+                await viewModel.loadConversationHistory(chatID: chatID, characterID: characterID, summary: summary)
+                return
+            }
+            // History shows its saved snapshot before starting network refresh.
+            // Concurrent metadata requests can invalidate authentication on a 401,
+            // so defer them until that snapshot has been shown.
+            await viewModel.loadConversationHistory(chatID: chatID, characterID: characterID, summary: summary)
+            guard !Task.isCancelled, viewModel.authStore.isAuthenticated else { return }
             async let chatLoad: Void = viewModel.loadChat(chatID: chatID)
             async let recentLoad: Void = viewModel.loadRecentCharacterChats(characterID: characterID)
             async let modelsLoad: Void = viewModel.loadAvailableModels()
@@ -189,11 +210,9 @@ struct ChatView: View {
                 authenticatedClient: viewModel.authenticatedHTTPClient,
                 currentCharacterID: characterID
             )
-
             await chatLoad
             activeChatModelType = viewModel.chat?.preferredModelType
-
-            _ = await (historyLoad, recentLoad, modelsLoad, personasLoad)
+            _ = await (recentLoad, modelsLoad, personasLoad)
         }
         .onChange(of: viewModel.chat?.preferredModelType) {
             activeChatModelType = viewModel.chat?.preferredModelType
@@ -247,11 +266,11 @@ struct ChatView: View {
             turnState: turnState,
             character: viewModel.character,
             palette: environmentalPaletteStore.palette,
-            onRegenerate: turn.isHuman ? nil : {
+            onRegenerate: turn.isHuman || viewModel.isHistoryReadOnly ? nil : {
                 guard viewModel.rewindingFromTurnID == nil else { return }
                 Task { await viewModel.regenerateResponse(turnID: turn.turnID, chatID: chatID) }
             },
-            onEdit: { candidateID, newContent in
+            onEdit: viewModel.isHistoryReadOnly ? nil : { candidateID, newContent in
                 Task {
                     await viewModel.editMessage(
                         turnID: turn.turnID,
@@ -262,14 +281,14 @@ struct ChatView: View {
                 }
             },
             isPinning: viewModel.pinningTurnIDs.contains(turn.turnID),
-            onPin: {
+            onPin: viewModel.isHistoryReadOnly ? nil : {
                 Task { await viewModel.togglePin(turnID: turn.turnID, chatID: chatID) }
             },
             isRewinding: viewModel.rewindingFromTurnID != nil,
-            onRewind: !viewModel.isGenerating && !viewModel.isLoading
+            onRewind: !viewModel.isHistoryReadOnly && !viewModel.isGenerating && !viewModel.isLoading
                 ? { selectedTurn in turnToRewind = selectedTurn }
                 : nil,
-            onStartNewConversation: !viewModel.isGenerating && !viewModel.isLoading
+            onStartNewConversation: !viewModel.isHistoryReadOnly && !viewModel.isGenerating && !viewModel.isLoading
                 ? { selectedTurn in
                     selectedModelType = nil
                     turnToStartConversationFrom = selectedTurn
@@ -302,11 +321,11 @@ struct ChatView: View {
                     .frame(width: 28, height: 28)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Loading character…")
+                    Text(viewModel.isHistoryReadOnly ? (summary?.characterName ?? "Saved conversation") : "Loading character…")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color.caiText)
 
-                    Text("Connecting…")
+                    Text(viewModel.isHistoryReadOnly ? "Saved reading copy" : "Connecting…")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.caiMuted)
                 }
@@ -389,6 +408,7 @@ struct ChatView: View {
                     }
                 }
             )
+            .disabled(viewModel.isHistoryReadOnly || viewModel.authStore.isOfflineReading)
 
             Button {
                 presentImageOpenPanel()
@@ -400,6 +420,7 @@ struct ChatView: View {
                     .background(Circle().fill(ShellEnvironmentalBackground.environmentalSurfaceTint(isDark: isDark)))
             }
             .buttonStyle(.plain)
+            .disabled(viewModel.isHistoryReadOnly || viewModel.authStore.isOfflineReading)
             .help("Stage images for preview; images are not sent")
             .accessibilityLabel("Stage images for preview; images are not sent")
 
@@ -585,7 +606,7 @@ struct ChatView: View {
     }
 
     private var isComposerInputDisabled: Bool {
-        viewModel.isGenerating || viewModel.rewindingFromTurnID != nil
+        !hasStartedHistoryLoad || viewModel.isLoading || viewModel.isHistoryReadOnly || viewModel.authStore.isOfflineReading || viewModel.isGenerating || viewModel.rewindingFromTurnID != nil
     }
 
     private var isSendDisabled: Bool {

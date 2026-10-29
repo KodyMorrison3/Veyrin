@@ -331,6 +331,33 @@ struct AuthChecks {
         expect(store.authMessage == AuthStore.unverifiedSessionMessage, "unverifiable stored session explains the state")
     }
 
+    static func offlineReadingRequiresPreviouslyStoredIdentity() async throws {
+        let storage = InMemorySessionStorage()
+        storage.data = try JSONEncoder().encode(AuthSession(sessionToken: "UNVERIFIED_SESSION", userID: "account-a", username: "fixture"))
+        let store = makeStore(storage)
+        await store.restoreStoredSession(validator: validator)
+        expect(!store.isAuthenticated && store.offlineAccountID == "account-a", "offline identity is separate from authentication")
+        store.enterOfflineReading()
+        expect(store.isOfflineReading && store.session == nil, "offline reading never publishes a session")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("veyrin-offline-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let history = CharacterAIHistoryStore(supportDirectory: root)
+        let summary = ConversationSummary(id: "chat", chatID: "chat", characterID: "character", characterName: "Fixture", characterAvatarURI: "", lastUpdated: "", state: "STATE_ACTIVE", lastMessage: nil)
+        let turn = Turn(turnID: "turn", chatID: "chat", authorID: "character", authorName: "Fixture", isHuman: false, candidates: [Candidate(candidateId: "candidate", rawContent: "fixture", isFinal: true)], primaryCandidateID: "candidate")
+        try history.save(accountID: "account-a", summary: summary, turns: [turn])
+        let model = ChatViewModel(authStore: store, historyStore: history)
+        let requestsBefore = AuthStubProtocol.requests.count
+        await model.loadRecentChats()
+        await model.loadConversationHistory(chatID: "chat", characterID: "character", summary: summary)
+        expect(model.recentChats.map(\.chatID) == ["chat"] && model.turns == [turn], "offline sidebar and conversation load saved data")
+        expect(model.isHistoryReadOnly && AuthStubProtocol.requests.count == requestsBefore, "offline history is read-only and sends no fixture requests")
+        store.exitOfflineReading()
+        expect(!store.isOfflineReading && storage.data != nil, "leaving offline reading keeps the stored session")
+        store.clearSession()
+        store.enterOfflineReading()
+        expect(!store.isOfflineReading && store.offlineAccountID == nil, "sign out removes offline access")
+    }
+
     static func main() async {
         AuthStubProtocol.configure(
             validation: [
@@ -386,6 +413,7 @@ struct AuthChecks {
             ("restore rejects invalid stored session", restoreRejectsInvalidStoredSession),
             ("restore accepts valid stored session after validation", restoreAcceptsValidStoredSessionOnlyAfterValidation),
             ("restore keeps unverified stored session", restoreKeepsStoredSessionWhenUnverified),
+            ("offline reading uses a prior identity without authentication", offlineReadingRequiresPreviouslyStoredIdentity),
         ]
         for (name, test) in tests {
             do { try await test() }

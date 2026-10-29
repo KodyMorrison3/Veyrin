@@ -43,6 +43,10 @@ final class AuthStore: ObservableObject {
     /// Why the last restore did not authenticate, shown on the login screen.
     @Published private(set) var authMessage: String?
 
+    /// Identity from a previously validated Keychain session, never an authenticated session.
+    @Published private(set) var offlineAccountID: String?
+    @Published private(set) var isOfflineReading = false
+
     /// Non-secret session identity; caches are never keyed by tokens.
     private(set) var sessionGeneration = UUID()
     let personas: PersonaStore
@@ -158,13 +162,27 @@ final class AuthStore: ObservableObject {
         } catch {
             guard attempt == signInAttempt, !Task.isCancelled else { return }
             authLogger.error("Stored session could not be verified: \(error.localizedDescription, privacy: .private)")
+            if error as? SessionValidationError == .unavailable,
+               !stored.userID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                offlineAccountID = stored.userID
+            }
             authMessage = AuthStore.unverifiedSessionMessage
         }
     }
 
+    /// Explicit opt-in; does not publish an unvalidated session or allow requests.
+    func enterOfflineReading() {
+        guard session == nil, offlineAccountID != nil else { return }
+        isOfflineReading = true
+    }
+
+    func exitOfflineReading() { isOfflineReading = false }
+
     func clearSession() {
         signInAttempt += 1
         isRestoringSession = false
+        isOfflineReading = false
+        offlineAccountID = nil
         session = nil
         clearStoredSession()
     }
@@ -219,6 +237,8 @@ final class AuthStore: ObservableObject {
             throw error
         }
         authMessage = nil
+        offlineAccountID = nil
+        isOfflineReading = false
         session = newSession
     }
 

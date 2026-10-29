@@ -13,6 +13,7 @@ nonisolated final class StubHTTP: URLProtocol, @unchecked Sendable {
         var directChat = false
         var missingPins = false
         var emptyTurns = false
+        var historyStatus: Int?
         var copyRequestBody: String?
         var slowFactsChatID: String?
     }
@@ -72,6 +73,7 @@ nonisolated final class StubHTTP: URLProtocol, @unchecked Sendable {
         } else if url.path.contains("autocomplete") {
             body = "{\"search_autocomplete\":[\"\(query["query_prefix"]!)\"]}"
         } else { body = snapshot.1 ? chat : "{\"chat\":\(chat)}" }
+        let status = url.path.hasPrefix("/turns/") ? (Self.state.withLock { $0.historyStatus } ?? snapshot.0) : snapshot.0
         let delay = snapshot.3.map { slowChatID in
             url.path.contains("/\(slowChatID)/") ? 0.25 : 0.02
         } ?? (url.path.contains("autocomplete") ? 0.25 : 0.02)
@@ -83,7 +85,7 @@ nonisolated final class StubHTTP: URLProtocol, @unchecked Sendable {
             }
             guard deliver else { return }
             Self.state.withLock { $0.active -= 1 }
-            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: snapshot.0, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: Data(body.utf8))
             client?.urlProtocolDidFinishLoading(self)
         }
@@ -113,6 +115,7 @@ func runHTTPChecks() async throws {
         state.directChat = false
         state.missingPins = false
         state.emptyTurns = false
+        state.historyStatus = nil
         state.copyRequestBody = nil
         state.slowFactsChatID = nil
     }
@@ -196,6 +199,44 @@ func runHTTPChecks() async throws {
     search.clearSearch()
     precondition(!search.hasActiveSearch)
     search.cancelSearch()
+    // Snapshot storage uses a disposable root, never the user's application data.
+    let snapshotRoot = FileManager.default.temporaryDirectory.appendingPathComponent("veyrin-history-check-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: snapshotRoot) }
+    let history = CharacterAIHistoryStore(supportDirectory: snapshotRoot)
+    let summary = ConversationSummary(id: "chat", chatID: "chat", characterID: "character", characterName: "Fixture", characterAvatarURI: "", lastUpdated: "", state: "STATE_ACTIVE", lastMessage: nil)
+    let oldTurn = Turn(turnID: "old", chatID: "chat", authorID: "character", authorName: "Fixture", isHuman: false, candidates: [Candidate(candidateId: "c", rawContent: "old", isFinal: true)], primaryCandidateID: "c")
+    try history.save(accountID: "user", summary: summary, turns: [oldTurn])
+    let otherAccount = try history.load(accountID: "another-user", chatID: "chat")
+    precondition(otherAccount == nil)
+    try history.markNeedsRefresh(accountID: "user", chatID: "chat")
+    let marked = try history.load(accountID: "user", chatID: "chat")
+    precondition(marked?.needsRefresh == true)
+    // A failed refresh keeps the saved reading copy and does not overwrite it.
+    StubHTTP.state.withLock { $0.historyStatus = 500 }
+    let refreshed = ChatViewModel(authStore: auth, conversationService: service, historyStore: history)
+    auth.resources.insert(vm.character!, for: "character:character", ttl: 300, cost: 1024)
+    await refreshed.loadConversationHistory(chatID: "chat", characterID: "character", summary: summary)
+    precondition(refreshed.isHistoryReadOnly && refreshed.turns.first?.turnID == "old")
+    precondition(refreshed.historyNotice?.contains("Refresh failed") == true)
+    let failedCopy = try history.load(accountID: "user", chatID: "chat")
+    precondition(failedCopy?.turns.first?.turnID == "old" && failedCopy?.needsRefresh == true)
+    await refreshed.editMessage(turnID: "old", chatID: "chat", candidateID: "c", newContent: "must not be sent")
+    precondition(refreshed.errorMessage?.contains("Refresh") == true)
+    // A subsequent complete server refresh replaces the snapshot.
+    StubHTTP.state.withLock { $0.historyStatus = nil }
+    refreshed.character = vm.character
+    await refreshed.loadRealTurns(chatID: "chat", forceRefresh: true, characterID: "character")
+    let copy = try history.load(accountID: "user", chatID: "chat")
+    precondition(!refreshed.isHistoryReadOnly && copy?.turns.first?.turnID == "turn" && copy?.needsRefresh == false)
+    let folder = snapshotRoot.appendingPathComponent("character-ai-history")
+    let accountFolder = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).first!
+    let file = try FileManager.default.contentsOfDirectory(at: accountFolder, includingPropertiesForKeys: nil).first!
+    let corrupt = Data("{broken".utf8)
+    try corrupt.write(to: file)
+    do { try history.save(accountID: "user", summary: summary, turns: []); preconditionFailure("Corrupt snapshot overwritten") } catch {}
+    let preserved = try Data(contentsOf: file)
+    precondition(preserved == corrupt && history.list(accountID: "user").unreadable == 1)
+    print("PASS Character.AI snapshots: account isolation, mutation marker, corrupt-file preservation")
     vm.disconnect()
     print("Single-fetch chat shapes/errors, conditional pins, ordered bounded previews and search cancellation passed")
 }

@@ -133,10 +133,15 @@ struct SettingsView: View {
         // system Liquid Glass shelf on recent macOS.
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .containerBackground(.clear, for: .window)
+        // Settings deliberately keeps its own opaque surface at every Window
+        // Transparency level. Overlapping the main window with a clear backing
+        // made both surfaces composite into one image: a click landed on the
+        // chat window underneath, which then took the scroll routing too.
         .background {
             WindowTransparencyBridge(
                 transparency: preferences.windowTransparency,
-                reduceTransparency: reduceTransparency
+                reduceTransparency: reduceTransparency,
+                keepsOwnSurface: true
             )
         }
         // Neither a root WindowDragGesture nor window-background dragging is
